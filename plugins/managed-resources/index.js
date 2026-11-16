@@ -1,7 +1,8 @@
 // `ctx.managedResources`: what the project manages on this machine
 // (/api/managed-resources, lib/managed-resources.js): the tmux built from the
-// vendor/tmux submodule, the agent skills linked into ~/.claude and ~/.codex,
-// and the base tmux configuration session protection applies.
+// vendor/tmux submodule, the agent skills linked into ~/.claude, ~/.codex,
+// ~/.qoder and ~/.dsh, the agent-docs rule in those agents' global
+// instructions, and the base tmux configuration session protection applies.
 //
 // Skill links installed before the tmux-agent skill moved to catalog/ point at
 // nothing; they are repointed at start-up. Only links into this checkout count
@@ -27,6 +28,8 @@ export async function apply(ctx) {
     runtimePath: launch.runtimePath,
     userConfigPath: join(tmuxUserHome(), '.tmux.conf'),
     serverTmuxBin: IS_WINDOWS ? TMUX_BIN : null,
+    // CODEX_HOME, CLAUDE_CONFIG_DIR, QODER_CONFIG_DIR, DSH_HOME move the agents' homes.
+    env: process.env,
   });
   await resources.load();
   ctx.http.mount('/api/managed-resources', createManagedResourcesRouter(resources));

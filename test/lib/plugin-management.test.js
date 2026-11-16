@@ -82,7 +82,7 @@ describe('project-managed resources', () => {
     expect((await request(app).post(url + 'all/install').set('Origin', 'https://other.test')).status).toBe(403);
     expect((await request(app).post(url + 'codex/install')).status).toBe(200);
     expect((await request(app).post(url + 'all/install')).status).toBe(200);
-    expect((await resources.status()).skills.filter((s) => s.name === 'panel-presentation').map((s) => s.status)).toEqual(['managed', 'managed']);
+    expect((await resources.status()).skills.filter((s) => s.name === 'panel-presentation').map((s) => s.status)).toEqual(['managed', 'managed', 'managed', 'managed']);
     expect((await request(app).post(url + 'all/uninstall')).status).toBe(200);
     const personal = resources.skillPath('panel-presentation', 'claude');
     await mkdir(personal); await writeFile(join(personal, 'SKILL.md'), 'personal design');
@@ -90,6 +90,60 @@ describe('project-managed resources', () => {
     await expect(lstat(resources.skillPath('panel-presentation', 'codex'))).rejects.toMatchObject({ code: 'ENOENT' });
     expect(await readFile(join(personal, 'SKILL.md'), 'utf8')).toBe('personal design');
     expect((await request(app).post(url + '__proto__/install')).status).toBe(400);
+  });
+
+  it('writes the agent-docs rule into every agent\'s global instructions, keeping what else is there', async () => {
+    const home = await temp();
+    const resources = new ManagedResources({ userHome: home, configDir: join(home, 'config'), projectDir: REPO_ROOT,
+      env: { DSH_HOME: join(home, 'harness') }, execProcess: vi.fn(async () => ({ stdout: 'tmux test' })) });
+    await resources.load();
+    const app = express(); app.use('/api/managed-resources', createManagedResourcesRouter(resources));
+    const claude = join(home, '.claude', 'CLAUDE.md');
+    await mkdir(join(home, '.claude'), { recursive: true });
+    await writeFile(claude, '# Mine\r\n\r\nKeep this.\r\n');
+
+    const before = await resources.status();
+    expect(before.instructions.map((rule) => [rule.target, rule.path, rule.status])).toEqual([
+      ['codex', join(home, '.codex', 'AGENTS.md'), 'not_installed'],
+      ['claude', claude, 'not_installed'],
+      ['qoder', join(home, '.qoder', 'AGENTS.md'), 'not_installed'],
+      ['dsh', join(home, 'harness', 'AGENTS.md'), 'not_installed'],
+    ]);
+    expect(before.cli).toBe('node "' + join(REPO_ROOT, 'bin', 'anymux.mjs').replace(/\\/g, '/') + '"');
+    expect(resources.skillPath('agent-docs', 'dsh')).toBe(join(home, 'harness', 'skills', 'agent-docs'));
+
+    expect((await request(app).post('/api/managed-resources/instructions/all/install').set('Origin', 'https://other.test')).status).toBe(403);
+    expect((await request(app).post('/api/managed-resources/instructions/all/install')).status).toBe(200);
+    expect((await resources.status()).instructions.every((rule) => rule.status === 'managed')).toBe(true);
+    const mine = await readFile(claude, 'utf8');
+    expect(mine.startsWith('# Mine\r\n\r\nKeep this.\r\n\r\n<!-- >>> anymux agent-docs >>> -->\r\n')).toBe(true);
+    expect(mine).toContain(before.cli + ' doc path');
+    expect(mine).not.toContain('{{anymux}}');
+
+    // An older rule is replaced where it is, and installing twice changes nothing.
+    const codex = join(home, '.codex', 'AGENTS.md');
+    const current = await readFile(codex, 'utf8');
+    await writeFile(codex, 'top\n\n' + current.replace(/## Anymux 文档分窗[\s\S]*?(?=<!-- <<<)/, 'old rule\n') + '\nbottom\n');
+    expect((await resources.status()).instructions.find((rule) => rule.target === 'codex').status).toBe('outdated');
+    await request(app).post('/api/managed-resources/instructions/codex/install').expect(200);
+    const updated = await readFile(codex, 'utf8');
+    expect(updated.startsWith('top\n\n<!-- >>> anymux agent-docs >>> -->\n## Anymux 文档分窗')).toBe(true);
+    expect(updated.endsWith('<!-- <<< anymux agent-docs <<< -->\n\nbottom\n')).toBe(true);
+    expect((await resources.changeInstructions('codex', true)).results[0].backup).toBeNull();
+
+    // Removing takes only the block; a file the rule alone made goes away.
+    await request(app).post('/api/managed-resources/instructions/all/uninstall').expect(200);
+    expect(await readFile(claude, 'utf8')).toBe('# Mine\r\n\r\nKeep this.\r\n');
+    expect(await readFile(codex, 'utf8')).toBe('top\n\nbottom\n');
+    await expect(lstat(join(home, '.qoder', 'AGENTS.md'))).rejects.toMatchObject({ code: 'ENOENT' });
+
+    // Broken markers are left for the person to fix.
+    await writeFile(claude, '<!-- >>> anymux agent-docs >>> -->\nhalf\n');
+    expect((await resources.status()).instructions.find((rule) => rule.target === 'claude').status).toBe('conflict');
+    expect((await request(app).post('/api/managed-resources/instructions/all/install')).status).toBe(400);
+    expect(await readFile(claude, 'utf8')).toBe('<!-- >>> anymux agent-docs >>> -->\nhalf\n');
+    await expect(lstat(join(home, '.qoder', 'AGENTS.md'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect((await request(app).post('/api/managed-resources/instructions/__proto__/install')).status).toBe(400);
   });
 
   it('tracks a build failure, rejects duplicate builds and records interrupted builds after restart', async () => {

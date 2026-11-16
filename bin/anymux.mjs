@@ -1,16 +1,20 @@
 #!/usr/bin/env node
 // anymux — script the panel from inside a pane.
 //
-//   anymux open [--preview] <file|url>   show a file in the panel's preview (or a page in the browser block)
+//   anymux open [--dock|--background] [--replaces old] <file[#heading]|url>
+//                                         show a file in the panel's preview, or with
+//                                         --dock in the side panel next to this pane
+//                                         (or a page in the browser block)
+//   anymux doc path <name> [--html]       where to write a document draft; prints the path
 //   anymux split [-h] [-c dir] [cmd...]   split this pane, print the new pane id
 //   anymux run [-t pane] <cmd...>         type a command into a pane and press Enter
 //   anymux capture [-t pane] [-n lines]   print a pane's text (with scrollback)
 //   anymux events [--filter a,b]          stream workspace events as JSON lines
 //
-// `open` talks to this machine's panel with the node token from the pairing
-// file; the others drive tmux directly, so open windows update live.
+// `open` and `doc` talk to this machine's panel with the node token from the
+// pairing file; the others drive tmux directly, so open windows update live.
 
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { spawn, execFileSync } from 'node:child_process';
 import http from 'node:http';
@@ -19,7 +23,8 @@ import tls from 'node:tls';
 import { appPathCandidates } from '../lib/legacy-names.js';
 
 const USAGE = `usage:
-  anymux open [--preview] <file|url>
+  anymux open [--dock | --background] [--replaces <old path>] <file[#heading] | url>
+  anymux doc path <name> [--html]
   anymux split [-h] [-c dir] [cmd...]
   anymux run [-t pane] <cmd...>
   anymux capture [-t pane] [-n lines]
@@ -113,18 +118,62 @@ async function postJson(path, body) {
   });
 }
 
+/** A path as the panel takes it: absolute, `~/...`, or relative to this shell's directory. */
+function absolutePath(target) {
+  // Windows: a native cwd (C:\...) is converted by the panel; MSYS paths pass through.
+  return target.startsWith('/') || target.startsWith('~') ? target : resolve(process.cwd(), target);
+}
+
+/**
+ * `notes.md#Next steps` → the file and the heading, but only when that file
+ * exists and the whole string does not (a name may contain `#`).
+ */
+export function splitFragment(target, exists = existsSync) {
+  const at = target.lastIndexOf('#');
+  if (at <= 0 || at === target.length - 1 || exists(target)) return { target, fragment: null };
+  const file = target.slice(0, at);
+  return exists(file) ? { target: file, fragment: target.slice(at + 1) } : { target, fragment: null };
+}
+
 async function cmdOpen(args) {
   takeOption(args, ['--preview', '-p'], { flag: true }); // previewing is the only mode; kept for muscle memory
-  const target = rest(args)[0];
-  if (!target) die(USAGE);
+  const dock = takeOption(args, ['--dock', '-d'], { flag: true });
+  const background = takeOption(args, ['--background', '-b'], { flag: true });
+  const replaces = takeOption(args, ['--replaces']);
+  const kind = takeOption(args, ['--kind']);
+  const owner = takeOption(args, ['--owner']);
+  const raw = rest(args)[0];
+  if (!raw) die(USAGE);
   const pane = currentPane();
-  const body = /^https?:\/\//i.test(target)
-    ? { url: target }
-    : { path: target.startsWith('/') || target.startsWith('~') ? target : resolve(process.cwd(), target) };
+  let body;
+  if (/^https?:\/\//i.test(raw)) {
+    body = { url: raw };
+  } else {
+    const { target, fragment } = splitFragment(raw);
+    body = { path: absolutePath(target) };
+    if (dock || background) {
+      body.placement = 'dock';
+      if (background) body.activate = false;
+    }
+    if (fragment) body.fragment = fragment;
+    if (replaces) body.replaces = absolutePath(replaces);
+    if (kind) body.kind = kind;
+    if (owner) body.owner = owner;
+  }
   if (pane) body.paneId = pane;
-  // Windows: a native cwd (C:\...) is converted by the panel; MSYS paths pass through.
   const result = await postJson('/api/open', body);
-  process.stdout.write(`opened ${result.path || result.url}\n`);
+  process.stdout.write(`opened ${result.path || result.url}${body.placement === 'dock' ? ' (side panel)' : ''}\n`);
+}
+
+async function cmdDoc(args) {
+  const [action, ...more] = args;
+  if (action !== 'path') die(USAGE);
+  const html = takeOption(more, ['--html'], { flag: true });
+  const name = rest(more).join(' ').trim();
+  if (!name) die(USAGE);
+  const result = await postJson('/api/agent-docs/draft', { cwd: process.cwd(), name, ext: html ? 'html' : undefined });
+  // The agent writes it with its own tools, which on Windows take native paths.
+  process.stdout.write((process.platform === 'win32' ? result.nativePath : result.path) + '\n');
 }
 
 function cmdSplit(args) {
@@ -235,6 +284,7 @@ async function main() {
   const [command, ...args] = process.argv.slice(2);
   switch (command) {
     case 'open': return cmdOpen(args);
+    case 'doc': return cmdDoc(args);
     case 'split': return cmdSplit(args);
     case 'run': return cmdRun(args);
     case 'capture': return cmdCapture(args);

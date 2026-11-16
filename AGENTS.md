@@ -10,6 +10,16 @@
 - 前端静态文件修改不需要重启后台服务；Swift 客户端更新与 Node/tmux 服务的生命周期分别处理。
 - 不提交凭据、私钥、证书私密材料、运行时状态、本地备份或构建产物。
 
+## 文档放置
+
+写给人看的长内容（方案、设计、调研、评审、计划）按下表放，细则见 [skills/agent-docs](skills/agent-docs/SKILL.md)。表里没有的类型先写草稿，定稿后按 skill 的规则决定或先问用户。
+
+| 类型 | 位置 | 放进项目 |
+|---|---|---|
+| superpowers 的设计与计划 | 保持 skill 默认：`docs/superpowers/specs/`、`docs/superpowers/plans/` | 按 superpowers 的流程，随任务提交 |
+| 环境问题 | `docs/known-issues.md`，追加条目 | 直接 |
+| 其它方案、调研、评审、计划 | 草稿 `.anymux/docs/`（`anymux doc path <主题>`，不进 git） | 先问；本仓库会自动推送，问时说明 |
+
 ## 任务完成后自动提交与推送
 
 - 用户已授权本仓库默认执行：任务完成且必要验证通过后，自动 `git commit` 并 `git push`，无需再次询问。用户明确要求暂不提交或暂不推送时，以用户当次要求为准。纯问答、只读分析及没有文件改动的任务不创建空提交。

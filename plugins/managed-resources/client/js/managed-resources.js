@@ -108,26 +108,74 @@
     }
   }
 
+  const AGENT_NAMES = { claude: 'Claude', codex: 'Codex', qoder: 'Qoder', dsh: 'DeepSeek Harness' };
+  const agentName = (target) => AGENT_NAMES[target] || target;
+  const ruleStates = { managed: '已安装', outdated: '有新版本', conflict: '标记损坏，请手动检查', not_installed: '未安装' };
+
+  /**
+   * The agent-docs skill and its rule (a marked block in each agent's global
+   * CLAUDE.md / AGENTS.md) go in and out together, per agent or for all.
+   */
+  function docsSection(resources) {
+    const skills = resources.skills.filter((skill) => skill.name === 'agent-docs');
+    const rules = resources.instructions || [];
+    if (!skills.length || !rules.length) return '';
+    const targets = rules.map((rule) => rule.target);
+    const skillOf = (target) => skills.find((skill) => skill.target === target) || { status: 'not_installed', path: '' };
+    const installed = (target) => skillOf(target).status === 'managed' && rules.find((rule) => rule.target === target).status === 'managed';
+    const blocked = (target) => skillOf(target).status === 'conflict' || rules.find((rule) => rule.target === target).status === 'conflict';
+    const all = targets.every(installed);
+    const rows = rules.map((rule) => {
+      const skill = skillOf(rule.target);
+      const done = installed(rule.target);
+      const label = done ? '移除' : (skill.status === 'managed' || rule.status !== 'not_installed') ? '更新' : '安装';
+      return '<div class="managed-skill"><div><strong>' + esc(agentName(rule.target)) + '</strong>'
+        + '<small class="mono">' + esc(skill.path) + '</small><small>Skill：' + esc(({ managed: '已安装', conflict: '同名路径由其他来源管理', not_installed: '未安装' })[skill.status] || skill.status) + '</small>'
+        + '<small class="mono">' + esc(rule.path) + '</small><small>常驻规则：' + esc(ruleStates[rule.status] || rule.status) + '</small></div>'
+        + button(label, done ? 'docs-uninstall' : 'docs-install', 'data-target="' + esc(rule.target) + '"' + (blocked(rule.target) ? ' disabled' : '')) + '</div>';
+    }).join('');
+    return '<div class="section"><div class="section-head"><h3>Agent 文档分窗</h3></div><div class="ms-card managed-card">'
+      + '<p>Agent 在终端里写方案、设计、调研、计划这类长内容时，写成文档并在右侧分窗打开，你可以一边看一边和它对话。'
+      + '没有指定位置的先写成项目内的草稿（<span class="mono">.anymux/docs/</span>，不进 git），放进项目前按约定决定或先问你；'
+      + 'superpowers 等 skill 自己的文档目录保持不变，面板发现新文件后自动打开。</p>'
+      + '<p>安装 skill，并在该 Agent 的全局指令（' + rules.map((rule) => esc(agentName(rule.target))).join('、')
+      + '）里写入一段带标记的常驻规则，修改前备份；移除只删这一段。开启新会话后生效。</p>'
+      + '<p>规则里的命令：<span class="mono">' + esc(resources.cli || '') + '</span></p>'
+      + '<div class="managed-actions">' + button(all ? '从全部 Agent 移除' : '为全部 Agent 安装', all ? 'docs-uninstall' : 'docs-install',
+        'data-target="all"' + (targets.some(blocked) ? ' disabled' : '')) + '</div>'
+      + rows + '</div></div>';
+  }
+
+  async function runDocs(action, target) {
+    const verb = action === 'docs-install' ? 'install' : 'uninstall';
+    await global.Api.post(api + '/skills/agent-docs/' + target + '/' + verb);
+    await global.Api.post(api + '/instructions/' + target + '/' + verb);
+  }
+
   async function mountSkills(host, page) {
     const remount = () => mountSkills(host, page);
     const resources = await load(host, remount);
     if (!resources) return;
     const presentationSkills = resources.skills.filter((skill) => skill.name === 'panel-presentation');
     const presentationInstalled = presentationSkills.length > 0 && presentationSkills.every((skill) => skill.status === 'managed');
-    host.innerHTML = '<div class="section"><div class="section-head"><h3>信息呈现网页</h3></div><div class="ms-card managed-card">'
+    const agents = [...new Set(resources.skills.map((skill) => skill.target))].map(agentName).join('、');
+    host.innerHTML = docsSection(resources)
+      + '<div class="section"><div class="section-head"><h3>信息呈现网页</h3></div><div class="ms-card managed-card">'
       + '<p>让 Agent 生成的个人报告、说明和可视化网页跟随面板配色，切换主题时即时更新。</p>'
       + '<p>Skill 只提供主题接入约定，布局、字体、组件和交互由 Agent 自由设计；专门的视觉作品可保留自己的风格。</p>'
-      + '<p>选择 Agent 全局安装，或安装到全部受支持的 Agent（当前为 Codex、Claude）。安装位置为面板所在机器，开启新会话后生效。</p>'
+      + '<p>选择 Agent 全局安装，或安装到全部受支持的 Agent（当前为 ' + esc(agents) + '）。安装位置为面板所在机器，开启新会话后生效。</p>'
       + (presentationSkills.length ? '<div class="managed-actions">' + button(presentationInstalled ? '从全部 Agent 移除' : '为全部 Agent 安装',
         'skill-' + (presentationInstalled ? 'uninstall' : 'install'), 'data-name="panel-presentation" data-target="all"'
         + (presentationSkills.some((skill) => skill.status === 'conflict') ? ' disabled' : '')) + '</div>' + skillRows(presentationSkills) : '')
       + '</div></div>'
       + '<div class="section"><div class="section-head"><h3>Agent Skills</h3></div><div class="ms-card managed-card">'
       + '<p>安装为指向本仓库的链接，项目更新后同步生效。已有的同名个人 skill 不会被覆盖；安装后在 agent 中开启新会话。</p>'
-      + skillRows(resources.skills.filter((skill) => skill.name !== 'panel-presentation'))
+      + skillRows(resources.skills.filter((skill) => skill.name !== 'panel-presentation' && skill.name !== 'agent-docs'))
       + '</div></div>';
 
-    actions(host, page, remount, (action, target) => global.Api.post(api + '/skills/' + target.dataset.name + '/' + target.dataset.target + '/' + action.slice(6)));
+    actions(host, page, remount, (action, target) => (action.startsWith('docs-')
+      ? runDocs(action, target.dataset.target)
+      : global.Api.post(api + '/skills/' + target.dataset.name + '/' + target.dataset.target + '/' + action.slice(6))));
   }
 
   global.PanelSlots.managementPanels.register({ id: 'tmux', order: 10, mount: mountTmux });

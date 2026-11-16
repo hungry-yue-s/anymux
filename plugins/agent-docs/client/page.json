@@ -1,0 +1,9 @@
+{
+  "serve": ["."],
+  "head": [
+    { "order": 52.5, "style": "/css/agent-docs.css" }
+  ],
+  "body": [
+    { "order": 406, "script": "/js/agent-docs.js" }
+  ]
+}

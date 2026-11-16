@@ -84,6 +84,12 @@ body.fp-side-resizing .fp-side-resizer::after { width: 1px; background: var(--fp
   color: var(--fp-accent);
   box-shadow: none;
 }
+/* A tab opened behind the current one, or into a collapsed dock, until it is looked at. */
+.fp-dock-tab-item.is-unread .fp-dock-tab-label::after {
+  content: ""; display: inline-block; width: 6px; height: 6px; margin-left: 6px;
+  border-radius: 50%; background: var(--fp-accent); vertical-align: middle;
+}
+.fp-dock-restore.has-unread { box-shadow: inset 3px 0 0 var(--fp-accent); font-weight: 600; }
 .fp-loading,
 .fp-error,
 .fp-dir-empty {

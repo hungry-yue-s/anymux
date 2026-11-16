@@ -26,9 +26,13 @@ of completion. Read `GET /api/plugins` and `GET /api/managed-resources` first.
   when the requested change should affect the running tmux server. `link` and
   `unlink` manage only the marked source-file block in `~/.tmux.conf`.
   Config saves return the backup path. Preserve `set -g exit-empty off`.
-- Skill links: `POST /api/managed-resources/skills/{name}/{codex|claude}/install`
+- Skill links: `POST /api/managed-resources/skills/{name}/{codex|claude|qoder|dsh|all}/install`
   or `/uninstall`. Only catalogued repository skills are accepted. Foreign
   directories and modified links are reported as conflicts, never overwritten.
+- The agent-docs rule (a marked block in each agent's global CLAUDE.md /
+  AGENTS.md): `POST /api/managed-resources/instructions/{codex|claude|qoder|dsh|all}/install`
+  or `/uninstall`. Status is in `instructions` of `GET /api/managed-resources`;
+  malformed markers are reported, never overwritten.
 
 Use existing service management for service restarts; do not manually kill and
 relaunch the panel or tmux. Installing a binary is not proof that the live

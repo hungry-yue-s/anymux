@@ -161,6 +161,7 @@ Hub 默认允许本机直连免登录，Swift 与浏览器均适用：TCP peer �
 | `sqlite` | — | http, fileAccess | SQLite 预览 `/api/sqlite` |
 | `notebook` | — | http, fileAccess | `/api/notebook` |
 | `open` | — | http, fileAccess | `anymux open` 的 `/api/open`，经 `status/event` 通知页面 |
+| `agent-docs` | — | http, fileAccess, tmux, timer | Agent 文档分窗：`/api/agent-docs`（草稿路径、文档类型、往窗格填字），发现窗格所在项目里新写的文档并经 `status/event` 通知页面；前端是文档上方的提示栏（见 [agent-docs.md](agent-docs.md)） |
 | `browser` | — | — | 浏览器 block 与 `anymux open <url>`，只有前端（只在 Hub） |
 | `share` | `shares` | launch, http, timer | 预览快照分享，公开的 `/s/:id`（只在 Hub） |
 | `metrics` | `metrics` | http | 系统与进程监控、历史、窗口资源 |
@@ -196,7 +197,7 @@ Hub 默认允许本机直连免登录，Swift 与浏览器均适用：TCP peer �
 | `status/workspace-changed (revision)` | workspace | status |
 | `status/server-status (status)` | server-health | status |
 | `status/notifications (notifications)` | agent-events | status |
-| `status/event (event)` | open（`anymux open`） | status |
+| `status/event (event)` | open（`anymux open`）、agent-docs（新文档） | status |
 | `mosh/refresh-components` | node-installer（本机装完 Mosh 组件后，`parallel` 等它完成） | mosh |
 
 可选组件的能力（`mosh`、`moshClient`、`nativeWindow`、`controlTerminal`）由提供方经 `ctx.node.setCapability(name, probe)` 报进 `/api/node/info`，包在 `ctx.effect` 里随插件撤销。

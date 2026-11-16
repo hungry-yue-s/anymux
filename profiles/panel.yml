@@ -57,6 +57,8 @@ plugins:
     use: notebook
   - id: open
     use: open
+  - id: agent-docs
+    use: agent-docs
   - id: browser
     use: browser
   - id: share

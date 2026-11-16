@@ -143,7 +143,7 @@ Linux 使用用户级 `tmux-server.service`，macOS 使用 `com.anymux.tmux-serv
 
 ## 文件预览分窗契约
 
-`plugins/files/client/js/file-preview.js` 的文件预览分成两个层次：新文件始终先进入 modal；用户点击“在右侧分栏打开”后，才把当前 `.fp-modal` 移入右侧 `.fp-dock` 并新增/激活 Tab。
+`plugins/files/client/js/file-preview.js` 的文件预览分成两个层次：新文件始终先进入 modal；用户点击“在右侧分栏打开”后，才把当前 `.fp-modal` 移入右侧 `.fp-dock` 并新增/激活 Tab。唯一的例外是 `anymux open --dock` 和 agent 文档：它们经 `FilePreview.openDocked` 在屏幕外渲染后直接成为 Tab，规则见「Agent 文档分窗契约」。
 
 - 分窗 Tab 按绝对路径去重；同一路径再次加入时激活已有 Tab，不复制。
 - Tab 可以拖拽排序，也可以用 Alt+Shift+←/→ 移动。文件和 block 混排的顺序存在分窗状态的 `order` 里（文件按路径，block 按 `persistKey`），block 之间的顺序同时经 `blockDock.onReorder` 写回 BlockHost，没有文件 Tab 时也能还原。拖拽数据用面板自己的类型，不用 `text/plain`，免得拖到终端上被当成输入。
@@ -169,3 +169,14 @@ Git、浏览器等工具 block 与文件共用这个分窗（同一个标签条�
 - 重复查询要合并：`Blocks.ui.client` 合并进行中的相同 GET（结果是共享的，调用方不得修改），同一服务器上有写操作完成后，新的读不再搭旧的读。Git block 的 `load` / `loadHistory` 各自单航，同样以写操作为界；`showDiff` 只让最后选中的文件落地。历史重绘时，仍在列表里的那个打开着的提交，连同它的详情和列表滚动位置一起保留。
 - 关闭最后一个文件 Tab 时，只要还有 block 标签，分窗就保留；所有标签都没了才销毁。
 - 分窗只存在于终端旁：离开终端页时 block 暂存（frame 脱离 DOM），回来再挂上；在其它页面打开 block 时用浮动窗口。
+
+## Agent 文档分窗契约
+
+完整说明见 [docs/agent-docs.md](docs/agent-docs.md)。Agent 写的长文档在终端旁的分窗里打开，用户边看边对话；适用于 Claude、Codex、Qoder、DeepSeek Harness 等任何会写文件的 agent。
+
+- **打开不打断。** `FilePreview.openDocked` 不弹 modal、不抢键盘焦点（用户可能正在给 agent 打字）。只有浏览器正看着该窗格所在窗口时才进分窗（watcher 的事件按同一项目里的任一窗格算）；别的窗口、手机、有 modal 打开时只发带“打开”按钮的提示。分窗收起时只加标签和角标、不展开：展开会改终端尺寸，Windows 上等于换一个 tmux 客户端。没有分窗时，后台文档（进度）不为它新建分窗。
+- **发现不靠 agent 配合。** `lib/agent-docs/watcher.js` 看窗格所在项目里 `profiles.js` 列出的目录，只宣告第一次看过之后新出现的文件；改动不再宣告（已开的标签自己刷新，用户关掉的不会弹回来）。只看预览根之内的项目。
+- **skill 自己的文档目录不动。** superpowers 的 `docs/superpowers/…`、`.superpowers/sdd/…/progress.md` 原样打开，不移动、不加面板元数据；只有 `.anymux/docs/` 草稿读 front matter 里的 `anymux:` 建议。
+- **草稿不进 git，也不碰项目文件。** `anymux doc path` 只往仓库自己的 `info/exclude` 加 `/.anymux/`（linked worktree 用共享的那份），不改 `.gitignore`；项目在预览根外时放到应用数据目录；不在预览根之外写任何东西。
+- **往窗格填字从不回车。** `/api/agent-docs/reply` 只填一行（`send-keys -l`，拒绝控制字符和以 `-` 开头的文本；窗格在复制模式时拒绝，否则按键会变成复制模式的命令），只接受页面的同源请求。agent 可能正显示权限菜单，回车可能答错，由用户在终端里发送。
+- **全局指令只改带标记的一段。** 管理中心写入各 agent 的 `CLAUDE.md` / `AGENTS.md` 时只增删 `<!-- >>> anymux agent-docs >>> -->` 标记之间的内容，改前备份；标记损坏就报错、不覆盖。规则里的命令是 `node "<仓库>/bin/anymux.mjs"`，因为安装脚本不把 `anymux` 放进 PATH。

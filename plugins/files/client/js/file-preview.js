@@ -46,7 +46,16 @@ var FilePreview = (function () {
   // A dock restored as hidden is built offstage: taking space even for a moment
   // would change the terminal's size twice, and each change can mean a new attach.
   var _restoringHidden = false;
+  // openDocked builds its preview offstage and leaves the keyboard alone.
+  var _quietOpen = false;
+  // Plugins that add to a preview (agent-docs puts a bar above agent documents).
+  var _decorators = [];
   var _persistenceSuspended = false;
+  // openDocked builds its preview offstage and leaves the keyboard alone: the
+  // person may be typing to the agent that wrote the document.
+  var _quietOpen = false;
+  // Others' additions above a preview (the agent-docs bar): fn({ modal, body, file, paneId, source }).
+  var _decorators = [];
   var _dockContextKey = null;
   var _dockContextGeneration = 0;
   var AUTO_REFRESH_MS = 1500;
@@ -781,7 +790,8 @@ var FilePreview = (function () {
     bar.innerHTML = '';
     _dockTabs.forEach(function (tab) {
       var item = document.createElement('div');
-      item.className = 'fp-dock-tab-item' + (tab.id === _activeDockTabId ? ' active' : '');
+      item.className = 'fp-dock-tab-item' + (tab.id === _activeDockTabId ? ' active' : '')
+        + (tab.unread && tab.id !== _activeDockTabId ? ' is-unread' : '');
       item.setAttribute('data-tab-id', tab.id);
       var select = document.createElement('button');
       select.className = 'fp-dock-tab';
@@ -964,7 +974,7 @@ var FilePreview = (function () {
       if (layout) layout.appendChild(_dockRestoreButton);
     }
     if (_fileTabs().length < _dockTabs.length) _dockRestoreButton.setAttribute('aria-label', '\u5C55\u5F00\u53F3\u4FA7\u8FB9\u680F');
-    _dockRestoreButton.textContent = '\u25E7 ' + _dockTabs.length;
+    _syncRestoreButton();
     if (persistHidden !== false) _persistDockState();
   }
 
@@ -979,6 +989,7 @@ var FilePreview = (function () {
     if (!tab) return;
     if (!preserveRequest) _previewGeneration++;
     _activeDockTabId = tab.id;
+    tab.unread = false;
     var panels = _dockOverlay.querySelector('.fp-dock-panels');
     if (panels) {
       _pauseVideos(panels);
@@ -1062,7 +1073,7 @@ var FilePreview = (function () {
       }
     }
     _renderDockTabs();
-    if (_dockRestoreButton) _dockRestoreButton.textContent = '\u25E7 ' + _dockTabs.length;
+    _syncRestoreButton();
     if (hadFocus) {
       var active = document.getElementById('fp-tab-' + _activeDockTabId);
       if (active) active.focus();
@@ -1129,6 +1140,16 @@ var FilePreview = (function () {
       }
     }
     _ensureDockOverlay();
+    var tab = _tabFromModal(modalOverlay, modal, path);
+    _dockTabs.push(tab);
+    _activeDockTabId = tab.id;
+    _showDock(true);
+    _persistDockState();
+    return true;
+  }
+
+  /** Takes the modal preview out of the page and makes it a tab (not yet in the strip). */
+  function _tabFromModal(modalOverlay, modal, path) {
     modal.remove();
     modalOverlay.remove();
     var tab = {
@@ -1146,11 +1167,174 @@ var FilePreview = (function () {
     modal.setAttribute('role', 'tabpanel');
     modal.setAttribute('aria-labelledby', 'fp-tab-' + tab.id);
     modal.removeAttribute('aria-modal');
+    return tab;
+  }
+
+  // --- Opening straight into the dock (`anymux open --dock`, agent documents) ---
+
+  function _findFileTab(path) {
+    if (!path) return null;
+    for (var i = 0; i < _dockTabs.length; i++) {
+      if (!_dockTabs[i].block && _dockTabs[i].path === path) return _dockTabs[i];
+    }
+    return null;
+  }
+
+  function _syncRestoreButton() {
+    if (!_dockRestoreButton) return;
+    var unread = _dockTabs.some(function (tab) { return tab.unread; });
+    _dockRestoreButton.textContent = '◧ ' + _dockTabs.length;
+    _dockRestoreButton.classList.toggle('has-unread', unread);
+    _dockRestoreButton.title = unread ? '有新文档' : '';
+  }
+
+  /**
+   * The collapsed dock takes the quiet preview as a tab without showing itself:
+   * showing would resize the terminal, and the person chose to collapse it.
+   */
+  function _stashInHiddenDock(modalOverlay, modal, path) {
+    var tab = _tabFromModal(modalOverlay, modal, path);
+    tab.unread = true;
     _dockTabs.push(tab);
-    _activeDockTabId = tab.id;
-    _showDock(true);
+    // As _hideDock leaves things: nothing is live while the dock is collapsed.
+    _previewGeneration++;
+    _stopAutoRefresh();
+    _placement = 'modal';
+    _overlay = null;
+    _currentFile = null;
+    _currentPaneId = null;
+    _currentSource = null;
+    _dirContext = null;
+    _currentOpenPath = null;
+    _placementButton = null;
+    _maximizeButton = null;
+    _refreshButton = null;
+    _maximized = false;
+    _syncRestoreButton();
     _persistDockState();
-    return true;
+    return tab;
+  }
+
+  /** Puts `tab` where `replaced` was and closes `replaced`, keeping which one is in front. */
+  function _replaceTab(tab, replaced) {
+    if (!replaced || replaced === tab) return;
+    var wasActive = _activeDockTabId === replaced.id;
+    _dockTabs.splice(_dockTabs.indexOf(tab), 1);
+    _dockTabs.splice(_dockTabs.indexOf(replaced), 0, tab);
+    if (wasActive) {
+      tab.unread = false;
+      if (_dockHidden) _activeDockTabId = tab.id;
+      else _activateDockTab(tab.id);
+    }
+    _removeDockTab(_dockTabs.indexOf(replaced));
+  }
+
+  function _scrollToFragment(tab, fragment) {
+    if (!fragment || !tab || !tab.modal) return;
+    var run = function () {
+      _scrollMarkdownHeading(tab.modal.querySelector('.fp-md-wrap'), fragment);
+    };
+    if (window.requestAnimationFrame) window.requestAnimationFrame(run);
+    else setTimeout(run, 0);
+  }
+
+  function _restoreFocus(element) {
+    if (element && element !== document.activeElement && element.isConnected && typeof element.focus === 'function') {
+      try { element.focus({ preventScroll: true }); } catch (_) { element.focus(); }
+    }
+  }
+
+  /**
+   * Opens a file straight into the dock, for `anymux open --dock` and for
+   * documents agents write. No modal appears and the keyboard stays where it
+   * is: the person may be typing to the agent. `opts`: { activate (default
+   * true; false adds the tab behind the current one), replaces (the path of a
+   * tab this one takes over), fragment (a Markdown heading), source }.
+   *
+   * Resolves to what happened: 'activated', 'added' (behind the current tab),
+   * 'exists' (already a tab, left as it was), 'hidden' (added to a collapsed
+   * dock, which stays collapsed), 'skipped' (a background document with no dock
+   * to join), 'busy' (a modal is open) or 'unavailable' (no room for a dock).
+   */
+  function openDocked(filePath, paneId, opts) {
+    opts = opts || {};
+    if (_restorePromise) {
+      return _restorePromise.then(function () { return openDocked(filePath, paneId, opts); });
+    }
+    if (typeof filePath !== 'string' || filePath.charAt(0) !== '/' || !_canDockRight()) return Promise.resolve('unavailable');
+    if (_overlay && _placement !== 'side') return Promise.resolve('busy');
+    var activate = opts.activate !== false;
+    var replaced = opts.replaces ? _findFileTab(opts.replaces) : null;
+    var existing = _findFileTab(filePath);
+    if (existing) {
+      if (replaced && replaced !== existing) _removeDockTab(_dockTabs.indexOf(replaced));
+      if (!activate) return Promise.resolve('exists');
+      if (_dockHidden) {
+        existing.unread = true;
+        _syncRestoreButton();
+        return Promise.resolve('hidden');
+      }
+      _activateDockTab(existing.id);
+      _scrollToFragment(existing, opts.fragment);
+      return Promise.resolve('activated');
+    }
+    // A log that changes all the time is not worth making room for.
+    if (!activate && !_dockTabs.length) return Promise.resolve('skipped');
+
+    var contextKey = _dockContextKey;
+    var generation = _dockContextGeneration;
+    var focus = document.activeElement;
+    var previous = _activeDockTabId;
+    var quietOverlay;
+    var opened;
+    _quietOpen = true;
+    try {
+      opened = openFile(filePath, paneId, { source: opts.source, markdownFragment: opts.fragment });
+      quietOverlay = _overlay;
+    } finally {
+      _quietOpen = false;
+    }
+    return Promise.resolve(opened).then(function (ok) {
+      var ours = !!quietOverlay && _overlay === quietOverlay;
+      if (ok !== true || !ours || !_isDockContextCurrent(contextKey, generation) || !_canDockRight()) {
+        if (ours) close();
+        else if (quietOverlay && quietOverlay.isConnected) {
+          // Something else took the preview over (a tab click): drop the offstage one.
+          _disposePreview(quietOverlay);
+          quietOverlay.remove();
+        }
+        _restoreFocus(focus);
+        return false;
+      }
+      var modal = quietOverlay.querySelector('.fp-modal');
+      var path = (_currentFile && _currentFile.absPath) || filePath;
+      if (!modal) return false;
+      // Another request for the same path finished first.
+      if (_findFileTab(path)) {
+        close();
+        _restoreFocus(focus);
+        return 'exists';
+      }
+      var tab;
+      if (_dockOverlay && _dockHidden) {
+        tab = _stashInHiddenDock(quietOverlay, modal, path);
+        _replaceTab(tab, replaced && _dockTabs.indexOf(replaced) >= 0 ? replaced : null);
+        _restoreFocus(focus);
+        return 'hidden';
+      }
+      _dockCurrentPreview();
+      tab = _activeDockTab();
+      quietOverlay.classList.remove('fp-restoring');
+      if (_dockOverlay) _dockOverlay.classList.remove('fp-restoring');
+      if (!activate && previous != null && previous !== tab.id && _dockTabs.some(function (t) { return t.id === previous; })) {
+        tab.unread = true;
+        _activateDockTab(previous);
+      }
+      _replaceTab(tab, replaced && _dockTabs.indexOf(replaced) >= 0 ? replaced : null);
+      _renderDockTabs();
+      _restoreFocus(focus);
+      return activate ? 'activated' : 'added';
+    });
   }
 
   // --- Tool blocks in the dock ---
@@ -1203,7 +1387,7 @@ var FilePreview = (function () {
     }
     if (_dockHidden) {
       if (pendingTab) _activeDockTabId = pendingTab.id;
-      if (_dockRestoreButton) _dockRestoreButton.textContent = '◧ ' + _dockTabs.length;
+      _syncRestoreButton();
       return;
     }
     if (_dockOverlay.isConnected) _renderDockTabs();
@@ -1436,7 +1620,7 @@ var FilePreview = (function () {
     _placement = 'modal';
 
     _overlay = document.createElement('div');
-    _overlay.className = 'fp-overlay' + (_restoringDock ? ' fp-restoring' : '');
+    _overlay.className = 'fp-overlay' + (_restoringDock || _quietOpen ? ' fp-restoring' : '');
     _overlay.addEventListener('click', function (e) {
       if (e.target === _overlay) close();
     });
@@ -1590,7 +1774,7 @@ var FilePreview = (function () {
     _syncPlacementButton();
     _syncMaximizeButton();
 
-    (_isMobileReader() ? btnBack : btnClose).focus();
+    if (!_quietOpen) (_isMobileReader() ? btnBack : btnClose).focus();
     _overlay.addEventListener('keydown', function (e) {
       if (window.CommandPalette && window.CommandPalette.isOpen && window.CommandPalette.isOpen()) return;
       if (e.key === 'Escape' && !e.defaultPrevented) { e.preventDefault(); close(); e.stopPropagation(); }
@@ -4098,7 +4282,8 @@ var FilePreview = (function () {
   // values become the same chips as inline #tags.
   function _renderFrontmatter(fm) {
     var esc = _escapeHtml;
-    var rows = Object.keys(fm).map(function (k) {
+    // `anymux:` is panel metadata for the bar above an agent's draft, not a property.
+    var rows = Object.keys(fm).filter(function (k) { return k !== 'anymux'; }).map(function (k) {
       var v = fm[k], valHtml;
       if (/^tags?$/i.test(k)) {
         var arr = Array.isArray(v) ? v : (v ? [v] : []);
@@ -4884,6 +5069,7 @@ var FilePreview = (function () {
       _applyMode(mode);
       _setPreviewTitle(next.absPath);
       if (scroll) _restorePreviewScroll(body, scroll);
+      _decorate(body, next);
       return true;
     }
 
@@ -4958,6 +5144,32 @@ var FilePreview = (function () {
         else setTimeout(scrollToLinkedHeading, 0);
       }
       return true;
+    });
+  }
+
+  /**
+   * Lets plugins add to a preview that has just rendered, or rendered again
+   * after the file changed. `fn({ modal, body, file, paneId, source })` runs for
+   * every file and directory; whatever it adds must be idempotent, and goes
+   * between the header and the body (`modal.insertBefore(node, body)`) so a
+   * refresh, which replaces the body, keeps it.
+   */
+  function registerDecorator(fn) {
+    if (typeof fn !== 'function') return function () {};
+    _decorators.push(fn);
+    return function () {
+      var at = _decorators.indexOf(fn);
+      if (at >= 0) _decorators.splice(at, 1);
+    };
+  }
+
+  function _decorate(body, file) {
+    if (!_decorators.length || !body) return;
+    var modal = body.closest ? body.closest('.fp-modal') : null;
+    if (!modal) return;
+    var context = { modal: modal, body: body, file: file, paneId: _currentPaneId, source: _currentSource };
+    _decorators.forEach(function (fn) {
+      try { fn(context); } catch (err) { if (window.console) console.error('[file-preview] decorator failed', err); }
     });
   }
 
@@ -5466,7 +5678,8 @@ var FilePreview = (function () {
   }
 
   return {
-    registerLinkProvider: registerLinkProvider, openFile: openFile,
+    registerLinkProvider: registerLinkProvider, openFile: openFile, openDocked: openDocked,
+    registerDecorator: registerDecorator,
     renderInto: renderInto, disposeRendered: _disposePreview,
     openFromBuffer: openFromBuffer, close: close, closeModal: closeModal, closeDocked: closeDocked,
     restoreDocked: restoreDocked, switchDockContext: switchDockContext, hitTest: hitTest,

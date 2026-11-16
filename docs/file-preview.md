@@ -17,6 +17,11 @@ Files always open in a modal. The dock action in the preview header moves the
 current preview into the right-side workspace. Each different path is kept as
 its own tab; an existing path is activated instead of duplicated.
 
+`anymux open --dock <file>` and documents agents write go straight into the
+dock instead, without a modal and without taking keyboard focus, and only for
+the window that holds their pane; elsewhere they are a notice with an Open
+button. See [agent-docs.md](agent-docs.md).
+
 The dock can be hidden without closing its tabs — a compact restore button at
 the right edge expands it again. Drag the divider on the dock's left edge to
 resize between 320 px and 70% of the available width; the chosen width is
