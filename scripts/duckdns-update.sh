@@ -5,7 +5,7 @@
 # (29.29.29.29) answers every external domain with a transparent proxy that
 # cannot route back to the LAN. It is used as a key/value store read back over
 # DNS-over-HTTPS from elsewhere, e.g.
-#   https://dns.alidns.com/resolve?name=tmux-panel.duckdns.org&type=A
+#   https://dns.alidns.com/resolve?name=mybox.duckdns.org&type=A
 # which returns the real IP; the phone then connects to that IP directly.
 #
 # The HTTP call is skipped when the IP has not moved since the last successful
