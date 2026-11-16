@@ -17,5 +17,8 @@ export function apply(ctx, config) {
   // Pane labels render in the border title line. Best effort: there may be
   // no server yet, and the panel does not start one.
   localTmux.ensurePaneBorderConfig().catch(() => {});
+  // Programs in new panes may emit hyperlinks (lib/terminal/hyperlinks.js).
+  // Likewise best effort; lib/monitor.js repeats both when a server appears.
+  localTmux.ensureHyperlinkEnvironment().catch(() => {});
   ctx.provide('tmux', localTmux);
 }

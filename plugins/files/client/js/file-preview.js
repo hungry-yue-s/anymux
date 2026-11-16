@@ -4649,7 +4649,9 @@ var FilePreview = (function () {
     return _hardJoinStrip(above, below) >= 0;
   }
 
-  function _getLogicalLine(buffer, bufRow) {
+  // The rows of one logical line by the strict rules: soft wraps, and at most
+  // one hard newline that the rules above are sure about.
+  function _strictRows(buffer, bufRow) {
     // Walk backward to the true start: up the soft-wrap chain always, and
     // across ONE hard-newline join (Fix 10) so that the continuation row
     // resolves to the SAME merged line as the joined row (else its standalone
@@ -4675,35 +4677,296 @@ var FilePreview = (function () {
     // Collect forward: soft-wrapped continuations always; a single hard-newline
     // row only when the conservative heuristic says the token was split.
     var first = buffer.getLine(startRow);
-    if (!first) return { text: '', startRow: startRow, rows: [] };
-    var lineObjs = [{ line: first, row: startRow, stripChars: 0 }];
+    if (!first) return { startRow: startRow, objs: [] };
+    var lineObjs = [{ line: first, row: startRow, stripChars: 0, trimEnd: -1 }];
     var row = startRow + 1;
     var joinedHard = false;
     while (row < buffer.length) {
       var ln = buffer.getLine(row);
       if (!ln) break;
-      if (ln.isWrapped) { lineObjs.push({ line: ln, row: row, stripChars: 0 }); row++; continue; }
+      if (ln.isWrapped) { lineObjs.push({ line: ln, row: row, stripChars: 0, trimEnd: -1 }); row++; continue; }
       if (joinedHard) break;   // at most one hard-newline join per logical line
       var stripChars = _hardJoinStrip(lineObjs[lineObjs.length - 1].line, ln);
       if (stripChars < 0) break;
-      lineObjs.push({ line: ln, row: row, stripChars: stripChars });
+      lineObjs.push({ line: ln, row: row, stripChars: stripChars, trimEnd: -1 });
       joinedHard = true;
       row++;                   // keep collecting the joined row's soft-wrap chain
     }
-    // Build the merged string. Non-final wrapped rows keep a trailing pad space
-    // when a wide CJK glyph could not split across the margin; trim it so the
-    // URL/path is not severed at the wrap point (D30).
+    return { startRow: startRow, objs: lineObjs };
+  }
+
+  // Build the merged string from rows { line, row, stripChars, trimEnd }:
+  // `stripChars` leading characters (a continuation's indent or frame) and
+  // everything from string index `trimEnd` on (a box's right edge) stay out of
+  // the text. Non-final wrapped rows keep a trailing pad space when a wide CJK
+  // glyph could not split across the margin; trim it so the URL/path is not
+  // severed at the wrap point (D30).
+  function _buildLogical(lineObjs, startRow) {
     var text = '';
     var rows = [];
     for (var i = 0; i < lineObjs.length; i++) {
       var l = lineObjs[i].line;
       var cellStart = lineObjs[i].stripChars || 0;
-      var rowText = l.translateToString(i < lineObjs.length - 1).slice(cellStart);
+      var full = l.translateToString(i < lineObjs.length - 1);
+      var rowText = lineObjs[i].trimEnd >= 0 ? full.slice(cellStart, lineObjs[i].trimEnd) : full.slice(cellStart);
       rows.push({ line: l, row: lineObjs[i].row, strStart: text.length,
         strLen: rowText.length, cellStart: cellStart });
       text += rowText;
     }
-    return { text: text, startRow: startRow, rows: rows };
+    return { text: text, startRow: lineObjs.length ? lineObjs[0].row : startRow, rows: rows };
+  }
+
+  function _getLogicalLine(buffer, bufRow) {
+    var strict = _strictRows(buffer, bufRow);
+    return _buildLogical(strict.objs, strict.startRow);
+  }
+
+  // The column `chars` string characters after cell `col`. A wide glyph is one
+  // character over two cells; a glyph outside the BMP is two characters in one.
+  function _advanceCol(line, col, chars) {
+    var lineLen = line.length;
+    while (chars > 0 && col < lineLen) {
+      var cell = line.getCell(col);
+      var glyph = cell && typeof cell.getChars === 'function' ? cell.getChars() : '';
+      col += cell ? (cell.getWidth() || 1) : 1;
+      chars -= glyph.length || 1;
+    }
+    return col;
+  }
+
+  // --- Rows a program wrapped by itself ---
+  //
+  // A TUI (Claude Code, Codex, an editor) wraps its own text and writes each
+  // row separately, so neither tmux nor xterm knows the rows belong together,
+  // and the continuation comes with an indent or a box edge in front. What
+  // such a seam looks like is known, though: a program only breaks a word
+  // where its row is full, or at a break opportunity such as `/` or `-`.
+  //
+  // _looseSeam reads two rows that way and says how sure it is:
+  //   strong - the row is full at the right edge of its block and the token
+  //            would not have fitted on one row.
+  //   weak   - it could be one token.
+  // _linkLine then decides. A path is asked about on the pane's machine: the
+  // joined path existing joins the rows, and either row's own path existing
+  // keeps them apart; only when nothing exists (or nobody can say) does a
+  // strong seam join on its looks. A URL has nothing to be checked against,
+  // so it joins on a strong seam only. The strict rules above stay as they
+  // are and need no confirmation.
+
+  var FRAME_CLASS = '\\u2500-\\u259f';        // box drawing and block elements
+  var GUTTER_RE = new RegExp('^[\\s' + FRAME_CLASS + ']*');
+  var GUTTER_FRAME_RE = new RegExp('[' + FRAME_CLASS + '](\\s*)$');
+  var RIGHT_FRAME_RE = new RegExp('(\\s*)[' + FRAME_CLASS + '][\\s' + FRAME_CLASS + ']*$');
+  var CJK_IDEOGRAPH_RE = /[一-鿿]/;
+  var LOOSE_MAX_MARKER = 8;   // `10. `, `- [ ] `: how far left of its continuation a first row may start
+  var LOOSE_MAX_TOKEN = 2048;
+  var LOOSE_EDGE_MARGIN = 8;  // the right margin a TUI keeps
+  var LOOSE_BLOCK_ROWS = 6;   // neighbours that show where a block's text ends
+  var LOOSE_MAX_ROWS = 12;    // rows one link may be put together from
+
+  // A row without its frame: content is text[start, end). padLeft / padRight
+  // count the spaces between a frame glyph and the content, -1 without a frame.
+  // The left gutter is spaces and frame glyphs, one cell each, so `start` is a
+  // column as well as a string index.
+  function _rowContent(line) {
+    var text = line.translateToString(true);
+    var gutter = GUTTER_RE.exec(text)[0];
+    var start = gutter.length;
+    var end = text.length;
+    var padRight = -1;
+    var right = RIGHT_FRAME_RE.exec(text);
+    if (right) {
+      end = Math.max(start, right.index);
+      padRight = right[1].length;
+    }
+    var left = GUTTER_FRAME_RE.exec(gutter);
+    return { text: text, start: start, end: end, padLeft: left ? left[1].length : -1, padRight: padRight };
+  }
+
+  // As far as the screen shows, column `endCol` is where this block's text
+  // ends: none of the rows around reaches further right. Blank rows and rules
+  // bound the block.
+  function _isBlockEdge(buffer, row, endCol) {
+    for (var dir = -1; dir <= 1; dir += 2) {
+      var r = dir < 0 ? row - 1 : row + 1;
+      for (var n = 0; n < LOOSE_BLOCK_ROWS; n++, r += dir) {
+        var line = r >= 0 ? buffer.getLine(r) : null;
+        if (!line) break;
+        var content = _rowContent(line);
+        if (content.end <= content.start) break;
+        if (_advanceCol(line, 0, content.end) > endCol) return false;
+      }
+    }
+    return true;
+  }
+
+  // The hard newline between buffer rows `row` and `row + 1`. Returns null when
+  // the two rows are not one token, else
+  //   strip, end - what to leave out of the row below, where the row above ends
+  //   strong     - see above
+  //   url        - a URL may join here: strong, and either the edge is exact
+  //                (the terminal's or a box's) or what follows reads like the
+  //                rest of a URL and not like the next word of a sentence
+  //   tail, head - the two halves, for _seamFragments
+  function _looseSeam(buffer, row) {
+    if (typeof LinkDetect === 'undefined') return null;
+    var above = buffer.getLine(row);
+    var below = buffer.getLine(row + 1);
+    if (!above || !below || below.isWrapped) return null;
+    var a = _rowContent(above);
+    var b = _rowContent(below);
+    if (a.end <= a.start || b.end <= b.start) return null;
+    // A first row starts where its continuation does, or left of it by a marker.
+    if (a.start > b.start || b.start - a.start > LOOSE_MAX_MARKER) return null;
+    var aText = a.text.slice(a.start, a.end);
+    var bText = b.text.slice(b.start, b.end);
+    var tail = /\S+$/.exec(aText);
+    var head = /^\S+/.exec(bText);
+    if (!tail || !head) return null;
+    tail = tail[0];
+    head = head[0];
+    if (tail.length > LOOSE_MAX_TOKEN || head.length > LOOSE_MAX_TOKEN) return null;
+    // What the row below starts with has to read as the rest of a token: not
+    // punctuation alone, and not the start of a link of its own.
+    var cjkLead = CJK_IDEOGRAPH_RE.test(head.charAt(0));
+    if (!cjkLead && !/[A-Za-z0-9_.\/~\-%?=&#]/.test(head.charAt(0))) return null;
+    if (!/[A-Za-z0-9一-鿿]/.test(head)) return null;
+    if (/^(?:[A-Za-z][A-Za-z0-9+.\-]*:\/\/|www\.|~\/|\.{1,2}\/|[A-Za-z]:[\\\/])/i.test(head)) return null;
+    // And one link has to run across the seam.
+    var seamAt = tail.length;
+    var spans = LinkDetect.findLinks(tail + head).some(function (m) {
+      return m.start < seamAt && m.end > seamAt;
+    });
+    if (!spans) return null;
+
+    var endCol = _advanceCol(above, 0, a.end);
+    // A wrapper moves a word that fits to the next row whole; it only breaks
+    // one that is longer than the row. With the row above full, the token is
+    // that long exactly when what continues it is wider than what precedes it.
+    var lead = Math.max(0, _advanceCol(above, 0, a.end - tail.length) - b.start);
+    var longer = _advanceCol(below, b.start, head.length) - b.start > lead;
+    // Where the row above ends: the terminal's last column, flush against a
+    // box (with the padding the row below shows), or the block's own edge.
+    var exact = (a.padRight < 0 && _rowIsFull(above))
+      || (a.padRight >= 0 && b.padLeft >= 0 && (a.padRight === 0 || a.padRight === b.padLeft));
+    var blockEdge = null;
+    var atBlockEdge = function () {
+      if (blockEdge === null) blockEdge = _isBlockEdge(buffer, row, endCol);
+      return blockEdge;
+    };
+    var edge = exact || (a.padRight < 0 && above.length - endCol <= LOOSE_EDGE_MARGIN && atBlockEdge());
+    var strong = !cjkLead && longer && edge;
+    if (!strong && !edge && !LinkDetect.shouldJoinHardWrap(aText, true, bText) && !(longer && atBlockEdge())) {
+      return null;
+    }
+    // `es/12345`, `ing-started`, `v2`: not `for` or `and.`
+    var urlRest = /[\/.\-_=&?%#~+0-9]/.test(head.replace(/[.,;:!?)\]}>'"]+$/, ''));
+    return { strip: b.start, end: a.end, strong: strong, url: strong && (exact || urlRest), tail: tail, head: head };
+  }
+
+  // What the rows of a seam name when each is read on its own: the path that
+  // ends the row above and the one that starts the row below.
+  function _seamFragments(seam) {
+    var paths = [];
+    var tails = LinkDetect.findLinks(seam.tail);
+    var last = tails[tails.length - 1];
+    if (last && last.kind !== 'web') paths.push(last.text);
+    var first = LinkDetect.findLinks(seam.head)[0];
+    if (first && first.kind !== 'web' && first.start === 0) paths.push(first.text);
+    return paths;
+  }
+
+  // The strict rows, extended at both ends across the seams _looseSeam accepts.
+  // A row reached that way carries `loose`; _linkLine decides whether it stays.
+  function _looseRows(buffer, bufRow) {
+    var objs = _strictRows(buffer, bufRow).objs;
+    if (!objs.length) return objs;
+    var added = 0;
+    var seam, r, ln;
+    while (added < LOOSE_MAX_ROWS && objs[0].row > 0 && (seam = _looseSeam(buffer, objs[0].row - 1))) {
+      objs[0].stripChars = seam.strip;
+      objs[0].loose = seam;
+      r = objs[0].row - 1;
+      var head = [{ line: buffer.getLine(r), row: r, stripChars: 0, trimEnd: seam.end }];
+      while (head[0].line.isWrapped && r > 0 && (ln = buffer.getLine(r - 1))) {
+        r--;
+        head.unshift({ line: ln, row: r, stripChars: 0, trimEnd: -1 });
+      }
+      objs = head.concat(objs);
+      added++;
+    }
+    while (added < LOOSE_MAX_ROWS && (seam = _looseSeam(buffer, objs[objs.length - 1].row))) {
+      objs[objs.length - 1].trimEnd = seam.end;
+      r = objs[objs.length - 1].row + 1;
+      objs.push({ line: buffer.getLine(r), row: r, stripChars: seam.strip, trimEnd: -1, loose: seam });
+      for (r++; r < buffer.length && (ln = buffer.getLine(r)) && ln.isWrapped; r++) {
+        objs.push({ line: ln, row: r, stripChars: 0, trimEnd: -1 });
+      }
+      added++;
+    }
+    return objs;
+  }
+
+  // The logical line the links on `bufRow` are read from.
+  //
+  // lookup(path) says whether a path exists: true, false, or undefined when
+  // that is not known. While `settled` is false an unknown path is returned
+  // in `pending` and its seam is left out for now: an unconfirmed guess never
+  // changes what the strict rules found. Once the machine has been asked
+  // (`settled`), unknown means nobody can say, and a strong seam goes by its
+  // looks. A seam no link runs across is always left out.
+  function _linkLine(buffer, bufRow, lookup, settled) {
+    var objs = _looseRows(buffer, bufRow);
+    var logical = _buildLogical(objs, bufRow);
+    var pending = [];
+    if (!objs.some(function (obj) { return obj.loose; })) return { logical: logical, pending: pending };
+    var ask = function (path) {
+      var known = lookup ? lookup(path) : undefined;
+      if (known === undefined && !settled && pending.indexOf(path) < 0) pending.push(path);
+      return known;
+    };
+    var links = LinkDetect.findLinks(logical.text);
+    var cut = {};
+    var anyCut = false;
+    var at = -1;
+    for (var i = 0; i < objs.length; i++) {
+      if (objs[i].row === bufRow) at = i;
+      var seam = objs[i].loose;
+      if (!seam) continue;
+      var seamAt = logical.rows[i].strStart;
+      var link = null;
+      for (var j = 0; j < links.length && !link; j++) {
+        if (links[j].start < seamAt && links[j].end > seamAt) link = links[j];
+      }
+      var keep = false;
+      if (link && link.kind === 'web') {
+        keep = seam.url;
+      } else if (link) {
+        var joined = ask(link.text);
+        if (joined === true) {
+          keep = true;
+        } else if (seam.strong) {
+          // A row that names a file by itself was not broken, however full it
+          // looks; a false join there would take away a link that works.
+          var apart = _seamFragments(seam).map(ask);
+          var open = !settled && (joined === undefined || apart.indexOf(undefined) >= 0);
+          keep = !open && apart.indexOf(true) < 0;
+        }
+      }
+      if (!keep) { cut[i] = true; anyCut = true; }
+    }
+    if (!anyCut || at < 0) return { logical: logical, pending: pending };
+    // Back to the rows between two rejected seams, each read whole again.
+    var lo = at;
+    while (lo > 0 && !cut[lo]) lo--;
+    var hi = at;
+    while (hi < objs.length - 1 && !cut[hi + 1]) hi++;
+    var kept = objs.slice(lo, hi + 1).map(function (obj) {
+      return { line: obj.line, row: obj.row, stripChars: obj.stripChars, trimEnd: obj.trimEnd };
+    });
+    if (cut[lo]) kept[0].stripChars = 0;
+    if (hi < objs.length - 1) kept[kept.length - 1].trimEnd = -1;
+    return { logical: _buildLogical(kept, bufRow), pending: pending };
   }
 
   // Convert a string offset in the merged logical line to { y (1-based
@@ -4714,17 +4977,7 @@ var FilePreview = (function () {
       var r = rows[i];
       if (strOffset < r.strStart + r.strLen || i === rows.length - 1) {
         var strInRow = Math.max(0, Math.min(strOffset - r.strStart, r.strLen));
-        // Walk cells to find terminal column for strInRow-th character
-        var col = r.cellStart || 0;
-        var chars = 0;
-        var lineLen = r.line.length;
-        while (chars < strInRow && col < lineLen) {
-          var cell = r.line.getCell(col);
-          var w = cell ? (cell.getWidth() || 1) : 1;
-          col += w;
-          chars++;
-        }
-        return { y: r.row + 1, x: col + 1 };
+        return { y: r.row + 1, x: _advanceCol(r.line, r.cellStart || 0, strInRow) + 1 };
       }
     }
     var last = rows[rows.length - 1];
@@ -4775,9 +5028,135 @@ var FilePreview = (function () {
   // preview; ambiguous (e.g. example.com) asks the user which one (project rule:
   // don't guess URL-vs-file — let the user choose).
   function _activateLink(f, paneId, source) {
+    if (f.unverified) { _activateUnverified(f, paneId, source); return; }
     if (f.kind === 'web') { _openWeb(f.href); return; }
     if (f.kind === 'ambiguous') { _showLinkChooser(f, paneId, source); return; }
     openFile(f.text, paneId, { lineRef: f.lineRef, source: source });
+  }
+
+  // --- Does a path exist? ---
+  //
+  // What decides the seams _linkLine is not sure about. Answers are kept
+  // briefly: xterm asks for a row's links again on every repaint under the
+  // pointer, and a file an agent just named may be created a moment later.
+
+  var EXISTS_OK_MS = 60000;
+  var EXISTS_MISS_MS = 8000;
+  var EXISTS_WAIT_MS = 2500;          // a slow machine must not hold the links back
+  var EXISTS_MAX_PATHS = 8;
+  var EXISTS_CACHE_MAX = 400;
+  var EXISTS_UNSUPPORTED_MS = 300000; // a Node from before /api/files/exists
+  var _existsCache = new Map();
+  var _existsFlights = new Map();
+  var _existsUnsupported = new Map();
+
+  function _existsKey(machine, paneId, path) {
+    return machine + '\n' + (paneId || '') + '\n' + path;
+  }
+
+  // true / false, or undefined when there is no fresh answer.
+  function _knownToExist(machine, paneId, path) {
+    var hit = _existsCache.get(_existsKey(machine, paneId, path));
+    if (!hit || Date.now() - hit.at > (hit.ok ? EXISTS_OK_MS : EXISTS_MISS_MS)) return undefined;
+    return hit.ok;
+  }
+
+  // Asks the pane's machine about `paths` and settles once the answers are in
+  // the cache, or once it is clear there will be none. Never rejects.
+  function _checkExists(machine, paneId, paths) {
+    if (typeof fetch !== 'function' || !paths.length) return Promise.resolve();
+    if ((_existsUnsupported.get(machine) || 0) > Date.now()) return Promise.resolve();
+    var wanted = paths.slice(0, EXISTS_MAX_PATHS);
+    var flightKey = _existsKey(machine, paneId, wanted.join('\n'));
+    var flying = _existsFlights.get(flightKey);
+    if (flying) return flying;
+    var query = wanted.map(function (path) { return 'path=' + encodeURIComponent(path); });
+    if (paneId) query.unshift('paneId=' + encodeURIComponent(paneId));
+    var done = function () { _existsFlights.delete(flightKey); };
+    var flight;
+    try {
+      flight = Promise.resolve(fetch(machine + '/api/files/exists?' + query.join('&'), {
+        headers: typeof Auth !== 'undefined' ? Auth.headers() : {},
+        cache: 'no-store',
+      })).then(function (response) {
+        if (response.status === 404) _existsUnsupported.set(machine, Date.now() + EXISTS_UNSUPPORTED_MS);
+        return response.ok ? response.json() : null;
+      }).then(function (result) {
+        var list = result && result.success && result.data && result.data.exists;
+        if (!Array.isArray(list)) return;
+        if (_existsCache.size > EXISTS_CACHE_MAX) _existsCache.clear();
+        var now = Date.now();
+        wanted.forEach(function (path, i) {
+          _existsCache.set(_existsKey(machine, paneId, path), { ok: list[i] === true, at: now });
+        });
+      }).catch(function () { /* no answer: the seams stay as the strict rules left them */ }).then(done);
+    } catch (_) {
+      return Promise.resolve();
+    }
+    _existsFlights.set(flightKey, flight);
+    return flight;
+  }
+
+  function _withinWait(promise) {
+    return new Promise(function (resolve) {
+      var timer = setTimeout(resolve, EXISTS_WAIT_MS);
+      promise.then(function () { clearTimeout(timer); resolve(); });
+    });
+  }
+
+  // A tap cannot wait for the answer (the terminal needs its focus in the
+  // gesture), so hitTest hands over the joined path unconfirmed, with what the
+  // strict rules found under the finger to fall back on. Without that, the
+  // joined path is still the best reading of what was tapped.
+  function _activateUnverified(f, paneId, source) {
+    var origin = source || _sourceForPane(paneId);
+    var machine = _machine(origin);
+    _withinWait(_checkExists(machine, origin.paneId, [f.text])).then(function () {
+      var known = _knownToExist(machine, origin.paneId, f.text);
+      if (known === true || !f.fallback || (known === undefined && f.strong)) {
+        openFile(f.text, paneId, { lineRef: f.lineRef, source: source });
+      } else {
+        _activateLink(f.fallback, paneId, source);
+      }
+    });
+  }
+
+  // --- OSC 8 hyperlinks ---
+  //
+  // A program that marks its own links (tmux forwards them to the panel's
+  // clients, see lib/terminal/hyperlinks.js) says where each one leads, on
+  // every cell of it: no guess from the text, and no wrap can break it. xterm
+  // asks for these before the provider below.
+  function _hyperlinkHandler(term, paneId, resolvePaneId, origin, isCurrent) {
+    return {
+      // file: links and the bare paths some programs emit are the point.
+      allowNonHttpProtocols: true,
+      activate: function (_event, uri) {
+        var target = typeof LinkDetect !== 'undefined' ? LinkDetect.parseHyperlink(uri) : null;
+        if (!target) return;
+        // Like a detected link: window.open stays inside the click.
+        if (target.kind === 'web') { _openWeb(target.href); return; }
+        if (target.kind !== 'file') {
+          if (window._showToast) window._showToast('面板不打开 ' + target.text + ': 链接');
+          return;
+        }
+        if (isCurrent && !isCurrent()) {
+          if (window._showToast) window._showToast('终端来源尚未确认，请连接后重试');
+          return;
+        }
+        _resolvePaneForAction(paneId, resolvePaneId, function (livePaneId) {
+          _activateLink({ kind: 'file', text: target.text, lineRef: target.lineRef },
+            origin ? origin.paneId : livePaneId, origin);
+        });
+      },
+      // The text on screen is the program's choice; show where the link goes.
+      hover: function (_event, uri) {
+        if (term.element) term.element.title = uri;
+      },
+      leave: function () {
+        if (term.element) term.element.removeAttribute('title');
+      },
+    };
   }
 
   function _openWeb(href) {
@@ -4839,54 +5218,79 @@ var FilePreview = (function () {
   function registerLinkProvider(term, paneId, resolvePaneId, source) {
     var origin = source ? { serverId: source.serverId, paneId: source.paneId || paneId } : null;
     var isCurrent = source && typeof source.isCurrent === 'function' ? source.isCurrent : null;
+    // Hyperlinks the program marked itself. Set here and not at construction:
+    // this is where the pane and its machine are known.
+    try {
+      if (term.options) term.options.linkHandler = _hyperlinkHandler(term, paneId, resolvePaneId, origin, isCurrent);
+    } catch (_) { /* a terminal without the option only has detected links */ }
+    var latest = 0;
     return term.registerLinkProvider({
       provideLinks: function (lineNumber, callback) {
+        var seq = ++latest;
         var bufRow = lineNumber - 1;
-        var buf = term.buffer.active;
-        var logical = _getLogicalLine(buf, bufRow);
-        var found = _findLinks(logical.text);
-        if (found.length === 0) return callback(undefined);
-
-        if (window._FP_DEBUG) {
-          console.log('[FP] line', lineNumber, 'text=', JSON.stringify(logical.text), 'matches=', found);
+        // Paths are checked where the pane runs, against its directory.
+        var where = origin || _sourceForPane(paneId);
+        var machine = _machine(where);
+        var lookup = function (path) { return _knownToExist(machine, where.paneId, path); };
+        var first = _linkLine(term.buffer.active, bufRow, lookup, false);
+        if (first.pending.length === 0 || (isCurrent && !isCurrent())) {
+          return callback(linksOn(first.logical, lineNumber));
         }
-
-        var links = found.map(function (f) {
-          var start = _logicalStrOffsetToTermPos(logical.rows, f.startCol);
-          // xterm link ranges are INCLUSIVE, so map the LAST cell (endCol-1),
-          // not the exclusive end. Mapping endCol directly lands on the next
-          // row when the span ends exactly at a wrap boundary (over-underline).
-          var end = _logicalStrOffsetToTermPos(logical.rows, f.endCol - 1);
-          return {
-            range: { start: start, end: { y: end.y,
-              x: end.y === start.y ? Math.max(end.x, start.x) : end.x } },
-            text: f.text,
-            activate: function () {
-              // Keep window.open inside the original user gesture so browsers
-              // do not block ordinary web links as async popups.
-              if (f.kind === 'web') { _activateLink(f, paneId); return; }
-              if (isCurrent && !isCurrent()) {
-                if (window._showToast) window._showToast('终端来源尚未确认，请连接后重试');
-                return;
-              }
-              _resolvePaneForAction(paneId, resolvePaneId, function (livePaneId) {
-                _activateLink(f, origin ? origin.paneId : livePaneId, origin);
-              });
-            },
-          };
-        }).filter(function (link) {
-          return link.range.start.y <= lineNumber && link.range.end.y >= lineNumber;
+        _withinWait(_checkExists(machine, where.paneId, first.pending)).then(function () {
+          // xterm asked again meanwhile (the pointer moved, the row was
+          // repainted). That request answers for itself; a late answer here
+          // would land in its place.
+          if (seq !== latest) return;
+          // Read the screen again: it may have changed while the machine answered.
+          callback(linksOn(_linkLine(term.buffer.active, bufRow, lookup, true).logical, lineNumber));
         });
-
-        if (window._FP_DEBUG && links.length > 0) {
-          console.log('[FP] returning links for line', lineNumber, links.map(function(l) {
-            return { text: l.text, range: l.range };
-          }));
-        }
-
-        callback(links.length > 0 ? links : undefined);
       },
     });
+
+    // xterm's links for one row of a logical line, or undefined without any.
+    function linksOn(logical, lineNumber) {
+      var found = _findLinks(logical.text);
+      if (found.length === 0) return undefined;
+
+      if (window._FP_DEBUG) {
+        console.log('[FP] line', lineNumber, 'text=', JSON.stringify(logical.text), 'matches=', found);
+      }
+
+      var links = found.map(function (f) {
+        var start = _logicalStrOffsetToTermPos(logical.rows, f.startCol);
+        // xterm link ranges are INCLUSIVE, so map the LAST cell (endCol-1),
+        // not the exclusive end. Mapping endCol directly lands on the next
+        // row when the span ends exactly at a wrap boundary (over-underline).
+        var end = _logicalStrOffsetToTermPos(logical.rows, f.endCol - 1);
+        return {
+          range: { start: start, end: { y: end.y,
+            x: end.y === start.y ? Math.max(end.x, start.x) : end.x } },
+          text: f.text,
+          activate: function () {
+            // Keep window.open inside the original user gesture so browsers
+            // do not block ordinary web links as async popups.
+            if (f.kind === 'web') { _activateLink(f, paneId); return; }
+            if (isCurrent && !isCurrent()) {
+              if (window._showToast) window._showToast('终端来源尚未确认，请连接后重试');
+              return;
+            }
+            _resolvePaneForAction(paneId, resolvePaneId, function (livePaneId) {
+              _activateLink(f, origin ? origin.paneId : livePaneId, origin);
+            });
+          },
+        };
+      }).filter(function (link) {
+        return link.range.start.y <= lineNumber && link.range.end.y >= lineNumber;
+      });
+
+      if (window._FP_DEBUG && links.length > 0) {
+        console.log('[FP] returning links for line', lineNumber, links.map(function(l) {
+          return { text: l.text, range: l.range };
+        }));
+      }
+
+      return links.length > 0 ? links : undefined;
+    }
   }
 
   // --- Open File ---
@@ -5624,13 +6028,26 @@ var FilePreview = (function () {
       col = cellStart;
       while (col < termCol && col < lineLen) {
         var cell = r.line.getCell(col);
-        var w = cell ? (cell.getWidth() || 1) : 1;
-        col += w;
-        chars++;
+        var glyph = cell && typeof cell.getChars === 'function' ? cell.getChars() : '';
+        col += cell ? (cell.getWidth() || 1) : 1;
+        chars += glyph.length || 1;
       }
+      // Past what this row contributes (its trailing blanks, a box edge left
+      // out of the text): that is no position in the row that follows.
+      if (i < logical.rows.length - 1 && chars >= r.strLen) return -1;
       return r.strStart + chars;
     }
     return -1;
+  }
+
+  function _hitIn(logical, bufRow, col) {
+    var strOffset = _termPosToLogicalStrOffset(logical, bufRow, col);
+    if (strOffset < 0) return null;
+    var links = _findLinks(logical.text);
+    for (var i = 0; i < links.length; i++) {
+      if (strOffset >= links[i].startCol && strOffset < links[i].endCol) return links[i];
+    }
+    return null;
   }
 
   // Check if a position falls on a link. Returns the full match object
@@ -5638,17 +6055,23 @@ var FilePreview = (function () {
   // For mobile: pass term + viewportRow to enable wrapped line detection.
   function hitTest(lineText, col, term, viewportRow) {
     if (term && viewportRow !== undefined) {
-      var bufRow = term.buffer.active.viewportY + viewportRow;
-      var logical = _getLogicalLine(term.buffer.active, bufRow);
-      var strOffset = _termPosToLogicalStrOffset(logical, bufRow, col);
-      if (strOffset < 0) return null;
-      var links = _findLinks(logical.text);
-      for (var i = 0; i < links.length; i++) {
-        if (strOffset >= links[i].startCol && strOffset < links[i].endCol) {
-          return links[i];
-        }
-      }
-      return null;
+      var buffer = term.buffer.active;
+      var bufRow = buffer.viewportY + viewportRow;
+      var sure = _linkLine(buffer, bufRow, null, false);
+      var hit = _hitIn(sure.logical, bufRow, col);
+      if (sure.pending.length === 0) return hit;
+      // A path that joins the rows if it exists. Nothing can be asked from
+      // inside a tap, so it goes out unconfirmed (_activateUnverified).
+      var hoped = _hitIn(_linkLine(buffer, bufRow, function (path) {
+        return sure.pending.indexOf(path) >= 0 ? true : undefined;
+      }, true).logical, bufRow, col);
+      if (!hoped || (hit && hit.text === hoped.text) || sure.pending.indexOf(hoped.text) < 0) return hit;
+      hoped.unverified = true;
+      hoped.fallback = hit;
+      // What the seam's looks alone say, for a machine that cannot answer.
+      var looks = _hitIn(_linkLine(buffer, bufRow, null, true).logical, bufRow, col);
+      hoped.strong = !!looks && looks.text === hoped.text;
+      return hoped;
     }
     // Fallback: single-line hit test
     var simpleLinks = _findLinks(lineText);
@@ -5705,6 +6128,11 @@ var FilePreview = (function () {
     // Test seam (no DOM): exercised by test/file-preview-links.test.js.
     _test: {
       getLogicalLine: _getLogicalLine,
+      linkLine: _linkLine,
+      looseSeam: _looseSeam,
+      hitTest: hitTest,
+      knownToExist: _knownToExist,
+      checkExists: _checkExists,
       strOffsetToTermPos: _logicalStrOffsetToTermPos,
       findLinks: _findLinks,
       resolvePaneForAction: _resolvePaneForAction,

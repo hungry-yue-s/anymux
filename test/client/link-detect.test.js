@@ -217,6 +217,71 @@ describe('Fix 10 — shouldJoinHardWrap (guarded)', () => {
   });
 });
 
+describe('frame glyphs end a token', () => {
+  it('a pane border right after a path is not part of it', () => {
+    // tmux draws │ between panes: the row is a path, a border and another pane.
+    expect(texts('cat src/very/long/pa│$ ls -la')).toEqual(['src/very/long/pa']);
+  });
+  it('a box edge ends a URL and a file: URL too', () => {
+    expect(one('│ https://example.com/a/b│').text).toBe('https://example.com/a/b');
+    expect(one('file:///tmp/a.txt┃').text).toBe('/tmp/a.txt');
+  });
+  it('block elements count as well', () => {
+    expect(texts('docs/guide.md▏next')).toContain('docs/guide.md');
+    expect(texts('docs/guide.md▏next')).not.toContain('docs/guide.md▏next');
+  });
+});
+
+describe('Windows drive paths', () => {
+  it('a backslash path with a line number is one file link', () => {
+    const l = one('error in C:\\Users\\me\\projects\\foo\\bar.js:12');
+    expect(l).toMatchObject({ kind: 'file', text: 'C:\\Users\\me\\projects\\foo\\bar.js', lineRef: 12 });
+  });
+  it('any drive letter with a backslash, upper case only with a forward slash', () => {
+    expect(one('d:\\work\\notes.txt').text).toBe('d:\\work\\notes.txt');
+    expect(one('open C:/Users/me/a.js now').text).toBe('C:/Users/me/a.js');
+    // A one-letter label keeps meaning what it did: the label's path.
+    expect(one('e:/etc/hosts').text).toBe('/etc/hosts');
+  });
+  it('is not found inside a URL or a longer word', () => {
+    expect(one('https://example.com/C:/x/y').kind).toBe('web');
+    expect(texts('abC:\\x\\y')).not.toContain('C:\\x\\y');
+  });
+  it('a file: URL to a drive drops the URL\'s own leading slash', () => {
+    expect(one('file:///C:/Users/me/a%20b.txt').text).toBe('C:/Users/me/a b.txt');
+  });
+});
+
+describe('parseHyperlink — where an OSC 8 link leads', () => {
+  it('http(s) opens as it is', () => {
+    expect(LD.parseHyperlink('https://example.com/a?b=1#c')).toEqual({ kind: 'web', text: 'https://example.com/a?b=1#c', href: 'https://example.com/a?b=1#c', lineRef: null });
+    expect(LD.parseHyperlink('HTTP://example.com').kind).toBe('web');
+  });
+  it('file: URLs give the path, decoded, whatever the authority', () => {
+    expect(LD.parseHyperlink('file:///home/u/a%20b.md')).toMatchObject({ kind: 'file', text: '/home/u/a b.md', lineRef: null });
+    expect(LD.parseHyperlink('file://myhost/home/u/a.md:7')).toMatchObject({ kind: 'file', text: '/home/u/a.md', lineRef: 7 });
+    expect(LD.parseHyperlink('file:/home/u/a.md')).toMatchObject({ kind: 'file', text: '/home/u/a.md' });
+    expect(LD.parseHyperlink('file:///C:/Users/me/a.ts')).toMatchObject({ kind: 'file', text: 'C:/Users/me/a.ts' });
+  });
+  it('a bare path is a file, with or without a line', () => {
+    // Some programs put the path itself in the link, not a URL.
+    expect(LD.parseHyperlink('/home/u/src/app.ts:12:3')).toMatchObject({ kind: 'file', text: '/home/u/src/app.ts', lineRef: 12 });
+    expect(LD.parseHyperlink('src/app.ts')).toMatchObject({ kind: 'file', text: 'src/app.ts', lineRef: null });
+    expect(LD.parseHyperlink('app.ts:12')).toMatchObject({ kind: 'file', text: 'app.ts', lineRef: 12 });
+    expect(LD.parseHyperlink('C:\\Users\\me\\a.ts:5')).toMatchObject({ kind: 'file', text: 'C:\\Users\\me\\a.ts', lineRef: 5 });
+  });
+  it('other schemes are named, not opened', () => {
+    expect(LD.parseHyperlink('mailto:a@example.com')).toMatchObject({ kind: 'other', text: 'mailto' });
+    expect(LD.parseHyperlink('vscode://file/home/u/a.ts')).toMatchObject({ kind: 'other', text: 'vscode' });
+    expect(LD.parseHyperlink('javascript:alert(1)')).toMatchObject({ kind: 'other', text: 'javascript' });
+  });
+  it('nothing to open gives null', () => {
+    expect(LD.parseHyperlink('')).toBeNull();
+    expect(LD.parseHyperlink('file://hostonly')).toBeNull();
+    expect(LD.parseHyperlink(undefined)).toBeNull();
+  });
+});
+
 describe('false-positive policy (conservative)', () => {
   it('D41 numeric slash tuples rejected', () => {
     expect(find('2024/06/05')).toHaveLength(0);

@@ -13,6 +13,14 @@ function fixture() {
 }
 
 describe('native window framed PTY transport', () => {
+  it('declares hyperlinks for its client, among the global options of the chosen server', () => {
+    const f = fixture();
+    const argv = f.spawn.mock.calls[0][1].map(word => String(word).replace(/^'|'$/g, ''));
+    // Without the feature tmux drops every OSC 8 link before the page sees it.
+    expect(argv.slice(0, 7)).toEqual(['--panel-pty', '80x24', '-S', '/private-test/socket', '-T', 'hyperlinks', '-N']);
+    f.process.dispose();
+  });
+
   it('withholds terminal cleanup and reports a detach without erasing the native screen', async () => {
     const f = fixture(), outputs = [], exits = [];
     f.process.on('output', data => outputs.push(data)); f.process.on('exit', info => exits.push(info));

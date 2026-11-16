@@ -68,6 +68,15 @@ describe('createTmuxApi', () => {
     expect(PANE_BORDER_FORMAT).not.toMatch(/#[0-9a-f]{6}/i);
   });
 
+  it('sets FORCE_HYPERLINK for new panes in one command that leaves a chosen value alone', async () => {
+    const { executor, calls } = fakeExecutor();
+    await createTmuxApi(executor).ensureHyperlinkEnvironment();
+    // tmux decides: nothing is read first, so nothing can change in between.
+    expect(calls.map(({ args }) => args)).toEqual([
+      ['if-shell', '-F', '#{!=:#{FORCE_HYPERLINK},}', '', 'set-environment -g FORCE_HYPERLINK 1'],
+    ]);
+  });
+
   it('asks list-sessions for the stable session id', async () => {
     const { executor, calls } = fakeExecutor({
       'list-sessions': ['$1', 'main', '2', '1', '1700000000'].join(SEP),

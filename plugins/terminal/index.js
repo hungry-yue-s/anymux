@@ -10,14 +10,21 @@
 import { diagnostics } from '../../lib/diagnostics.js';
 import { TerminalManager } from '../../lib/terminal.js';
 import { TerminalGateway } from '../../lib/terminal/gateway.js';
+import { hyperlinkClientArgs } from '../../lib/terminal/hyperlinks.js';
 
 export const name = 'terminal';
 
-export const inject = ['launch', 'http', 'workspace'];
+export const inject = ['launch', 'http', 'workspace', 'tmux'];
 
 export function apply(ctx) {
   const manager = new TerminalManager({ maxConnectionsPerPane: ctx.launch.maxConnections });
   const gateway = new TerminalGateway({ workspace: ctx.workspace, terminalManager: manager });
+  // Hyperlinks reach the page only through clients that declare them, and only
+  // a tmux known to take the option gets it: until the version is read, and
+  // with a tmux too old, clients start as they always did.
+  Promise.resolve().then(() => ctx.tmux.version())
+    .then((version) => manager.setClientFeatures(hyperlinkClientArgs(version)))
+    .catch(() => {});
 
   ctx.http.websocket('/ws/terminal/*', ({ ws, url }) => {
     diagnostics.record('terminal', { serverId: 'local', phase: 'upgraded', compressed: ws.extensions.includes('permessage-deflate') });

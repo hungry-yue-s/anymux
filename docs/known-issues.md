@@ -289,6 +289,24 @@ node-pty 报告退出比进程消失晚约 1 秒（中位 1.0 到 1.4 秒），�
 
 **另一件同期的事，原因未查清。** 11-06 18:48 到 11-10 11:01 这一次面板进程，从第一次检查起所有 tmux 命令都失败：会话保护 6623 次、perf-history 21019 次，stderr 都为空，不是 `no server running`。同期包装脚本每 10 秒探测都得到应答，没有结束过 23:52 起的 server，所以 server 本身在应答。11-10 经计划任务重启面板后不再失败。进程已经结束，现场无法还原。如果再出现“面板日志里 tmux 命令持续失败、`tmux-server.log` 却安静”，先在结束面板前抓下当时 tmux 客户端进程的状态和面板进程环境。
 
+### ENV-14 OSC 8 超链接到不了网页终端：tmux 不认识 xterm.js，Claude Code 不认识开发版 tmux（2026-11-16）
+
+**现象。** 窗格里的程序自己标出的链接（OSC 8）在面板里从不出现，链接只能靠页面从文字里猜；TUI 自己换行后，猜出来的路径和网址经常断成两段。
+
+**证据。** 都在私有 socket（`-L` 唯一名称、删掉 `TMUX`）上用部署的 tmux `next-3.8`（vendor-851c5a93）测得，窗格里的程序输出一个 http 链接和一个 `file://` 链接：
+
+- 面板的客户端以 `TERM=xterm-256color` 接入，收到文字，收不到 OSC 8；加 `-T hyperlinks` 后两个链接都收到。原生路径（`--panel-pty`）和旧路径（node-pty，系统 ConPTY）结果相同；单测 ConPTY，它本身透传 OSC 8。
+- tmux 按终端自报的名字开启特性（`vendor/tmux/tty-keys.c` 认 iTerm2、XTerm、mintty、foot、WezTerm、ghostty、tmux），不认 xterm.js；`XTerm` 一项本来也不含 `hyperlinks`（`tty-features.c`）。
+- 新窗格里 `TERM_PROGRAM=tmux`、`TERM_PROGRAM_VERSION=next-3.8`。Claude Code 2.1.325 在 tmux 里要求该版本号 ≥ 3.4，按 `.` 拆开后 `parseInt('next-3')` 是 NaN，判定为不支持，于是不发 OSC 8；它认 `FORCE_HYPERLINK`。
+
+**处理。** 见 `lib/terminal/hyperlinks.js`：
+
+- 面板自己的 tmux 客户端带 `-T hyperlinks`：原生路径总是带；旧路径只在读到 tmux 版本 ≥ 3.4 后才带（`-T` 是 3.2 加的，更老的 tmux 带上它会拒绝启动）。只影响面板的客户端，不改 server 选项，别的终端接入时照旧。
+- 面板在 tmux 的全局环境里设 `FORCE_HYPERLINK=1`，一条 `if-shell` 命令，只在没设过时才设：面板启动时、每次发现 tmux server 时（`lib/monitor.js`）、会话保护恢复会话之前。只对之后新开的窗格生效，已经在跑的程序要重开。
+- 页面上 xterm.js 本来就解析 OSC 8，但默认处理器只开 http(s) 且要弹确认框。`FilePreview.registerLinkProvider` 设了 `linkHandler`：http(s) 新标签打开，`file:` 和不带协议的路径进文件预览，其它协议不打开。
+
+**边界与关闭方法。** `FORCE_HYPERLINK` 对所有读它的程序生效，包括输出被重定向到文件或管道的时候，那时文件里会多出转义序列。不想要就在 `~/.tmux.conf` 里写 `set-environment -g FORCE_HYPERLINK 0`，面板不会覆盖。没验证的：Claude Code 给哪些文字发 OSC 8、换行后的续行上是否保留，只从它的程序文件里看到网址和 Markdown 链接会发；所以页面上的换行合并（CLAUDE.md「终端链接契约」）仍然需要。
+
 ## 捕获环境备注
 
 两条和产物无关但值得记下来的事。CDP 的 `Page.startScreencast` 在这台共享 Chrome 上返回的帧偶发无样式，所以所有动画改成定时 `page.screenshot` 静帧合成，脚本在 `.playwright-mcp/readme-shot/shot.mjs`。截图里的主机名、内网和公网 IP、服务器名、进程名都在捕获期做了 DOM 文本替换脱敏，tmux 状态栏的主机名用 session 级 `status-right` 覆盖掉，规则见同目录 `shot.mjs` 的 `SANITIZE_RULES`。

@@ -380,11 +380,34 @@ describe('SessionProtection', () => {
     expect(names.indexOf('set-environment')).toBeLessThan(names.indexOf('new-session'));
   });
 
-  it('leaves the pane environment alone off Windows', async () => {
+  it('leaves the MSYS environment alone off Windows', async () => {
     const tmux = fakeTmux();
     const { protection } = setup({ tmux });
     await protection.tick();
     expect(tmux.state.commands.some((args) => args[0] === 'set-environment')).toBe(false);
+  });
+
+  it('lets the programs it reopens emit hyperlinks, unless the user decided otherwise', async () => {
+    const tmux = fakeTmux();
+    const { protection } = setup({ tmux });
+    await protection.tick();
+    const names = tmux.state.commands.map((args) => args[0]);
+    // tmux sets it only when unset, so nothing here reads or overwrites a value.
+    expect(tmux.state.commands).toContainEqual(['if-shell', '-F', '#{!=:#{FORCE_HYPERLINK},}', '', 'set-environment -g FORCE_HYPERLINK 1']);
+    expect(names.indexOf('if-shell')).toBeLessThan(names.indexOf('new-session'));
+  });
+
+  it('restores all the same when tmux refuses the hyperlink environment', async () => {
+    const tmux = fakeTmux();
+    const { protection } = setup({ tmux });
+    const real = tmux.exec.getMockImplementation();
+    tmux.exec.mockImplementation(async (file, args) => {
+      if (args[0] === 'if-shell') throw Object.assign(new Error('unknown command: if-shell'), { stderr: 'unknown command' });
+      return real(file, args);
+    });
+    await protection.tick();
+    expect(tmux.state.options['@resurrect-processes']).toContain('claude');
+    expect(tmux.state.sessions).toEqual(['环境 部署', 'ops']);
   });
 
   it('tries the resurrect options again when tmux refused them, without restoring twice', async () => {

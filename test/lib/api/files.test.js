@@ -34,6 +34,43 @@ describe('files info API', () => {
   });
 });
 
+describe('files exists API', () => {
+  async function setup() {
+    const root = await mkdtemp(join(tmpdir(), 'anymux-exists-'));
+    tempDirs.push(root);
+    await writeFile(join(root, 'a.txt'), 'a');
+    await writeFile(join(root, '.env'), 'SECRET=1');
+    const app = express();
+    app.use('/api/files', createFilesRouter([root]));
+    // Repeated `path` parameters, as the page sends them.
+    const ask = (...paths) => request(app).get('/api/files/exists?' + new URLSearchParams(paths.map((path) => ['path', path])));
+    return { root, ask };
+  }
+
+  it('answers for every path in the order asked, files and directories alike', async () => {
+    const { root, ask } = await setup();
+    const res = await ask(join(root, 'a.txt'), join(root, 'missing.txt'), root);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ success: true, data: { exists: [true, false, true] }, error: null });
+    expect((await ask(join(root, 'a.txt'))).body.data.exists).toEqual([true]);
+  });
+
+  it('reads a path outside the roots or behind a sensitive pattern as missing', async () => {
+    const { root, ask } = await setup();
+    const outside = await mkdtemp(join(tmpdir(), 'anymux-exists-outside-'));
+    tempDirs.push(outside);
+    await writeFile(join(outside, 'b.txt'), 'b');
+    const res = await ask(join(outside, 'b.txt'), join(root, '.env'), join(root, 'a.txt'));
+    expect(res.body.data.exists).toEqual([false, false, true]);
+  });
+
+  it('refuses a request without paths or with too many', async () => {
+    const { root, ask } = await setup();
+    expect((await ask()).status).toBe(400);
+    expect((await ask(...Array(17).fill(join(root, 'a.txt')))).status).toBe(400);
+  });
+});
+
 describe('video streaming API', () => {
   async function setup(filename = 'clip.mp4') {
     const root = await mkdtemp(join(tmpdir(), 'anymux-video-'));

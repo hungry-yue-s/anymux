@@ -8,6 +8,7 @@ vi.mock('../../lib/tmux.js', () => ({
   listWindows: vi.fn(),
   listPaneCommands: vi.fn(),
   ensurePaneBorderConfig: vi.fn(() => Promise.resolve()),
+  ensureHyperlinkEnvironment: vi.fn(() => Promise.resolve()),
 }));
 
 // Import mocked module
@@ -30,6 +31,8 @@ describe('StatusMonitor', () => {
     tmux.listWindows.mockReset();
     tmux.listPaneCommands.mockReset();
     tmux.ensurePaneBorderConfig.mockClear();
+    tmux.ensureHyperlinkEnvironment.mockReset();
+    tmux.ensureHyperlinkEnvironment.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -632,6 +635,30 @@ describe('StatusMonitor', () => {
       await Promise.resolve();      // let the rejection's .catch run
       await monitor.poll();         // attempt 2 (retry)
       expect(tmux.ensurePaneBorderConfig).toHaveBeenCalledTimes(2);
+    });
+
+    it('sets the hyperlink environment at the same moments, and a refusal costs nothing else', async () => {
+      const sess = [{ name: 'main', windows: 1, attached: true, lastActivity: '0' }];
+      tmux.listSessions.mockResolvedValue(sess);
+      tmux.listWindows.mockResolvedValue([]);
+      tmux.listPaneCommands.mockResolvedValue([]);
+      tmux.ensureHyperlinkEnvironment.mockRejectedValueOnce(new Error('old tmux'));
+      const ws = createMockWs();
+      monitor.subscribe(ws);
+
+      await monitor.poll();
+      await Promise.resolve();
+      await monitor.poll();
+      // Once per server, like the border; its failure is not the border's to retry.
+      expect(tmux.ensureHyperlinkEnvironment).toHaveBeenCalledTimes(1);
+      expect(tmux.ensurePaneBorderConfig).toHaveBeenCalledTimes(1);
+      expect(JSON.parse(ws.send.mock.calls[0][0]).type).toBe('status');
+
+      tmux.listSessions.mockResolvedValue([]);
+      await monitor.poll();
+      tmux.listSessions.mockResolvedValue(sess);
+      await monitor.poll();
+      expect(tmux.ensureHyperlinkEnvironment).toHaveBeenCalledTimes(2);
     });
   });
 });

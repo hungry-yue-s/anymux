@@ -22,16 +22,23 @@ var LinkDetect = (function () {
   var CJK_PUNCT = '\\u3000-\\u303f\\uff00-\\uffef\\u2000-\\u206f';
   // Middle dots (U+00B7 ·, U+30FB ・) read as separators, not path content (D23).
   var DOTS = '\\u00b7\\u30fb';
+  // Box drawing and block elements are what a TUI frames its boxes with, and
+  // what tmux draws between panes: `src/a.js│$ ls` is a path, a border and
+  // another pane, never one token.
+  var FRAME = '\\u2500-\\u259f';
 
   // Path body: excludes whitespace, quotes, brackets, URL delimiters, CJK
-  // punctuation and middle dots. CJK ideographs allowed.
-  var PB = '[^\\s\'"()\\[\\]{}<>:;,?#&@=' + CJK_PUNCT + DOTS + ']';
+  // punctuation, middle dots and frame glyphs. CJK ideographs allowed.
+  var PB = '[^\\s\'"()\\[\\]{}<>:;,?#&@=' + CJK_PUNCT + DOTS + FRAME + ']';
   // URL body: re-admits query/fragment chars ? & = # @ ; only whitespace,
-  // quotes, brackets, backtick, CJK punctuation and middle dots terminate.
-  var UB = '[^\\s\'"()\\[\\]{}<>`' + CJK_PUNCT + DOTS + ']';
+  // quotes, brackets, backtick, CJK punctuation, middle dots and frame glyphs
+  // terminate.
+  var UB = '[^\\s\'"()\\[\\]{}<>`' + CJK_PUNCT + DOTS + FRAME + ']';
 
   // A path must not start in the middle of a larger token.
   var NP = '(?<![\\w\\-:/.~])';
+  // The same for a drive-letter path, which a backslash may also precede.
+  var NPW = '(?<![\\w\\-:/.~\\\\])';
   // Web links must not start inside a word/host (D4/D5).
   var UNP = '(?<![\\w./-])';
   // Label-prefix lookbehind: a path glued to `<letter|CJK>:` (Fix 8).
@@ -47,10 +54,14 @@ var LinkDetect = (function () {
   var HOST_RE = re(UNP + '(?:localhost|127\\.0\\.0\\.1):\\d+(?:/' + UB + '*)?');
 
   // file:// (two-or-more slashes tolerated; CJK punct/whitespace/quotes stop it)
-  var FILE_URL_RE = re('(?:file|FILE):/{2,}[^\\s\'"()\\[\\]{}<>`' + CJK_PUNCT + ']*');
+  var FILE_URL_RE = re('(?:file|FILE):/{2,}[^\\s\'"()\\[\\]{}<>`' + CJK_PUNCT + FRAME + ']*');
 
   // Paths
   var ABS_RE = re(NP + '/' + PB + '+(?:/' + PB + '+)*');
+  // What native Windows programs print: `C:\Users\me\a.js`, and `C:/Users/me`
+  // from Git and MSYS. With a forward slash only an upper-case drive counts, so
+  // a one-letter label (`e:/etc/hosts`) stays a label and its path.
+  var WIN_ABS_RE = re(NPW + '(?:[A-Za-z]:\\\\|[A-Z]:/)' + PB + '+');
   var TILDE_RE = re(NP + '~[a-zA-Z0-9_\\-]*/' + PB + '+(?:/' + PB + '+)*');
   var REL_RE = re(NP + '\\.\\.?/' + PB + '+(?:/' + PB + '+)*');
   var BARE_RE = re(NP + '[a-zA-Z0-9_\\-]+(?:/' + PB + '+)+');
@@ -156,7 +167,9 @@ var LinkDetect = (function () {
   // --- file:// processing (D7-D12) ---
 
   function _processFileUrl(line, start, raw) {
-    var rest = raw.replace(/^(?:file|FILE):\/\//, '');   // drop scheme + //
+    // Drop the scheme and its //. `file:/path` (no authority at all) is as
+    // valid as `file:///path` and is what some programs put in a hyperlink.
+    var rest = raw.replace(/^file:(?:\/\/)?/i, '');
     // Optional authority: file://host/path -> keep from first '/'. file:////a
     // (empty authority, leading //) -> collapse to '/'.
     var local;
@@ -167,6 +180,8 @@ var LinkDetect = (function () {
       if (slash === -1) return null;                     // authority, no path (D10)
       local = rest.slice(slash);
     }
+    // file:///C:/Users/me -> C:/Users/me: the slash before a drive is the URL's.
+    local = local.replace(/^\/([A-Za-z]:[\\/])/, '$1');
     if (!local || local === '/') return null;            // empty / root-only (D9)
     // Preserve a trailing :line[:col] before decoding (D7).
     var lineRef = null;
@@ -245,6 +260,19 @@ var LinkDetect = (function () {
     }
   }
 
+  // Drive-letter paths have their own runner: a backslash path has no `/` for
+  // _runPath to require, and none of its false-positive guards apply.
+  function _runWinPath(line, out) {
+    WIN_ABS_RE.lastIndex = 0;
+    var m;
+    while ((m = WIN_ABS_RE.exec(line)) !== null) {
+      var trimmed = _pathTrim(m[0], false);
+      if (trimmed.length < 4) continue;                  // `C:\` alone is a drive, not a file
+      out.push({ kind: 'file', text: trimmed, href: null, lineRef: null,
+        start: m.index, end: m.index + trimmed.length });
+    }
+  }
+
   function _runWeb(line, rx, out) {
     rx.lastIndex = 0;
     var m;
@@ -274,6 +302,32 @@ var LinkDetect = (function () {
     var yearLike = /^(?:19|20)\d{2}$/.test(m[2]);
     if (!hasExt && yearLike) return { path: p, lineRef: null };
     return { path: m[1], lineRef: Number(m[2]) };
+  }
+
+  // --- Public: where an OSC 8 hyperlink leads ---
+
+  // The program names the target itself, so nothing is guessed from the text
+  // on screen. Returns { kind, text, href, lineRef }:
+  //   'web'   -> href is the http(s) URL
+  //   'file'  -> text is the path; file: URLs, and the bare paths some programs
+  //              emit (optionally with :line[:col]), both land here
+  //   'other' -> a scheme the panel does not open (mailto:, vscode:, ...); text is the scheme
+  // or null when there is nothing to open.
+  function parseHyperlink(uri) {
+    uri = String(uri == null ? '' : uri).trim();
+    if (!uri) return null;
+    if (/^https?:\/\//i.test(uri)) return { kind: 'web', text: uri, href: uri, lineRef: null };
+    if (/^file:/i.test(uri)) {
+      var f = _processFileUrl(uri, 0, uri);
+      return f ? { kind: 'file', text: f.text, href: null, lineRef: f.lineRef } : null;
+    }
+    // `name:` is a scheme unless it is a drive letter or a file's `:line` suffix.
+    var scheme = /^([A-Za-z][A-Za-z0-9+.\-]*):/.exec(uri);
+    if (scheme && !/^[A-Za-z]:[\\/]/.test(uri) && !/^[^:]*:\d+(?::\d+)?$/.test(uri)) {
+      return { kind: 'other', text: scheme[1].toLowerCase(), href: null, lineRef: null };
+    }
+    var p = parseLineRef(uri);
+    return { kind: 'file', text: p.path, href: null, lineRef: p.lineRef };
   }
 
   // --- Public: hard-newline merge decision (Fix 10, guarded) ---
@@ -315,6 +369,7 @@ var LinkDetect = (function () {
       if (f) out.push(f);
     }
     // 2) Paths (specific first; dedup keeps the widest).
+    _runWinPath(line, out);
     _runPath(line, TILDE_RE, false, out);
     _runPath(line, REL_RE, false, out);
     _runPath(line, ABS_RE, false, out);
@@ -343,6 +398,7 @@ var LinkDetect = (function () {
     findLinks: findLinks,
     computeHref: computeHref,
     parseLineRef: parseLineRef,
+    parseHyperlink: parseHyperlink,
     shouldJoinHardWrap: shouldJoinHardWrap,
     _isAmbiguousDomain: _isAmbiguousDomain,   // exposed for tests
   };

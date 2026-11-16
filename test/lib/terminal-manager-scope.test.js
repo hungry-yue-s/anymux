@@ -6,6 +6,7 @@ vi.mock('node-pty', () => ({ default: { spawn } }));
 
 import { TerminalManager, buildTmuxAttachCommand, buildTmuxAttachArgs, createMarkerWatch, localAttachSpawnSpec } from '../../lib/terminal.js';
 import { MAX_HELD_INPUT_BYTES } from '../../lib/terminal/protocol.js';
+import { HYPERLINK_CLIENT_ARGS, hyperlinkClientArgs } from '../../lib/terminal/hyperlinks.js';
 
 function fakeTerm() {
   const handlers = {};
@@ -200,6 +201,22 @@ describe('TerminalManager PTY termination', () => {
       ws.listeners.close();
       expect(term.kill).toHaveBeenCalledTimes(1);
       expect(processKill).not.toHaveBeenCalled();
+    });
+
+    it('starts the first client and its replacement with the features of the page\'s terminal', async () => {
+      const first = fakeTerm();
+      spawn.mockReturnValueOnce(first).mockReturnValueOnce(fakeTerm());
+      const ws = fakeWs();
+      const manager = windows();
+      manager.setClientFeatures(hyperlinkClientArgs('next-3.8'));
+      manager.create(ws, '%1', 100, 30);
+      started(first);
+      expect(spawn.mock.calls[0][1].slice(0, 4)).toEqual(['-T', 'hyperlinks', '-u', 'select-pane']);
+
+      message(ws, { type: 'resize', cols: 120, rows: 40 });
+      await vi.advanceTimersByTimeAsync(800);
+      // A replacement that forgot them would lose the links at the first resize.
+      expect(spawn.mock.calls[1][1]).toEqual(['-T', 'hyperlinks', '-u', 'attach-session', '-d', '-t', '$7']);
     });
 
     it('never resizes a running client: a new one starts at the new size', async () => {
@@ -1437,6 +1454,39 @@ describe('buildTmuxAttachArgs', () => {
   it('force-unzooms first in split mode', () => {
     const args = buildTmuxAttachArgs('%5', { nozoom: true });
     expect(args.slice(10, 12)).toEqual(['resize-pane -Z -t %5', '']);
+  });
+});
+
+describe('hyperlink client features', () => {
+  it('declares the feature only to a tmux known to take the option', () => {
+    // -T came with tmux 3.2 and an older one refuses to start with it; the feature with 3.4.
+    expect(hyperlinkClientArgs('3.4')).toEqual(['-T', 'hyperlinks']);
+    expect(hyperlinkClientArgs('3.5a')).toEqual(['-T', 'hyperlinks']);
+    expect(hyperlinkClientArgs('next-3.8')).toEqual(['-T', 'hyperlinks']);
+    expect(hyperlinkClientArgs('4.0')).toEqual(['-T', 'hyperlinks']);
+    expect(hyperlinkClientArgs('3.3a')).toEqual([]);
+    expect(hyperlinkClientArgs('2.9')).toEqual([]);
+    expect(hyperlinkClientArgs(null)).toEqual([]);
+    expect(hyperlinkClientArgs('')).toEqual([]);
+  });
+
+  it('puts them among the global options, before the command queue, in both spellings', () => {
+    const features = [...HYPERLINK_CLIENT_ARGS];
+    expect(buildTmuxAttachArgs('%5', { features }).slice(0, 4)).toEqual(['-T', 'hyperlinks', '-u', 'select-pane']);
+    expect(buildTmuxAttachCommand('%5', { features })).toMatch(/^tmux -T hyperlinks -u select-pane -t '%5' /);
+    expect(localAttachSpawnSpec('%1', { platform: 'linux', features }).args[1]).toContain('tmux -T hyperlinks -u ');
+    expect(localAttachSpawnSpec('%1', { platform: 'win32', features }).args.slice(0, 2)).toEqual(['-T', 'hyperlinks']);
+  });
+
+  it('leaves clients as they were until the manager is told', () => {
+    spawn.mockReset();
+    spawn.mockImplementation(() => fakeTerm());
+    const manager = new TerminalManager({ platform: 'linux' });
+    manager.create(fakeWs(), '%1');
+    expect(spawn.mock.calls[0][1][1]).not.toContain('-T');
+    manager.setClientFeatures(hyperlinkClientArgs('3.5a'));
+    manager.create(fakeWs(), '%2');
+    expect(spawn.mock.calls[1][1][1]).toContain('tmux -T hyperlinks -u select-pane');
   });
 });
 

@@ -147,7 +147,7 @@ Hub 默认允许本机直连免登录，Swift 与浏览器均适用：TCP peer �
 | `auth` | `auth` | launch, http, node | 登录与 TOTP、令牌持久化与限流、`/api` 守卫、WebSocket 鉴权、登录是否仍有效 `/api/auth/check` |
 | `workspace` | `workspace` | http, tmux | 会话/窗口/窗格树与修改，`/api/workspace`，全部按稳定 ID；还有布局选择器用的窗口布局、窗格内容、调整大小和交换；修改发 `status/workspace-changed`。原来按名字/序号的 `/api/sessions`、`/api/panes`、`/api/status` 已删除 |
 | `status` | `status` | launch, http | `/ws/status`，轮询 tmux，转播 `status/*`；有 notifications / agentEvents 时接上 |
-| `terminal` | `terminals` | launch, http, workspace | `/ws/terminal/:paneId`，TerminalManager 的全部 Windows 契约 |
+| `terminal` | `terminals` | launch, http, workspace, tmux | `/ws/terminal/:paneId`，TerminalManager 的全部 Windows 契约；按 tmux 版本给客户端声明超链接特性（`lib/terminal/hyperlinks.js`） |
 | `control-terminal` | `controlTerminals` | launch, http, tmux, workspace, node | 原生窗口客户端池与 `/ws/native-window/*`、原始 pane-stream、幂等窗口创建；卸载仅关闭自己的客户端 |
 | `workbench` | — | launch, client, terminals（可选 ui） | 原生工作台与终端视图注册、非秘密存储 scope；视图按 viewId、文件/Git 按真实窗口保存 |
 | `keypad` | — | http | 移动端工具盘（前端）与它的场景发现 `/api/scene/discover` |
