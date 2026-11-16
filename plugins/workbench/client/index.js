@@ -7,27 +7,52 @@ export { registerWorkbenchShell };
 export const name = 'workbench';
 export const inject = ['api'];
 
+const TAB_KEY = 'anymux_native_tab';
+const LOCK_PREFIX = 'anymux_native_';
+// Before the rename (twp): a tab opened then keeps its id across the reload
+// that brings in this code, and one still running the old code holds its lock
+// under the old prefix.
+const LEGACY_TAB_KEY = 'twp_native_tab';
+const LEGACY_LOCK_PREFIX = 'twp_native_';
+
+/**
+ * Asks for a Web Lock without waiting: true when it was free (and, with
+ * `hold`, is now this tab's for good), false when another tab holds it, null
+ * when locks do not work here.
+ */
+function claimLock(global, name, hold) {
+  return new Promise((resolve) => {
+    global.navigator.locks.request(name, { ifAvailable: true }, (lock) => {
+      resolve(!!lock);
+      return lock && hold ? new Promise(() => {}) : undefined;
+    }).catch(() => resolve(null));
+  });
+}
+
 // A duplicated tab may inherit sessionStorage. Holding its Web Lock prevents
 // both tabs from typing through the same native tmux client; reload keeps it.
 function tabIdentity(global) {
   if (global.__workbenchTabIdentity) return global.__workbenchTabIdentity;
   global.__workbenchTabIdentity = (async () => {
     let id;
-    try { id = global.sessionStorage.getItem('twp_native_tab'); } catch { /* private webview */ }
+    let inherited = false;
+    try {
+      id = global.sessionStorage.getItem(TAB_KEY);
+      if (!id) { id = global.sessionStorage.getItem(LEGACY_TAB_KEY); inherited = !!id; }
+    } catch { /* private webview */ }
     if (!/^[A-Za-z0-9_-]{1,48}$/.test(id || '')) id = newId('t');
     if (global.navigator.locks) {
+      if (inherited && await claimLock(global, LEGACY_LOCK_PREFIX + id, false) === false) id = newId('t');
       for (;;) {
-        let claimed;
-        const claim = new Promise((resolve) => { claimed = resolve; });
-        global.navigator.locks.request('twp_native_' + id, { ifAvailable: true }, (lock) => {
-          claimed(!!lock); return lock ? new Promise(() => {}) : undefined;
-        }).catch(() => claimed(null));
-        const available = await claim;
+        const available = await claimLock(global, LOCK_PREFIX + id, true);
         if (available !== false) { if (available !== true) id = newId('t'); break; }
         id = newId('t');
       }
     } else id = newId('t'); // Without a lock, a copied sessionStorage id is unsafe.
-    try { global.sessionStorage.setItem('twp_native_tab', id); } catch { /* current tab still works */ }
+    try {
+      global.sessionStorage.setItem(TAB_KEY, id);
+      global.sessionStorage.removeItem(LEGACY_TAB_KEY);
+    } catch { /* current tab still works */ }
     return id;
   })();
   return global.__workbenchTabIdentity;

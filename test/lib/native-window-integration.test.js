@@ -18,7 +18,7 @@ async function until(read, accept = Boolean) { const end = Date.now() + 10_000; 
 function visible(term) { const b = term.buffer.active; return { x: b.cursorX, y: b.cursorY, type: b.type, lines: Array.from({ length: term.rows }, (_, y) => b.getLine(b.baseY + y)?.translateToString(true)) }; }
 async function fixture() {
   const env = { ...process.env, TERM: 'xterm-256color', LC_ALL: 'en_US.UTF-8' }; delete env.TMUX; delete env.TMUX_PANE;
-  const dir = await realpath(await mkdtemp(join(process.platform === 'darwin' ? '/tmp' : tmpdir(), 'twp-native-window-'))), socket = join(dir, 'socket');
+  const dir = await realpath(await mkdtemp(join(process.platform === 'darwin' ? '/tmp' : tmpdir(), 'anymux-native-window-'))), socket = join(dir, 'socket');
   const run = async args => (await exec(binary, ['-S', socket, ...args], { env, encoding: 'utf8', timeout: 15_000, maxBuffer: 16 * 1024 * 1024 })).stdout;
   const config = join(dir, 'tmux.conf'), worker = join(dir, 'worker.cjs');
   await writeFile(config, "set -g status-left NATIVE-STATUS\nset -g status-left-length 40\nset -g status-right ''\nset -g window-status-current-format 'NATIVE-MODE:#{pane_in_mode}'\nset -g pane-border-status top\nset -g pane-border-format 'NATIVE-BORDER #{pane_id}'\nset -g mouse on\nbind x split-window -h\n");

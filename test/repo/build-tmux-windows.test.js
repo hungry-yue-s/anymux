@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process';
 
 const builder = resolve(import.meta.dirname, '../../scripts/build-tmux-windows.sh');
 async function fixture() {
-  const dir = await mkdtemp(join(tmpdir(), 'twp-windows-builder-'));
+  const dir = await mkdtemp(join(tmpdir(), 'anymux-windows-builder-'));
   const source = join(dir, "source with ' spaces"), output = join(dir, 'managed version with spaces'), tools = join(dir, 'tools');
   await mkdir(source); await mkdir(tools);
   await writeFile(join(source, 'tmux.c'), 'fixture source');
@@ -23,7 +23,7 @@ chmod +x configure
   await writeFile(patcher, '#!/bin/sh\nset -eu\ntest -f "$1/tmux.c"\nprintf patched > "$1/.patched"\n');
   await writeFile(join(tools, 'make'), `#!/bin/sh
 set -eu
-if [ "\${TWP_FIXTURE_BUILD_FAIL:-0}" = 1 ]; then exit 9; fi
+if [ "\${ANYMUX_FIXTURE_BUILD_FAIL:-0}" = 1 ]; then exit 9; fi
 test "$(cat .patched)" = patched
 case "$*" in *install*) prefix="$(cat .prefix)"; mkdir -p "$prefix/bin"; printf '#!/bin/sh\\nprintf "tmux fixture\\\\n"\\n' > "$prefix/bin/tmux.exe";; esac
 `, { mode: 0o755 });
@@ -46,7 +46,7 @@ describe.skipIf(process.platform === 'win32')('Windows native builder staging (i
   it('never publishes a binary from a failed build', async () => {
     const f = await fixture();
     try {
-      const result = spawnSync('bash', [builder, f.source, f.output, f.patcher, '2'], { env: { ...f.env, TWP_FIXTURE_BUILD_FAIL: '1' }, encoding: 'utf8' });
+      const result = spawnSync('bash', [builder, f.source, f.output, f.patcher, '2'], { env: { ...f.env, ANYMUX_FIXTURE_BUILD_FAIL: '1' }, encoding: 'utf8' });
       expect(result.status).not.toBe(0);
       await expect(readFile(join(f.output, 'tmux.exe'))).rejects.toMatchObject({ code: 'ENOENT' });
     } finally { await rm(f.dir, { recursive: true, force: true }); }

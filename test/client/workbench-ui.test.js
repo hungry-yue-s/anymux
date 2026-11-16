@@ -3,10 +3,10 @@ import { JSDOM } from 'jsdom';
 import { createWorkbench } from '../../plugins/workbench/client/index.js';
 
 const remote = { instanceId: '42:123', sessionId: '$1', windowId: '@1', paneId: '%1' };
-function fixture({ copiedTab, locks } = {}) {
+function fixture({ copiedTab, legacyTab, locks } = {}) {
   const dom = new JSDOM('<main id="host"></main><nav class="mobile-dock"></nav>', { url: 'https://panel.test' });
   const win = dom.window; const sessions = [];
-  if (copiedTab) win.sessionStorage.setItem('twp_native_tab', copiedTab);
+  if (copiedTab) win.sessionStorage.setItem(legacyTab ? 'twp_native_tab' : 'anymux_native_tab', copiedTab);
   if (locks) Object.defineProperty(win.navigator, 'locks', { value: locks });
   win.Api = { nodeUrl: (server, path) => '/n/' + server + path, workspaceUrl: (server, path) => '/n/' + server + '/api/workspace' + path,
     get: vi.fn(async () => ({ available: true, protocol: 1 })), post: vi.fn(async (_url, body) => ({ ...remote, requestId: body.requestId })), del: vi.fn() };
@@ -62,6 +62,32 @@ describe('native workbench UI', () => {
     }
     expect(first.sessions[0].target.clientId).not.toBe(second.sessions[0].target.clientId);
     first.close(); second.close();
+  });
+
+  it('keeps the id a tab saved before the rename, unless a tab still on the old code holds it', async () => {
+    // Web Locks of one browser: names held by other tabs, and what this tab asks for.
+    const browser = (held) => ({ requests: [], request(name, _options, callback) {
+      this.requests.push(name);
+      const lock = held.has(name) ? null : { name };
+      if (callback(lock) && lock) held.add(name);
+      return Promise.resolve();
+    } });
+    const tabId = async (f) => {
+      const view = await f.api.create({ serverId: 'dev', ...remote, clientId: 'shared-client' });
+      await f.api.render('dev', view.id, { container: f.host });
+      return f.sessions[0].target.clientId;
+    };
+
+    const reloaded = fixture({ copiedTab: 'old-tab', legacyTab: true, locks: browser(new Set()) });
+    expect(await tabId(reloaded)).toBe('shared-client-old-tab');
+    expect(reloaded.win.navigator.locks.requests).toEqual(['twp_native_old-tab', 'anymux_native_old-tab']);
+    expect(reloaded.win.sessionStorage.getItem('anymux_native_tab')).toBe('old-tab');
+    expect(reloaded.win.sessionStorage.getItem('twp_native_tab')).toBeNull();
+    reloaded.close();
+
+    const copied = fixture({ copiedTab: 'old-tab', legacyTab: true, locks: browser(new Set(['twp_native_old-tab'])) });
+    expect(await tabId(copied)).not.toBe('shared-client-old-tab');
+    copied.close();
   });
 
   it('splits the freshly confirmed native window and never writes when focus is unknown', async () => {

@@ -103,7 +103,7 @@ it is not used as a pipe for this protocol.
 
 ## Native integration checks
 
-Set `TWP_CONTROL_TEST_TMUX` to the built native tmux executable and run
+Set `ANYMUX_CONTROL_TEST_TMUX` to the built native tmux executable and run
 `vitest run test/lib/control-integration.test.js`. Tests use only explicitly
 named private sockets, remove inherited `TMUX`/`TMUX_PANE`, and verify the
 recorded PID/socket identity before cleanup. They do not inspect or alter the

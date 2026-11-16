@@ -11,7 +11,7 @@ import { hashPassword, isTrustedLocalRequest } from '../../lib/auth.js';
 const cleanups = [];
 afterEach(async () => { for (const close of cleanups.splice(0).reverse()) await close(); });
 async function fixture({ nodeOnly = false, trustLocal } = {}) {
-  const dir = await mkdtemp(join(tmpdir(), 'twp-local-auth-')), app = express(), hooks = [], effects = [];
+  const dir = await mkdtemp(join(tmpdir(), 'anymux-local-auth-')), app = express(), hooks = [], effects = [];
   cleanups.push(() => rm(dir, { recursive: true, force: true }));
   const ctx = {
     launch: { auth: !nodeOnly, nodeOnly, authCredentials: { username: 'test', ...hashPassword('fixture') }, configDir: dir, tokenFileName: 'tokens.json' },

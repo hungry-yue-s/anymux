@@ -12,7 +12,7 @@ const write = (term, data) => new Promise(resolve => term.write(data, resolve));
 const quote = value => "'" + value.replaceAll("'", "'\\''") + "'";
 
 async function snapshotOf(prefix, check, resize) {
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'twp-snapshot-')));
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'anymux-snapshot-')));
   const socket = join(dir, 'socket');
   const env = { ...process.env, LC_ALL: 'en_US.UTF-8' };
   delete env.TMUX; delete env.TMUX_PANE;

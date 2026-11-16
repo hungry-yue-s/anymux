@@ -12,8 +12,10 @@ import { ControlProcess } from '../../lib/terminal/control-process.js';
 import { ControlPool } from '../../lib/terminal/control-pool.js';
 import { WorkbenchService } from '../../lib/terminal/control-service.js';
 import { cleanupPrivateTmux, parsePrivateTmuxIdentity, PRIVATE_TMUX_IDENTITY_FORMAT } from '../helpers/private-tmux.js';
+import { adoptLegacyEnv } from '../../lib/legacy-names.js';
 
-const binary = process.env.TWP_CONTROL_TEST_TMUX;
+// A shell that still sets the variable under its old prefix keeps running these.
+const binary = adoptLegacyEnv({ ...process.env }).ANYMUX_CONTROL_TEST_TMUX;
 const exec = promisify(execFile);
 const env = { ...process.env };
 delete env.TMUX; delete env.TMUX_PANE;
@@ -24,7 +26,7 @@ async function until(read, predicate, limit = 8000) {
   throw Error('Private control integration condition timed out');
 }
 async function fixture(program, { border = 'off' } = {}) {
-  const dir = await realpath(await mkdtemp(join(process.platform === 'darwin' ? '/tmp' : tmpdir(), 'twp-control-')));
+  const dir = await realpath(await mkdtemp(join(process.platform === 'darwin' ? '/tmp' : tmpdir(), 'anymux-control-')));
   const socket = join(dir, 'sock');
   const run = async args => (await exec(binary, ['-S', socket, ...args], { env, timeout: 8000, maxBuffer: 16 * 1024 * 1024 })).stdout;
   const script = join(dir, 'program.cjs');

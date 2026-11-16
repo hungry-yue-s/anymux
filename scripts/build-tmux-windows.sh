@@ -8,7 +8,7 @@ build_jobs="${4:-2}"
 case "$build_jobs" in ''|*[!0-9]*|0) echo 'invalid build jobs' >&2; exit 1;; esac
 if [[ ! -f "$source_directory/tmux.c" ]]; then echo 'tmux source is missing' >&2; exit 1; fi
 if [[ -e "$install_directory/tmux.exe" ]]; then echo 'refusing to overwrite an existing tmux executable' >&2; exit 1; fi
-build_directory="$(mktemp -d "${TMPDIR:-/tmp}/twp-tmux-build.XXXXXXXX")"
+build_directory="$(mktemp -d "${TMPDIR:-/tmp}/anymux-tmux-build.XXXXXXXX")"
 trap 'rm -rf "$build_directory"' EXIT
 mkdir -p "$build_directory/source" "$build_directory/install"
 (cd "$source_directory" && tar --exclude=.git -cf - .) | tar -xf - -C "$build_directory/source"

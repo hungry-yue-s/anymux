@@ -27,7 +27,7 @@ function visible(term) {
 }
 
 async function privateClient(run) {
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'twp-native-client-test-')));
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'anymux-native-client-test-')));
   const socket = join(dir, 'socket');
   const env = { ...process.env, TERM: 'xterm-256color', LC_ALL: 'en_US.UTF-8' };
   delete env.TMUX; delete env.TMUX_PANE;
