@@ -52,7 +52,7 @@ dock tabs remain intact when the viewport becomes too narrow for a split.
 | Others | Images, directory listings |
 
 Personal information pages can opt into live panel colors with the
-[`panel-presentation` skill](panel-presentation.md), installed per Agent from
+[`anymux-presentation` skill](anymux-presentation.md), installed per Agent from
 **Settings → Management → Information pages**. The engine supplies semantic
 colors and theme-change events; layout and interaction remain the page's choice.
 

@@ -4,7 +4,7 @@ Agent 决定如何表达内容；面板在阅读时提供主题。生成物仍�
 
 ```mermaid
 flowchart LR
-  Settings[设置：选择 Agent 安装 skill] --> Skill[panel-presentation：语义颜色协议]
+  Settings[设置：选择 Agent 安装 skill] --> Skill[anymux-presentation：语义颜色协议]
   Skill --> HTML[Agent 自由设计的静态 HTML]
   HTML --> Preview[文件预览：识别接入标记]
   Theme[Theme：当前面板主题] --> Engine[PanelPresentation 引擎]
@@ -37,7 +37,7 @@ flowchart LR
 
 ## Skill 与设置
 
-设置 → 管理中心 → 信息呈现网页，可以为单个 Agent 或全部受支持的 Agent 全局安装。当前沿用已有安装目标：`~/.codex/skills/panel-presentation`、`~/.claude/skills/panel-presentation`。目标为**面板所在机器的用户目录**；不在远程机器隐式安装。安装为指向本仓库的链接，更新项目即更新 skill；新 Agent 会话负责重新发现 skill。远程 Node 安装包与 macOS 客户端运行时都携带该 skill。
+设置 → 管理中心 → 信息呈现网页，可以为单个 Agent 或全部受支持的 Agent 全局安装。当前沿用已有安装目标：`~/.codex/skills/anymux-presentation`、`~/.claude/skills/anymux-presentation`。目标为**面板所在机器的用户目录**；不在远程机器隐式安装。安装为指向本仓库的链接，更新项目即更新 skill；新 Agent 会话负责重新发现 skill。远程 Node 安装包与 macOS 客户端运行时都携带该 skill。
 
 安装状态直接取自文件系统。逐个安装、移除和全部操作都只修改本项目拥有的链接；所有目标先检查冲突，再执行全部操作。文件系统异常仍可能导致部分完成，界面会重读实际状态并显示错误。同名个人 skill 始终不覆盖。未来若要支持其它 Agent，先确认其技能发现目录，再扩展受支持目标。
 
@@ -53,4 +53,4 @@ Skill 的作用限于选择合适的个人信息网页并接入配色。它不�
 
 自动测试覆盖：未接入网页保持原样、首屏与每种主题的变量映射、消息来源和输入校验、主题切换不改 srcdoc、隐藏 Tab 同步、源码和快照、全局安装与冲突保护。
 
-[可选演示](../skills/panel-presentation/assets/example.html) 同时包含 CSS、SVG、Canvas、笔记输入和折叠区域，可在文件预览中验证换色与交互状态保留。
+[可选演示](../skills/anymux-presentation/assets/example.html) 同时包含 CSS、SVG、Canvas、笔记输入和折叠区域，可在文件预览中验证换色与交互状态保留。

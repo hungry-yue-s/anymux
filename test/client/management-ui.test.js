@@ -10,7 +10,7 @@ it('offers individual and all-agent presentation skill installation and refreshe
   win.Api = {
     get: vi.fn(async (path) => path === '/api/plugins' ? { plugins: [] } : {
       runtime: { path: '/managed/tmux' },
-      skills: ['codex', 'claude'].map((target) => ({ name: 'panel-presentation', target,
+      skills: ['codex', 'claude'].map((target) => ({ name: 'anymux-presentation', target,
         path: '/skills/' + target, status: installed ? 'managed' : 'not_installed' })),
     }),
     post: vi.fn(async () => { installed = true; }),
@@ -18,13 +18,13 @@ it('offers individual and all-agent presentation skill installation and refreshe
   loadSlots(win);
   const root = win.document.getElementById('root');
   await win.ManagementPage.mount(root);
-  expect(root.querySelectorAll('[data-name="panel-presentation"][data-managed="skill-install"]')).toHaveLength(3);
+  expect(root.querySelectorAll('[data-name="anymux-presentation"][data-managed="skill-install"]')).toHaveLength(3);
   // The tmux and the skills panels share one read.
   const reads = () => win.Api.get.mock.calls.filter(([path]) => path === '/api/managed-resources').length;
   expect(reads()).toBe(1);
   root.querySelector('[data-target="all"]').click();
   await vi.waitFor(() => expect(root.querySelector('[data-target="all"]').textContent).toBe('从全部 Agent 移除'));
-  expect(win.Api.post).toHaveBeenCalledWith('/api/managed-resources/skills/panel-presentation/all/install');
+  expect(win.Api.post).toHaveBeenCalledWith('/api/managed-resources/skills/anymux-presentation/all/install');
   win.Api.post.mockImplementation(async () => { installed = false; throw new Error('Filesystem unavailable'); });
   root.querySelector('[data-target="all"]').click();
   await vi.waitFor(() => expect(root.querySelector('#managed-feedback').textContent).toBe('Filesystem unavailable'));

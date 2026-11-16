@@ -169,7 +169,7 @@ Linux、macOS 与 Windows 的新安装在核心服务就绪后默认尝试准备
 | 请求头 `x-twp-hub-call`、`x-twp-diagnostic-id` | `x-anymux-*` | Hub 新旧两个都发、转发时两个都剥掉；Node 任一个都认 |
 | tmux 选项 `@twp-protect-seen`、`@twp-restored-*` | `@anymux-*` | 会话保护先读新的，没有再读旧的，只写新的。旧面板看过的 server 仍算看过，不会再恢复一次 |
 | 浏览器存储 `twp_*` | `anymux_*` | `plugins/ui/client/js/legacy-storage.js` 在其他脚本之前改名一次 |
-| `~/.tmux.conf` 的 `tmux-web-panel managed config` 块；agent hooks 名 `tmux-web-panel-*`；技能链接 `tmux-panel` | `anymux` | 再次链接 / 安装时替换旧的；启动时把指向本仓库的旧技能链接换成 `anymux` |
+| `~/.tmux.conf` 的 `tmux-web-panel managed config` 块；agent hooks 名 `tmux-web-panel-*`；技能链接 `tmux-panel`、`panel-presentation` | `anymux`；技能 `anymux`、`anymux-presentation` | 再次链接 / 安装时替换旧的；启动时把指向本仓库的旧技能链接换成新名字（`RENAMED_SKILLS`）。展示页的 `PanelPresentation`、`panel-theme-change`、`--pp-*` 是已生成网页在用的接口，不改名 |
 | CC Switch 行的 `tmuxPanelEnterprise`、`tmuxPanelRelay` | `anymuxEnterprise`、`anymuxRelay` | `lib/agent-providers/ownership.js`：两种都算面板自己写的，下次写入换成新标记 |
 | 原生桥 `tmuxPanel*`、`__tmuxPanelTransparency`；UA `TmuxPanelAndroid` | `anymux*`、`AnymuxAndroid` | 页面先找新名字再找旧名字；新 App 两套都注册，以便连到旧服务端 |
 | 展示页 `<meta name="tmux-panel-presentation">`；客户端导入名 `@twp/client`；命令 `twp` | `anymux-presentation`；`@anymux/client`；`anymux` | 两个都认；`bin/twp` 只是转到 `anymux.mjs` |

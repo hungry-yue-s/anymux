@@ -1,5 +1,5 @@
 ---
-name: panel-presentation
+name: anymux-presentation
 description: 为用户个人阅读的报告、说明、对比或可视化 HTML 接入 Anymux 的主题配色。适用于临时信息呈现网页；产品页面、品牌设计、视觉复刻及用户明确指定配色的作品遵循其自身要求。
 ---
 

@@ -5,7 +5,7 @@ import { JSDOM } from 'jsdom';
 
 const engine = readFileSync('plugins/files/client/js/panel-presentation.js', 'utf8');
 const themes = readFileSync('plugins/ui/client/js/theme.js', 'utf8');
-const example = readFileSync(repoPath('skills/panel-presentation/assets/example.html'), 'utf8');
+const example = readFileSync(repoPath('skills/anymux-presentation/assets/example.html'), 'utf8');
 const html = '<!doctype html><meta name="anymux-presentation" content="1">'
   + '<input value="initial"><details open><summary>Details</summary>Content</details>'
   + '<script>window.runs = (window.runs || 0) + 1;</script>';

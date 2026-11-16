@@ -78,16 +78,16 @@ describe('project-managed resources', () => {
       execProcess: vi.fn(async () => ({ stdout: 'tmux test' })) });
     await resources.load();
     const app = express(); app.use('/api/managed-resources', createManagedResourcesRouter(resources));
-    const url = '/api/managed-resources/skills/panel-presentation/';
+    const url = '/api/managed-resources/skills/anymux-presentation/';
     expect((await request(app).post(url + 'all/install').set('Origin', 'https://other.test')).status).toBe(403);
     expect((await request(app).post(url + 'codex/install')).status).toBe(200);
     expect((await request(app).post(url + 'all/install')).status).toBe(200);
-    expect((await resources.status()).skills.filter((s) => s.name === 'panel-presentation').map((s) => s.status)).toEqual(['managed', 'managed', 'managed', 'managed']);
+    expect((await resources.status()).skills.filter((s) => s.name === 'anymux-presentation').map((s) => s.status)).toEqual(['managed', 'managed', 'managed', 'managed']);
     expect((await request(app).post(url + 'all/uninstall')).status).toBe(200);
-    const personal = resources.skillPath('panel-presentation', 'claude');
+    const personal = resources.skillPath('anymux-presentation', 'claude');
     await mkdir(personal); await writeFile(join(personal, 'SKILL.md'), 'personal design');
     expect((await request(app).post(url + 'all/install')).status).toBe(409);
-    await expect(lstat(resources.skillPath('panel-presentation', 'codex'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(lstat(resources.skillPath('anymux-presentation', 'codex'))).rejects.toMatchObject({ code: 'ENOENT' });
     expect(await readFile(join(personal, 'SKILL.md'), 'utf8')).toBe('personal design');
     expect((await request(app).post(url + '__proto__/install')).status).toBe(400);
   });
@@ -266,5 +266,18 @@ describe('project-managed resources', () => {
     // Someone else's link under the old name stays, and nothing is installed for it.
     expect(await readlink(foreign)).toBe(join(home, 'elsewhere', 'tmux-panel'));
     await expect(lstat(resources.skillPath('anymux', 'codex'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('replaces its link to the skill installed as panel-presentation with one named anymux-presentation', async () => {
+    const home = await temp();
+    const resources = new ManagedResources({ userHome: home, configDir: join(home, 'config'), projectDir: REPO_ROOT });
+    await resources.load();
+    const old = join(home, '.codex', 'skills', 'panel-presentation');
+    await mkdir(join(old, '..'), { recursive: true }); await symlink(join(REPO_ROOT, 'skills', 'panel-presentation'), old, 'dir');
+    const path = resources.skillPath('anymux-presentation', 'codex');
+    expect(await resources.relinkMovedSkills()).toEqual([path]);
+    await expect(lstat(old)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await readlink(path)).toBe(repoPath('skills', 'anymux-presentation'));
+    expect((await resources.status()).skills.find((s) => s.name === 'anymux-presentation' && s.target === 'codex').status).toBe('managed');
   });
 });
