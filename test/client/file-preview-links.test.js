@@ -29,8 +29,9 @@ function mkCells(rows, cols) {
     return {
       isWrapped: !!r.wrapped,
       length: cols,
-      translateToString(trim) {
-        const s = cells.slice(0, cols).map((c) => (c.w === 0 ? '' : c.ch || ' ')).join('');
+      // Like xterm's: optionally only the cells from `start` up to `end`.
+      translateToString(trim, start = 0, end = cols) {
+        const s = cells.slice(start, Math.min(end, cols)).map((c) => (c.w === 0 ? '' : c.ch || ' ')).join('');
         return trim ? s.replace(/\s+$/, '') : s;
       },
       getCell(col) {
@@ -52,8 +53,8 @@ function mkBuffer(rows, cols) {
   const lines = rows.map((r) => ({
     isWrapped: !!r.wrapped,
     length: cols,
-    translateToString(trim) {
-      const padded = (r.text + ' '.repeat(cols)).slice(0, cols);
+    translateToString(trim, start = 0, end = cols) {
+      const padded = (r.text + ' '.repeat(cols)).slice(0, cols).slice(start, end);
       return trim ? padded.replace(/\s+$/, '') : padded;
     },
     getCell(col) {
@@ -306,7 +307,7 @@ describe('a path a TUI broke where it may break one', () => {
   it('takes a box\'s inner edge for the right edge', () => {
     const boxed = (first) => mkCells([
       { text: first },
-      { text: '│ file-preview.js for the details         │' },
+      { text: '│ file-preview.js for the details'.padEnd(43) + '│' },
     ], 44);
     expect(linkTexts(boxed('│ see the code in plugins/files/client/js/ │'), unknown, true)).toEqual([[FIRST], [FIRST]]);
     // Twelve columns were left: a wrapper would have put `file-` there.
@@ -338,6 +339,93 @@ describe('a path a TUI broke where it may break one', () => {
     ], 60);
     expect(linkTexts(buf, unknown, true)).toEqual([['https://example.com/docs/'], ['getting-started.md']]);
     expect(FP.linkLine(buf, 0, unknown, false).pending).toEqual([]);
+  });
+});
+
+describe('a split window', () => {
+  // tmux draws every pane of the window on one screen: a row holds the left
+  // pane, the border, the right pane. These rows are what a panel client of a
+  // private tmux server received (two panes on the right, titles on top).
+  const PREVIEW = 'plugins/files/client/js/file-preview.js';
+  const TEST = 'test/client/file-preview-links.test.js';
+  const NOTES = '~/Documents/notes/terminal-links-investigation.md';
+  const URL = 'https://github.com/anthropics/claude-code/issues/12345/comments/67890';
+  const panes = (rows, leftWidth, rightWidth) => mkCells(rows.map(([left, right, border = '│']) => (
+    { text: left.padEnd(leftWidth) + border + right })), leftWidth + 1 + rightWidth);
+  const window = () => panes([
+    ['──· 0:sh '.padEnd(50, '─'), '──· 1:sh '.padEnd(49, '─'), '┬'],
+    ['see plugins/files/client/js/file-preview.js:5218 a', '• Changed the code in plugins/files/client/js/'],
+    ['nd the tests in test/client/file-preview-links.tes', '  file-preview.js and the tests.'],
+    ['t.js too', 'and ~/Documents/notes/terminal-links-investigatio'],
+    ['https://github.com/anthropics/claude-code/issues/1', 'n.md'],
+    ['2345/comments/67890', ''],
+  ], 50, 49);
+  // The links on a row, with the cells each has there (from 1, both included).
+  const rowLinks = (buf, row, lookup = unknown, settled = true) => {
+    const out = [];
+    for (const logical of FP.rowLinkLines(buf, row, lookup, settled).lines) {
+      for (const m of FP.findLinks(logical.text)) {
+        for (const r of FP.rowRanges(logical.rows, m) || [FP.buildLinkRange(logical, m)]) {
+          if (r.start.y <= row + 1 && r.end.y >= row + 1) out.push(`${m.text} ${r.start.y}:${r.start.x}-${r.end.y}:${r.end.x}`);
+        }
+      }
+    }
+    return out;
+  };
+
+  it('reads each pane by itself, across the rows tmux broke at the pane\'s edge', () => {
+    const buf = window();
+    expect(rowLinks(buf, 0)).toEqual([]);
+    expect(rowLinks(buf, 1)).toEqual([`${PREVIEW} 2:5-2:48`, `${PREVIEW} 2:74-2:97`]);
+    expect(rowLinks(buf, 2)).toEqual([`${TEST} 3:17-3:50`, `${PREVIEW} 3:54-3:68`]);
+    expect(rowLinks(buf, 3)).toEqual([`${TEST} 4:1-4:4`, `${NOTES} 4:56-4:100`]);
+    expect(rowLinks(buf, 4)).toEqual([`${URL} 5:1-5:50`, `${NOTES} 5:52-5:55`]);
+    expect(rowLinks(buf, 5)).toEqual([`${URL} 6:1-6:19`]);
+  });
+
+  it('asks about the paths of every pane on the row', () => {
+    expect(FP.rowLinkLines(window(), 3, unknown, false).pending).toEqual([
+      TEST, 'test/client/file-preview-links.tes', 't.js',
+      NOTES, '~/Documents/notes/terminal-links-investigatio', 'n.md']);
+  });
+
+  it('follows a pane past the border between two panes beside it', () => {
+    const LOG = '/var/log/anymux/terminal-gateway-2026-11-17.log';
+    const buf = panes([
+      ['left pane text', 'see /var/log/anymux/terminal-g'],
+      ['──· 2:sh '.padEnd(30, '─'), 'ateway-2026-11-17.log for now', '┤'],
+    ], 30, 30);
+    expect(rowLinks(buf, 0)).toEqual([`${LOG} 1:36-1:61`]);
+    expect(rowLinks(buf, 1)).toEqual([`${LOG} 2:32-2:52`]);
+  });
+
+  it('follows a line tmux broke although it starts further right', () => {
+    const buf = panes([
+      ['  see https://example.com/abc/de', 'x'],
+      ['f/index.html', 'y'],
+    ], 32, 10);
+    expect(rowLinks(buf, 1)).toEqual(['https://example.com/abc/def/index.html 2:1-2:12']);
+  });
+
+  it('keeps a full row apart from the next line when its path is a file', () => {
+    const buf = panes([['modified: lib/app.js', ''], ['lib/app.test.js done', '']], 20, 20);
+    const files = (path) => path === 'lib/app.js' || path === 'lib/app.test.js';
+    expect(rowLinks(buf, 0, files, false)).toEqual(['lib/app.js 1:11-1:20']);
+    expect(rowLinks(buf, 1, files, false)).toEqual(['lib/app.test.js 2:1-2:15']);
+  });
+
+  it('is tapped in the pane under the finger, and nowhere on a border', () => {
+    const term = { buffer: { active: window() } };
+    expect(FP.hitTest('', 10, term, 4).text).toBe(URL);
+    expect(FP.hitTest('', 50, term, 4)).toBeNull();
+    const hit = FP.hitTest('', 52, term, 4);
+    expect([hit.text, hit.unverified, hit.fallback.text]).toEqual([NOTES, true, 'n.md']);
+  });
+
+  it('finds the panes in a row by cells, past wide glyphs', () => {
+    expect(FP.segments(mkCells([{ text: '中文│abc│' }], 12).getLine(0)))
+      .toEqual([{ lo: 0, hi: 4 }, { lo: 5, hi: 8 }, { lo: 9, hi: 12 }]);
+    expect(FP.segments(mkCells([{ text: 'no border here' }], 20).getLine(0))).toEqual([{ lo: 0, hi: 20 }]);
   });
 });
 
@@ -663,6 +751,24 @@ describe('the link provider', () => {
     release();
     await vi.waitFor(() => expect(second).toHaveBeenCalledTimes(1));
     expect(first).not.toHaveBeenCalled();
+  });
+
+  it('gives a link over rows of one pane as a link per row, each underlining the others', () => {
+    vi.stubGlobal('fetch', vi.fn());
+    const URL = 'https://example.com/abcdefghijklmnopqrstuvwxyz/0123';
+    const { provider } = provide(mkCells([
+      { text: 'https://example.com/abcdefghijklmnopqr│right pane' },
+      { text: 'stuvwxyz/0123                         │more text' },
+    ], 50), { serverId: 'split', paneId: '%1' });
+    let links;
+    provider.provideLinks(1, (value) => { links = value; });
+    // Not the cells to the end of the row: those are the next pane's.
+    expect(links.map((link) => [link.text, link.range])).toEqual([[URL, { start: { y: 1, x: 1 }, end: { y: 1, x: 38 } }]]);
+    expect(typeof links[0].hover).toBe('function');
+    links[0].hover();
+    links[0].leave();
+    provider.provideLinks(2, (value) => { links = value; });
+    expect(links.map((link) => [link.text, link.range])).toEqual([[URL, { start: { y: 2, x: 1 }, end: { y: 2, x: 13 } }]]);
   });
 
   it('asks nothing while the terminal is not confirmed to be the pane\'s', () => {
