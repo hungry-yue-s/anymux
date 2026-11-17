@@ -86,10 +86,26 @@ body.fp-side-resizing .fp-side-resizer::after { width: 1px; background: var(--fp
 }
 /* A tab opened behind the current one, or into a collapsed dock, until it is looked at. */
 .fp-dock-tab-item.is-unread .fp-dock-tab-label::after {
-  content: ""; display: inline-block; width: 6px; height: 6px; margin-left: 6px;
-  border-radius: 50%; background: var(--fp-accent); vertical-align: middle;
+  content: none;
 }
-.fp-dock-restore.has-unread { box-shadow: inset 3px 0 0 var(--fp-accent); font-weight: 600; }
+.fp-dock-tab-new {
+  flex: 0 0 auto; margin-inline-start: 6px; padding: 1px 5px;
+  font-size: 11px; line-height: 1.5; font-weight: 600;
+  color: var(--fp-text); background: color-mix(in srgb, var(--fp-accent) 22%, var(--fp-panel));
+  border-radius: 4px;
+}
+.fp-dock-tab-item.is-new { animation: fp-document-arrived 700ms cubic-bezier(.16, 1, .3, 1); }
+@keyframes fp-document-arrived {
+  from { background: color-mix(in srgb, var(--fp-accent) 32%, var(--fp-panel)); }
+  to { background: transparent; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .fp-dock-tab-item.is-new { animation: none; }
+}
+.fp-dock-restore.has-unread {
+  border-color: var(--fp-accent); font-weight: 600;
+  background: color-mix(in srgb, var(--fp-accent) 18%, var(--fp-panel));
+}
 .fp-loading,
 .fp-error,
 .fp-dir-empty {

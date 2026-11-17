@@ -39,78 +39,114 @@
 
   // --- `anymux open --dock` and documents agents write (agent-docs) ---------
   //
-  // The side panel belongs to the window in view, so a document goes there only
-  // while that window holds the pane it came from (or, for a document found by
-  // the watcher, a pane in the same project). Anywhere else, on a phone, or with
-  // a modal open, it is a notice with an Open button: nothing takes the screen
-  // or the keyboard away from what the person is doing.
-
+  // A dock document belongs to its source window even while another window
+  // is on screen. Save it there first; notices are a way back, not its storage.
   var KIND_LABELS = { draft: '草稿', spec: '设计', plan: '计划', progress: '进度' };
   var NOTICE_REPEAT_MS = 15000;
   var _noticed = {};
 
-  /** Whether the window whose dock is showing holds one of these panes. */
-  function windowInView(serverId, paneIds) {
-    if (!paneIds.length || !window.FilePreview || !FilePreview.blockDock) return false;
-    var key = FilePreview.blockDock.context();
-    if (!key) return false;
-    var parts = key.split('\u0000');
-    if (parts[0] !== serverId) return false;
-    var ctx = ui.currentContext();
-    if (ctx && ctx.paneId && paneIds.indexOf(ctx.paneId) >= 0) return true;
-    var workspace = window.AppShell && AppShell.workspace ? AppShell.workspace(serverId) : null;
-    var found = false;
+  function documentTarget(serverId, paneIds, workspace) {
+    var key = window.FilePreview && FilePreview.blockDock && FilePreview.blockDock.context();
+    var parts = key ? key.split('\u0000') : [];
+    var targets = [];
     (workspace && workspace.sessions || []).forEach(function (session) {
       (session.windows || []).forEach(function (win) {
-        if (win.id !== parts[2]) return;
-        (win.panes || []).forEach(function (pane) { if (paneIds.indexOf(pane.id) >= 0) found = true; });
+        var pane = (win.panes || []).filter(function (p) { return paneIds.indexOf(p.id) >= 0; })[0];
+        if (pane) targets.push({ serverId: serverId, sessionId: session.id, windowId: win.id,
+          instanceId: workspace.instanceId || (parts[0] === serverId ? parts[1] : null),
+          paneId: pane.id, windowName: win.name, session: session.name, windowIndex: win.index });
       });
     });
-    return found;
+    return targets.filter(function (target) { return parts[0] === serverId && target.windowId === parts[2]; })[0] || targets[0] || null;
   }
 
-  function noticeDocument(event) {
-    if (event.activate === false) return; // a progress log does not call for attention
+  function revealDocument(event, target) {
+    if (!window.FilePreview) return;
+    var serverId = target ? target.serverId : event.serverId;
+    function modal() { return FilePreview.openFile(event.path, null, { source: { serverId: serverId, paneId: null } }); }
+    if (!target) return modal();
+    // Notices outlive moves, pane closures and server restarts. Resolve the
+    // stable window ID again instead of navigating with yesterday's session.
+    return ui.client(serverId).get('/api/workspace').then(function (workspace) {
+      if (workspace.instanceId && workspace.instanceId !== target.instanceId) return modal();
+      var current = null;
+      (workspace.sessions || []).forEach(function (session) {
+        (session.windows || []).forEach(function (win) {
+          if (win.id !== target.windowId) return;
+          var panes = win.panes || [];
+          var pane = panes.filter(function (p) { return p.id === target.paneId; })[0]
+            || panes.filter(function (p) { return p.active; })[0] || panes[0];
+          if (pane) current = Object.assign({}, target, { sessionId: session.id, paneId: pane.id });
+        });
+      });
+      if (!current || !FilePreview.blockDock.available()) return modal();
+      return FilePreview.queueDocked(event.path, current.paneId, Object.assign({}, current, {
+        activate: true, fragment: event.fragment,
+      })).then(function () {
+        if (window.Router) Router.go({ name: 'terminal', params: {
+          serverId: serverId, sessionId: current.sessionId, windowId: current.windowId, paneId: current.paneId,
+        } });
+        var key = FilePreview.blockDock.context();
+        if (key === [serverId, current.instanceId, current.windowId].join('\u0000')) {
+          var restore = document.querySelector('.fp-dock-restore');
+          if (restore) restore.click();
+          return FilePreview.openDocked(event.path, current.paneId, {
+            source: { serverId: serverId, paneId: current.paneId }, fragment: event.fragment,
+          }).then(function (result) {
+            if (result === 'busy' || result === 'unavailable') return modal();
+            return result;
+          });
+        }
+      });
+    }, modal);
+  }
+
+  Blocks.openDocumentNotice = function (notice) { return revealDocument(notice, notice.target); };
+
+  function noticeDocument(event, target, result) {
+    if (event.activate === false) return;
     var now = Date.now();
-    Object.keys(_noticed).forEach(function (key) { if (now - _noticed[key] > NOTICE_REPEAT_MS) delete _noticed[key]; });
-    if (_noticed[event.path]) return;
-    _noticed[event.path] = now;
+    var key = [event.serverId, target && target.instanceId, target && target.windowId, event.path].join('\u0000');
+    if (_noticed[key] && now - _noticed[key] < NOTICE_REPEAT_MS) return;
+    Object.keys(_noticed).forEach(function (key) { if (now - _noticed[key] >= NOTICE_REPEAT_MS) delete _noticed[key]; });
+    _noticed[key] = now;
     var name = event.path.split('/').pop();
-    toast((KIND_LABELS[event.kind] || '文档') + '：' + name, {
-      action: { label: '打开', run: function () { openFile(event.path, event.paneId); } },
-    });
+    var message = result === 'activated' ? '已打开' + (KIND_LABELS[event.kind] || '文档') + '：' + name
+      : result === 'queued' ? '文档已加入所属窗口的侧栏：' + name
+      : result === 'hidden' ? '新文档已加入收起的侧栏：' + name : '新文档：' + name;
+    var open = function () { return revealDocument(event, target); };
+    if (window.NotificationPanel && NotificationPanel.addDocument) NotificationPanel.addDocument({
+      id: 'doc-' + encodeURIComponent(key), type: 'document', path: event.path, paneId: event.paneId,
+      serverId: event.serverId, target: target, message: message, timestamp: now,
+      session: target && target.session, windowIndex: target && target.windowIndex, windowName: target && target.windowName,
+    }, open);
+    toast(message, { duration: 15000, dismissible: true, action: { label: '查看文档', run: open } });
   }
 
   function openDocument(event) {
-    var serverId = window.Api && Api.activeServerId ? Api.activeServerId() : 'local';
+    var serverId = event.serverId || (window.Api && Api.activeServerId ? Api.activeServerId() : 'local');
+    event = Object.assign({}, event, { serverId: serverId });
     var paneIds = Array.isArray(event.paneIds) && event.paneIds.length ? event.paneIds : (event.paneId ? [event.paneId] : []);
-    if (!window.FilePreview || typeof FilePreview.openDocked !== 'function' || !windowInView(serverId, paneIds)) {
-      noticeDocument(event);
-      return;
-    }
-    var paneId = event.paneId || paneIds[0] || null;
-    FilePreview.openDocked(event.path, paneId, {
-      activate: event.activate !== false,
-      replaces: event.replaces || null,
-      fragment: event.fragment || null,
-      source: { serverId: serverId, paneId: paneId },
-    }).then(function (result) {
-      if (result === 'busy' || result === 'unavailable') noticeDocument(event);
-      else if (result === 'hidden' && event.activate !== false && !_noticed[event.path]) {
-        _noticed[event.path] = Date.now();
-        toast('新文档在收起的右侧分窗里：' + event.path.split('/').pop(), {
-          action: { label: '展开', run: function () {
-            var restore = document.querySelector('.fp-dock-restore');
-            if (restore) restore.click();
-          } },
-        });
-      }
-    }, function () { noticeDocument(event); });
+    var workspace = window.AppShell && AppShell.workspace ? AppShell.workspace(serverId) : null;
+    var target = documentTarget(serverId, paneIds, workspace);
+    var resolveTarget = target || !paneIds.length ? Promise.resolve(target)
+      : ui.client(serverId).get('/api/workspace').then(function (workspace) { return documentTarget(serverId, paneIds, workspace); }, function () { return null; });
+    return resolveTarget.then(function (target) {
+      if (!window.FilePreview || !target) { noticeDocument(event, target); return; }
+      var opts = Object.assign({}, target, { activate: event.activate !== false, automatic: true,
+        replaces: event.replaces || null, fragment: event.fragment || null,
+        source: { serverId: serverId, paneId: target.paneId } });
+      // Persist before fetching the preview: changing windows or receiving a
+      // second document during the fetch must not lose either arrival.
+      return FilePreview.queueDocked(event.path, target.paneId, opts).then(function (result) {
+        noticeDocument(event, target, result);
+      }, function () { noticeDocument(event, target); });
+    });
   }
 
   function openFromPane(event) {
-    if (event.placement === 'dock') openDocument(event);
-    else openFile(event.path, event.paneId);
+    if (event.placement === 'dock') return openDocument(event);
+    return openFile(event.path, event.paneId);
   }
 
   PanelSlots.commands.register({ id: 'files', order: 30, group: 'block', title: '文件', icon: 'folder', keys: 'Alt+Shift+O', code: 'KeyO', run: function () { openFile('.'); }, keywords: 'files browse folder 目录 文件 浏览' });

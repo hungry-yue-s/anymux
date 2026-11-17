@@ -239,9 +239,26 @@ var Blocks = (function () {
       host.appendChild(action);
     }
     host.classList.toggle('is-error', !!options.error);
+    host.setAttribute('role', 'status');
+    host.setAttribute('aria-live', 'polite');
+    if (options.dismissible) {
+      var dismiss = el('button', 'blk-toast-dismiss');
+      dismiss.type = 'button';
+      dismiss.setAttribute('aria-label', '关闭提示');
+      dismiss.innerHTML = icon('close');
+      dismiss.addEventListener('click', function () { host.classList.remove('show'); clearTimeout(_toastTimer); });
+      host.appendChild(dismiss);
+    }
     host.classList.add('show');
     clearTimeout(_toastTimer);
-    _toastTimer = setTimeout(function () { host.classList.remove('show'); }, options.action ? 6000 : 3200);
+    var duration = typeof options.duration === 'number' ? options.duration : (options.action ? 6000 : 3200);
+    function resume() {
+      clearTimeout(_toastTimer);
+      if (duration > 0) _toastTimer = setTimeout(function () { host.classList.remove('show'); }, duration);
+    }
+    host.onpointerenter = host.onfocusin = function () { clearTimeout(_toastTimer); };
+    host.onpointerleave = host.onfocusout = resume;
+    resume();
   }
 
   function errorText(err) {

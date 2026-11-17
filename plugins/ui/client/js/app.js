@@ -366,6 +366,7 @@ class StatusSocket {
     this._started = true;
     var protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
     // The status socket follows the server in view (see TerminalTarget).
+    var serverId = Api.activeServerId();
     var url = protocol + '//' + location.host + Api.activeUrl('/ws/status');
     var tokenParam = Auth.wsTokenParam();
     if (tokenParam) url += '?' + tokenParam;
@@ -394,9 +395,12 @@ class StatusSocket {
         }
         if (data && (data.type === 'open-file' || data.type === 'open-url')) {
           // `anymux open` from a pane, handled by whichever plugin opens that kind
-          // (PanelSlots.openers); only a visible tab acts so background tabs stay quiet.
+          // Dock documents are stored even in a background browser tab. Other
+          // open requests remain visible-tab actions. Capture the socket's host.
           var opener = typeof PanelSlots !== 'undefined' ? PanelSlots.openers.get(data.type) : null;
-          if (opener && document.visibilityState === 'visible') opener.run(data);
+          if (opener && (document.visibilityState === 'visible' || (data.type === 'open-file' && data.placement === 'dock'))) {
+            opener.run(Object.assign({}, data, { serverId: serverId }));
+          }
           return;
         }
         if (data && data.type === 'pane-cmd') {

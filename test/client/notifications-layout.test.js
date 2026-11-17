@@ -11,6 +11,43 @@ afterEach(() => {
 });
 
 describe('notification viewport layout', () => {
+  it('does not acknowledge document tabs just because a same-named terminal window is visited', () => {
+    dom = new JSDOM('<button class="workspace-notification">通知</button>', { url: 'https://panel.example/', runScripts: 'outside-only' });
+    const win = dom.window;
+    win.Api = { activeServerId: () => 'local' };
+    win.api = { post: vi.fn(async () => ({})) };
+    win.eval(source);
+    win.NotificationPanel.addDocument({ id: 'remote-doc', path: '/remote/new.md', session: 'work', windowIndex: 0, serverId: 'remote' });
+    win.NotificationPanel._markReadByWindow('work', 0);
+    expect(win.NotificationPanel.unreadCount()).toBe(1);
+    expect(win.api.post).not.toHaveBeenCalled();
+  });
+
+  it('keeps document notices across server refreshes and reloads, and opens their original target', async () => {
+    dom = new JSDOM('<button class="workspace-notification">通知</button>', {
+      url: 'https://panel.example/', runScripts: 'outside-only',
+    });
+    const win = dom.window;
+    win.api = { get: vi.fn(async () => ({ success: true, data: [] })), post: vi.fn(async () => ({})) };
+    win.eval(source);
+    const open = vi.fn();
+    win.NotificationPanel.addDocument({ id: 'doc-local-5', path: '/w/new.md', message: '文档已加入所属窗口',
+      serverId: 'local', windowId: '@5', paneId: '%7', timestamp: Date.now() }, open);
+    win.NotificationPanel.addDocument({ id: 'doc-local-5', path: '/w/new.md', message: '文档已加入所属窗口' }, open);
+    await win.NotificationPanel.refresh();
+    expect(win.NotificationPanel.unreadCount()).toBe(1);
+    win.NotificationPanel.render();
+    expect(win.document.querySelectorAll('.notification-item')).toHaveLength(1);
+    expect(win.document.querySelector('.notification-item-command').textContent).toContain('new.md');
+    win.document.querySelector('.notification-item').click();
+    expect(open).toHaveBeenCalledOnce();
+    expect(win.api.post).not.toHaveBeenCalled();
+    win.eval(source);
+    expect(win.NotificationPanel.unreadCount()).toBe(0);
+    win.NotificationPanel.render();
+    expect(win.document.querySelector('.notification-item-command').textContent).toContain('new.md');
+  });
+
   it('anchors delegated desktop clicks to the actual toolbar and keeps clear-all clickable after rerender', async () => {
     dom = new JSDOM('<button class="notification-bell" hidden></button><button class="workspace-notification" data-action="notifications">通知</button>', {
       url: 'https://panel.example/', runScripts: 'outside-only',

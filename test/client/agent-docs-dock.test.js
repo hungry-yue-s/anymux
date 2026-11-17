@@ -16,7 +16,7 @@ afterEach(() => dom?.window.close());
 
 function setup({ width = 1440, docInfo = null } = {}) {
   dom = new JSDOM('<div class="ms-app mode-terminal"><main class="ms-main"><div class="terminal-view">'
-    + '<textarea class="xterm-helper-textarea"></textarea></div></main></div>', { url: 'https://panel.test/', runScripts: 'outside-only' });
+    + '<textarea class="xterm-helper-textarea"></textarea></div></main></div>', { url: 'https://panel.test/', runScripts: 'outside-only', pretendToBeVisual: true });
   const { window } = dom;
   Object.defineProperty(window, 'innerWidth', { value: width });
   const fetch = vi.fn(async (url) => {
@@ -31,10 +31,11 @@ function setup({ width = 1440, docInfo = null } = {}) {
     throw new Error('Unexpected fetch: ' + url);
   });
   const toast = vi.fn();
+  window.fetch = fetch;
   const sent = [];
   const openers = {};
   window.Api = { activeServerId: () => 'local', nodeUrl: (_serverId, path) => path };
-  window.AppShell = { workspace: () => ({ sessions: [{ id: '$1', windows: [
+  window.AppShell = { workspace: () => ({ provider: 'tmux', complete: true, instanceId: INSTANCE, sessions: [{ id: '$1', windows: [
     { id: '@0', panes: [{ id: '%1' }, { id: '%2' }] },
     { id: '@5', panes: [{ id: '%7' }] },
   ] }] }) };
@@ -49,7 +50,7 @@ function setup({ width = 1440, docInfo = null } = {}) {
       currentContext: () => ({ serverId: 'local', paneId: '%2', onTerminal: true }),
       selectedContext: () => ({ serverId: 'local', paneId: '%2' }),
       client: () => ({
-        get: vi.fn(async (path, params) => ({ path: params.path, doc: docInfo })),
+        get: vi.fn(async (path, params) => path === '/api/workspace' ? window.AppShell.workspace() : ({ path: params.path, doc: docInfo })),
         send: vi.fn(async (method, path, body) => { sent.push([method, path, body]); return {}; }),
       }),
     },
@@ -142,33 +143,200 @@ describe('opening a document straight into the dock', () => {
 });
 
 describe('documents announced by a pane', () => {
-  it('dock only for the window in view; elsewhere a notice opens them on request', async () => {
+  it('adds background progress to a dock that currently contains only a tool block', async () => {
+    const { window, preview } = setup();
+    const frame = window.document.createElement('section');
+    preview.blockDock.sync([{ key: 'git', persistKey: 'git:project', element: frame, title: 'Git', active: true }]);
+    await expect(preview.queueDocked('/w/progress.html', '%1', {
+      serverId: 'local', windowId: '@0', instanceId: INSTANCE, activate: false,
+    })).resolves.toBe('added');
+    expect(tabs(window)).toEqual([
+      { name: 'Git', active: true, unread: false },
+      { name: 'progress.html', active: false, unread: true },
+    ]);
+  });
+
+  it('allows an explicit notice click to replace a modal that automatic arrivals leave alone', async () => {
+    const { window, preview, openers, toast } = setup();
+    await preview.openFile('/w/reading.html', '%1');
+    await openers['open-file'].run({ placement: 'dock', path: '/w/requested.html', paneId: '%1' });
+    expect(window.document.querySelector('.fp-title').textContent).toContain('reading.html');
+    await toast.mock.calls[0][1].action.run();
+    expect(window.document.querySelector('.fp-title').textContent).toContain('requested.html');
+    expect(modals(window)).toBe(1);
+  });
+
+  it('opens a notice in the mobile reader when the screen cannot show a dock', async () => {
+    const { window, openers, toast } = setup({ width: 600 });
+    await openers['open-file'].run({ placement: 'dock', path: '/w/mobile.html', paneId: '%1' });
+    await toast.mock.calls[0][1].action.run();
+    expect(modals(window)).toBe(1);
+    expect(window.document.querySelector('.fp-title').textContent).toContain('mobile.html');
+  });
+
+  it('reveals the requested document after expanding a collapsed dock', async () => {
+    const { window, preview, openers, toast } = setup();
+    await preview.openDocked('/w/old.html', '%1');
+    window.document.querySelector('[aria-label="隐藏右侧预览"]').click();
+    await openers['open-file'].run({ placement: 'dock', path: '/w/new.html', paneId: '%1' });
+    await toast.mock.calls[0][1].action.run();
+    expect(tabs(window).find(t => t.active).name).toBe('new.html');
+    expect(window.document.querySelector('.fp-dock')).not.toBeNull();
+  });
+
+  it('resolves a moved window again when a persisted notification is opened', async () => {
+    const { window, openers, toast } = setup();
+    window.Router = { go: vi.fn() };
+    await openers['open-file'].run({ placement: 'dock', path: '/w/moved.html', paneId: '%7' });
+    const original = window.AppShell.workspace();
+    window.AppShell.workspace = () => ({ ...original, sessions: [{ id: '$9', windows: [{ id: '@5', panes: [{ id: '%8' }] }] }] });
+    await toast.mock.calls[0][1].action.run();
+    expect(window.Router.go).toHaveBeenCalledWith({ name: 'terminal', params: {
+      serverId: 'local', sessionId: '$9', windowId: '@5', paneId: '%8',
+    } });
+  });
+
+  it('preserves a newer activation received while the same saved path is being restored', async () => {
+    const { window, preview, fetch, openers } = setup();
+    await preview.openDocked('/w/a.html', '%1');
+    await preview.openDocked('/w/b.html', '%1');
+    await preview.switchDockContext('local', '@5', INSTANCE);
+    const original = fetch.getMockImplementation();
+    let release;
+    fetch.mockImplementation(url => !release && String(url).includes('/info') && String(url).includes('a.html')
+      ? new Promise(resolve => { release = () => resolve(original(url)); }) : original(url));
+    const restored = preview.switchDockContext('local', '@0', INSTANCE);
+    await settle();
+    await openers['open-file'].run({ placement: 'dock', path: '/w/a.html', paneId: '%1', fragment: 'new-heading' });
+    release();
+    await restored;
+    await settle(); await settle();
+    expect(tabs(window).find(t => t.active).name).toBe('a.html');
+    const saved = JSON.parse(window.localStorage.getItem(preview._test.dockStateKey('local', '@0', INSTANCE)));
+    expect(saved.tabs.find(t => t.path === '/w/a.html').fragment).toBe('new-heading');
+  });
+
+  it('supports the current in-memory dock of an older Node without persisting an unknown instance', async () => {
+    const { window, preview } = setup();
+    await preview.switchDockContext('local', '@0', null);
+    await preview.queueDocked('/w/current.html', '%1', { serverId: 'local', windowId: '@0', instanceId: null });
+    expect(tabs(window).map(t => t.name)).toEqual(['current.html']);
+    expect(preview._test.dockStateKey('local', '@0', null)).toBeNull();
+  });
+
+  it('does not lose a document when the user leaves while its content is loading', async () => {
+    const { window, preview, fetch, openers } = setup();
+    const original = fetch.getMockImplementation();
+    let release;
+    fetch.mockImplementation(url => !release && String(url).includes('/info') && String(url).includes('slow.html')
+      ? new Promise(resolve => { release = () => resolve(original(url)); }) : original(url));
+    const opened = openers['open-file'].run({ placement: 'dock', path: '/w/slow.html', paneId: '%1' });
+    await settle();
+    await preview.switchDockContext('local', '@5', INSTANCE);
+    release();
+    await opened;
+    await preview.switchDockContext('local', '@0', INSTANCE);
+    expect(tabs(window).map(t => t.name)).toEqual(['slow.html']);
+  });
+
+  it('drains documents received while the preceding document is loading', async () => {
+    const { window, fetch, openers } = setup();
+    const original = fetch.getMockImplementation();
+    let release;
+    fetch.mockImplementation(url => !release && String(url).includes('/info') && String(url).includes('slow.html')
+      ? new Promise(resolve => { release = () => resolve(original(url)); }) : original(url));
+    const first = openers['open-file'].run({ placement: 'dock', path: '/w/slow.html', paneId: '%1' });
+    await settle();
+    await openers['open-file'].run({ placement: 'dock', path: '/w/second.html', paneId: '%1' });
+    release();
+    await first;
+    expect(tabs(window).map(t => t.name)).toEqual(['slow.html', 'second.html']);
+    expect(tabs(window)[1].active).toBe(true);
+  });
+
+  it('selects the document clicked in a notice before asynchronous navigation restores its window', async () => {
+    const { window, preview, openers, toast } = setup();
+    window.Router = { go: vi.fn() };
+    await openers['open-file'].run({ placement: 'dock', path: '/w/first.html', paneId: '%1' });
+    const action = toast.mock.calls[0][1].action;
+    await openers['open-file'].run({ placement: 'dock', path: '/w/second.html', paneId: '%1' });
+    await preview.switchDockContext('local', '@5', INSTANCE);
+    await action.run();
+    expect(window.Router.go).toHaveBeenCalledWith(expect.objectContaining({ params: expect.objectContaining({ windowId: '@0' }) }));
+    await preview.switchDockContext('local', '@0', INSTANCE);
+    expect(tabs(window).find(t => t.active).name).toBe('first.html');
+  });
+
+  it('opens here with a notice, queues other windows, and restores their document on return', async () => {
     const { window, openers, toast, preview } = setup();
     const run = (event) => openers['open-file'].run({ type: 'open-file', placement: 'dock', activate: true, ...event });
-    const docked = vi.spyOn(preview, 'openDocked');
-    run({ path: '/w/p/.anymux/docs/here.html', paneId: '%1', kind: 'draft' });
+    const queued = vi.spyOn(preview, 'queueDocked');
+    await run({ path: '/w/p/.anymux/docs/here.html', paneId: '%1', kind: 'draft' });
     await settle(); await settle();
-    expect(docked).toHaveBeenCalledWith('/w/p/.anymux/docs/here.html', '%1', expect.objectContaining({ activate: true }));
-    expect(toast).not.toHaveBeenCalled();
+    expect(queued).toHaveBeenCalledWith('/w/p/.anymux/docs/here.html', '%1', expect.objectContaining({ activate: true, windowId: '@0' }));
+    expect(toast).toHaveBeenCalledWith(expect.stringContaining('已打开'), expect.objectContaining({ duration: 15000 }));
 
-    run({ path: '/w/p/docs/superpowers/plans/there.md', paneId: '%7', paneIds: ['%7'], kind: 'plan' });
-    expect(docked).toHaveBeenCalledTimes(1);
-    expect(toast).toHaveBeenCalledWith('计划：there.md', expect.objectContaining({ action: expect.objectContaining({ label: '打开' }) }));
-    run({ path: '/w/p/docs/superpowers/plans/there.md', paneId: '%7', paneIds: ['%7'], kind: 'plan' });
-    expect(toast).toHaveBeenCalledTimes(1);
-    run({ path: '/w/p/.superpowers/sdd/x/progress.md', paneId: '%7', activate: false, kind: 'progress' });
-    expect(toast).toHaveBeenCalledTimes(1);
+    await run({ path: '/w/p/docs/superpowers/plans/there.md', paneId: '%7', paneIds: ['%7'], kind: 'plan' });
+    expect(tabs(window).map(t => t.name)).toEqual(['here.html']);
+    await settle();
+    expect(toast).toHaveBeenCalledWith(expect.stringContaining('已加入'), expect.objectContaining({ action: expect.objectContaining({ label: '查看文档' }) }));
+    await run({ path: '/w/p/docs/superpowers/plans/there.md', paneId: '%7', paneIds: ['%7'], kind: 'plan' });
+    expect(toast).toHaveBeenCalledTimes(2);
+    await run({ path: '/w/p/.superpowers/sdd/x/progress.md', paneId: '%7', activate: false, kind: 'progress' });
+    expect(toast).toHaveBeenCalledTimes(2);
+
+    await preview.switchDockContext('local', '@5', INSTANCE);
+    expect(tabs(window)).toEqual([
+      { name: 'there.md', active: true, unread: false },
+      { name: 'progress.md', active: false, unread: true },
+    ]);
+    expect(window.document.querySelector('.fp-dock-tab-item.is-new .fp-dock-tab-new').textContent).toBe('新');
+    await preview.switchDockContext('local', '@0', INSTANCE);
 
     // A watcher event names every pane in the project; one of them is in view.
-    run({ path: '/w/p/.anymux/docs/project.html', paneId: '%7', paneIds: ['%7', '%2'] });
+    await run({ path: '/w/p/.anymux/docs/project.html', paneId: '%7', paneIds: ['%7', '%2'] });
     await settle(); await settle();
-    expect(docked).toHaveBeenCalledTimes(2);
+    expect(queued).toHaveBeenLastCalledWith('/w/p/.anymux/docs/project.html', '%2', expect.objectContaining({ windowId: '@0' }));
     expect(window.document.querySelectorAll('.fp-dock-tab-item')).toHaveLength(2);
 
     // Without placement it is the old modal.
     openers['open-file'].run({ type: 'open-file', path: '/w/p/plain.html', paneId: '%1' });
     await settle();
     expect(modals(window)).toBe(1);
+  });
+
+  it('persists background arrivals without touching the visible window, even across page reloads', async () => {
+    const { window, preview, typing } = setup();
+    await preview.openDocked('/w/p/current.html', '%1');
+    await preview.queueDocked('/w/p/new.html', '%7', {
+      serverId: 'local', windowId: '@5', instanceId: INSTANCE, activate: true,
+    });
+    await preview.queueDocked('/w/p/new.html', '%7', {
+      serverId: 'local', windowId: '@5', instanceId: INSTANCE, activate: true,
+    });
+    expect(tabs(window).map(t => t.name)).toEqual(['current.html']);
+    expect(window.document.activeElement).toBe(typing);
+    // A reload reconstructs the document as well as its scripts.
+    window.document.querySelector('.ms-main').innerHTML = '<div class="terminal-view"></div>';
+    window.eval(previewSource);
+    await window.FilePreview.switchDockContext('local', '@5', INSTANCE);
+    expect(tabs(window).map(t => t.name)).toEqual(['new.html']);
+    expect(window.document.querySelector('.fp-dock-tab-item').classList.contains('is-new')).toBe(true);
+    await window.FilePreview.switchDockContext('local', '@5', 'different-instance');
+    expect(tabs(window)).toEqual([]);
+  });
+
+  it('keeps a queued document when a modal is open and opens it when the modal closes', async () => {
+    const { window, preview } = setup();
+    await preview.openFile('/w/p/reading.html', '%1');
+    await preview.queueDocked('/w/p/new.html', '%1', {
+      serverId: 'local', windowId: '@0', instanceId: INSTANCE, activate: true,
+    });
+    expect(modals(window)).toBe(1);
+    preview.close();
+    await settle(); await settle();
+    expect(tabs(window).map(t => t.name)).toEqual(['new.html']);
+    expect(modals(window)).toBe(0);
   });
 });
 

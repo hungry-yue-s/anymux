@@ -4,13 +4,42 @@ var NotificationPanel = (function () {
   var _notifications = [];
   var _isOpen = false;
   var _loaded = false;
+  var DOCUMENT_KEY = 'anymux_document_notifications_v1';
+  var _documentOpeners = Object.create(null);
+  var _documents = [];
+  try {
+    var savedDocuments = JSON.parse(window.localStorage.getItem(DOCUMENT_KEY) || '[]');
+    if (Array.isArray(savedDocuments)) _documents = savedDocuments.filter(function (n) {
+      return n && n.type === 'document' && typeof n.id === 'string' && typeof n.path === 'string';
+    }).slice(0, 50);
+  } catch (_) { /* notification history is best effort */ }
+  _notifications = _documents.slice();
+
+  function _saveDocuments() {
+    try { window.localStorage.setItem(DOCUMENT_KEY, JSON.stringify(_documents)); } catch (_) {}
+  }
+
+  /** Browser-local document arrivals share the existing, persistent notice list. */
+  function addDocument(notice, open) {
+    if (!notice || typeof notice.id !== 'string' || typeof notice.path !== 'string') return;
+    if (typeof open === 'function') _documentOpeners[notice.id] = open;
+    if (_documents.some(function (n) { return n.id === notice.id; })) return;
+    var entry = Object.assign({}, notice, { type: 'document', read: false, timestamp: notice.timestamp || Date.now() });
+    _documents.unshift(entry);
+    _documents = _documents.slice(0, 50);
+    _notifications.unshift(entry);
+    _saveDocuments();
+    _updateBadge();
+    _syncAttention();
+    if (_isOpen) _rerenderPanel();
+  }
 
   // --- Server API helpers ---
 
   function _fetchAll() {
-    api.get('/api/notifications').then(function (res) {
+    return api.get('/api/notifications').then(function (res) {
       if (res.success && Array.isArray(res.data)) {
-        _notifications = res.data;
+        _notifications = res.data.concat(_documents).sort(function (a, b) { return b.timestamp - a.timestamp; });
         _loaded = true;
         _updateBadge();
         if (_isOpen) _rerenderPanel();
@@ -98,12 +127,16 @@ var NotificationPanel = (function () {
       n.readAt = Date.now();
       _updateBadge();
       _syncAttention();
-      _serverMarkRead(id);
+      if (n.type === 'document') _saveDocuments();
+      else _serverMarkRead(id);
     }
   }
 
   function clearAll() {
     _notifications = [];
+    _documents = [];
+    _documentOpeners = Object.create(null);
+    _saveDocuments();
     _updateBadge();
     _syncAttention();
     _serverClearAll();
@@ -158,6 +191,10 @@ var NotificationPanel = (function () {
   }
 
   function _notificationText(n) {
+    if (n.type === 'document') {
+      var name = n.path.split('/').pop();
+      return (n.message || '新文档') + ((n.message || '').indexOf(name) >= 0 ? '' : ' · ' + name);
+    }
     if (n.type !== 'agent-event') {
       return '命令完成: ' + (n.command || '');
     }
@@ -278,7 +315,7 @@ var NotificationPanel = (function () {
       html += '<div class="notification-list">';
       _notifications.forEach(function (n) {
         var readClass = n.read ? ' notification-item-read' : '';
-        html += '<div class="notification-item' + readClass + '" data-notif-id="' + n.id +
+        html += '<div class="notification-item' + readClass + '" role="button" tabindex="0" data-notif-id="' + (typeof escapeHtml === 'function' ? escapeHtml(n.id) : n.id) +
           '" data-session="' + (typeof escapeHtml === 'function' ? escapeHtml(n.session) : n.session) +
           '" data-window-index="' + n.windowIndex + '">';
         html += '<div class="notification-item-header">';
@@ -309,28 +346,42 @@ var NotificationPanel = (function () {
         var id = el.getAttribute('data-notif-id');
         var sess = el.getAttribute('data-session');
         var winIdx = el.getAttribute('data-window-index');
+        var notice = _notifications.find(function (n) { return n.id === id; });
         markRead(id);
-        if (typeof navigate === 'function' && winIdx !== '' && winIdx !== null) {
+        if (notice && notice.type === 'document') {
+          var open = _documentOpeners[id];
+          if (open) open();
+          else if (window.Blocks && Blocks.openDocumentNotice) Blocks.openDocumentNotice(notice);
+        } else if (typeof navigate === 'function' && winIdx !== '' && winIdx !== null) {
           navigate('terminal', { currentSession: sess, currentWindow: winIdx, currentPane: null });
         }
         _closePanel();
+      });
+      el.addEventListener('keydown', function (event) {
+        if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); el.click(); }
       });
     });
   }
 
   function markReadByWindow(session, windowIndex) {
     var changed = false;
+    var serverChanged = false;
     _notifications.forEach(function (n) {
+      // Visiting a terminal window does not mean its document tabs were read
+      // (the dock may be collapsed), and names/indexes are not global IDs.
+      if (n.type === 'document') return;
       if (!n.read && n.session === session && String(n.windowIndex) === String(windowIndex)) {
         n.read = true;
         n.readAt = Date.now();
         changed = true;
+        if (n.type !== 'document') serverChanged = true;
       }
     });
     if (changed) {
       _updateBadge();
       _syncAttention();
-      _serverMarkReadByWindow(session, windowIndex);
+      _saveDocuments();
+      if (serverChanged) _serverMarkReadByWindow(session, windowIndex);
     }
   }
 
@@ -341,6 +392,7 @@ var NotificationPanel = (function () {
     var bySession = {};
     _notifications.forEach(function (n) {
       if (n.read) return;
+      if (n.type === 'document' && window.Api && n.serverId !== Api.activeServerId()) return;
       (bySession[n.session] = bySession[n.session] || {}).unread = true;
       ((bySession[n.session].windows = bySession[n.session].windows || {})[String(n.windowIndex)] = true);
     });
@@ -365,6 +417,7 @@ var NotificationPanel = (function () {
   }
 
   return {
+    addDocument: addDocument,
     markRead: markRead,
     _markReadByWindow: markReadByWindow,
     clearAll: clearAll,

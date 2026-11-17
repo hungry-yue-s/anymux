@@ -84,6 +84,10 @@ var FilePreview = (function () {
   var BLOCK_SIDE_WIDTH = 560;
   var BLOCK_WIDTH_KEY = 'anymux_block_side_width';
   var _workspaceRevisions = {};
+  // Arrivals not rendered yet. Keep them when a modal or another window owns
+  // the preview, and merge them into that window's ordinary persisted dock.
+  var _queuedDockDocuments = {};
+  var _drainingDocuments = false;
 
   function _terminalContext() {
     var ui = window.Blocks && window.Blocks.ui;
@@ -120,14 +124,14 @@ var FilePreview = (function () {
     return _dockStateStorageKey(_dockContextKey);
   }
 
-  function _clearPersistedDock() {
-    var key = _currentDockStateKey();
+  function _clearPersistedDock(contextKey) {
+    var key = contextKey ? _dockStateStorageKey(contextKey) : _currentDockStateKey();
     if (!key) return;
     try { window.localStorage.removeItem(key); } catch (_) {}
   }
 
-  function _loadDockState() {
-    var key = _currentDockStateKey();
+  function _loadDockState(contextKey) {
+    var key = contextKey ? _dockStateStorageKey(contextKey) : _currentDockStateKey();
     if (!key) return null;
     var raw;
     try { raw = window.localStorage.getItem(key); } catch (_) { return null; }
@@ -135,7 +139,7 @@ var FilePreview = (function () {
     try {
       var parsed = JSON.parse(raw);
       if (!parsed || parsed.version !== DOCK_STATE_VERSION || !Array.isArray(parsed.tabs)) {
-        _clearPersistedDock();
+        _clearPersistedDock(contextKey);
         return null;
       }
       var seen = {};
@@ -149,10 +153,13 @@ var FilePreview = (function () {
           path: tab.path,
           paneId: typeof tab.paneId === 'string' && /^%\d+$/.test(tab.paneId) ? tab.paneId : null,
           source: tab.source && typeof tab.source.serverId === 'string' ? tab.source : null,
+          unread: tab.unread === true,
+          automatic: tab.automatic === true,
+          fragment: typeof tab.fragment === 'string' ? tab.fragment : null,
         };
       });
       if (tabs.length === 0) {
-        _clearPersistedDock();
+        _clearPersistedDock(contextKey);
         return null;
       }
       var width = Number(parsed.width);
@@ -168,7 +175,7 @@ var FilePreview = (function () {
       }
       return loaded;
     } catch (_) {
-      _clearPersistedDock();
+      _clearPersistedDock(contextKey);
       return null;
     }
   }
@@ -176,7 +183,7 @@ var FilePreview = (function () {
   function _persistDockState(widthOverride) {
     var key = _currentDockStateKey();
     if (_persistenceSuspended || !key) return;
-    if (_dockTabs.length === 0) {
+    if (_dockTabs.length === 0 && !(_queuedDockDocuments[_dockContextKey] || []).length) {
       _clearPersistedDock();
       return;
     }
@@ -190,6 +197,9 @@ var FilePreview = (function () {
       version: DOCK_STATE_VERSION,
       tabs: _fileTabs().slice(0, MAX_PERSISTED_DOCK_TABS).map(function (tab) {
         var saved = { path: tab.path, paneId: tab.paneId || null };
+        if (tab.unread) saved.unread = true;
+        if (tab.automatic) saved.automatic = true;
+        if (tab.fragment) saved.fragment = tab.fragment;
         if (tab.source && (_dockContextKey.split('\u0000')[1] === 'local-view'
           || tab.source.serverId !== _dockContextKey.split('\u0000')[0])) saved.source = tab.source;
         return saved;
@@ -202,6 +212,7 @@ var FilePreview = (function () {
     // Files and blocks in the order they are shown, which the user may have dragged.
     state.order = _dockTabs.map(_tabOrderKey).slice(0, MAX_PERSISTED_TAB_ORDER);
     _savedTabOrder = state.order;
+    _mergeDocumentArrivals(state, _queuedDockDocuments[_dockContextKey] || []);
     if (state.tabs.length === 0) {
       _clearPersistedDock();
       return;
@@ -235,6 +246,9 @@ var FilePreview = (function () {
       && (focused.instanceId && focused.instanceId !== workspace.instanceId
         || !live.has(_makeDockContextKey(serverId, focused.windowId, focused.instanceId)))) return;
     if (typeof workspace.revision === 'number') _workspaceRevisions[revisionKey] = workspace.revision;
+    Object.keys(_queuedDockDocuments).forEach(function (context) {
+      if (context.split('\u0000')[0] === serverId && !live.has(context)) delete _queuedDockDocuments[context];
+    });
     if (_dockContextKey) {
       var current = _dockContextKey.split('\u0000');
       if (current[0] === serverId && current[1] !== 'local-view' && !live.has(_dockContextKey)) {
@@ -270,6 +284,7 @@ var FilePreview = (function () {
   function forgetWindow(serverId, windowId, instanceId) {
     var context = _makeDockContextKey(serverId, windowId, instanceId);
     if (!context) return;
+    delete _queuedDockDocuments[context];
     if (context === _dockContextKey) switchDockContext(null, null);
     var key = _dockStateStorageKey(context);
     try {
@@ -791,7 +806,8 @@ var FilePreview = (function () {
     _dockTabs.forEach(function (tab) {
       var item = document.createElement('div');
       item.className = 'fp-dock-tab-item' + (tab.id === _activeDockTabId ? ' active' : '')
-        + (tab.unread && tab.id !== _activeDockTabId ? ' is-unread' : '');
+        + (tab.unread && tab.id !== _activeDockTabId ? ' is-unread' : '')
+        + (tab.highlightUntil > Date.now() ? ' is-new' : '');
       item.setAttribute('data-tab-id', tab.id);
       var select = document.createElement('button');
       select.className = 'fp-dock-tab';
@@ -807,6 +823,13 @@ var FilePreview = (function () {
       label.className = 'fp-dock-tab-label';
       label.textContent = _tabTitle(tab);
       select.appendChild(label);
+      if (tab.unread || tab.highlightUntil > Date.now()) {
+        var badge = document.createElement('span');
+        badge.className = 'fp-dock-tab-new';
+        badge.textContent = '新';
+        select.appendChild(badge);
+        select.setAttribute('aria-label', _tabTitle(tab) + '，新打开的文档');
+      }
       if (tab.block) {
         item.classList.add('is-block');
         item.classList.toggle('is-busy', !!tab.block.busy);
@@ -989,6 +1012,7 @@ var FilePreview = (function () {
     if (!tab) return;
     if (!preserveRequest) _previewGeneration++;
     _activeDockTabId = tab.id;
+    if (tab.unread && tab.automatic) _highlightDocumentTab(tab);
     tab.unread = false;
     var panels = _dockOverlay.querySelector('.fp-dock-panels');
     if (panels) {
@@ -1172,6 +1196,91 @@ var FilePreview = (function () {
 
   // --- Opening straight into the dock (`anymux open --dock`, agent documents) ---
 
+  function _highlightDocumentTab(tab) {
+    tab.highlightUntil = Date.now() + 7000;
+    window.setTimeout(function () {
+      if (_dockTabs.indexOf(tab) >= 0) _renderDockTabs();
+    }, 7100);
+  }
+
+  function _mergeDocumentArrivals(saved, arrivals) {
+    arrivals.forEach(function (arrival) {
+      var old = saved.tabs.findIndex(function (tab) { return tab.path === (arrival.replaces || arrival.path); });
+      var existing = saved.tabs.findIndex(function (tab) { return tab.path === arrival.path; });
+      var tab = { path: arrival.path, paneId: arrival.paneId, source: arrival.source,
+        unread: true, automatic: true, fragment: arrival.fragment || null };
+      if (existing >= 0) saved.tabs[existing] = tab;
+      else if (old >= 0) saved.tabs.splice(old, 1, tab);
+      else saved.tabs.push(tab);
+      if (old >= 0 && existing >= 0 && old !== existing) saved.tabs.splice(old, 1);
+      if (arrival.replaces && saved.order) saved.order = saved.order.map(function (key) {
+        return key === 'file:' + arrival.replaces ? 'file:' + arrival.path : key;
+      });
+      if (arrival.activate !== false) {
+        saved.activePath = arrival.path;
+        if (arrival.reveal !== false) saved.hidden = false;
+        delete saved.activeBlock;
+      }
+    });
+    saved.tabs = saved.tabs.slice(-MAX_PERSISTED_DOCK_TABS);
+  }
+
+  /** Add to the owning window without navigating or touching the live preview. */
+  function queueDocked(filePath, paneId, opts) {
+    opts = opts || {};
+    var context = _makeDockContextKey(opts.serverId, opts.windowId, opts.instanceId);
+    var key = _dockStateStorageKey(context);
+    if (!context || (!key && context !== _dockContextKey)
+      || typeof filePath !== 'string' || filePath.charAt(0) !== '/') return Promise.resolve('unavailable');
+    if (context === _dockContextKey) _persistDockState();
+    var saved = _loadDockState(context) || { version: DOCK_STATE_VERSION, tabs: [], width: 0, hidden: false };
+    if (opts.activate === false && saved.tabs.length === 0
+      && !(context === _dockContextKey && _dockTabs.length)) return Promise.resolve('skipped');
+    var arrival = { path: filePath, paneId: paneId, activate: opts.activate,
+      replaces: opts.replaces, fragment: opts.fragment,
+      reveal: context !== _dockContextKey || !_dockHidden,
+      source: { serverId: opts.serverId, paneId: paneId } };
+    var pending = _queuedDockDocuments[context] || [];
+    _queuedDockDocuments[context] = pending.filter(function (item) { return item.path !== filePath; }).concat(arrival);
+    _mergeDocumentArrivals(saved, [arrival]);
+    saved.version = DOCK_STATE_VERSION;
+    try { if (key) window.localStorage.setItem(key, JSON.stringify(saved)); } catch (_) { /* kept in memory */ }
+    return _drainDocumentArrivals().then(function (result) { return result || 'queued'; });
+  }
+
+  function _drainDocumentArrivals() {
+    var context = _dockContextKey;
+    if (_drainingDocuments || _restorePromise || document.hidden || !_canDockRight()
+      || (_overlay && _placement !== 'side')) return Promise.resolve();
+    var pending = (_queuedDockDocuments[context] || []).slice();
+    if (!pending.length) return Promise.resolve();
+    _drainingDocuments = true;
+    var chain = Promise.resolve();
+    var outcome;
+    pending.forEach(function (arrival) {
+      chain = chain.then(function () {
+        if (context !== _dockContextKey) return;
+        return openDocked(arrival.path, arrival.paneId, {
+          activate: arrival.activate, replaces: arrival.replaces, fragment: arrival.fragment,
+          source: arrival.source, automatic: true,
+        }).then(function (result) {
+          if (['activated', 'added', 'hidden', 'exists'].indexOf(result) < 0) return;
+          outcome = result;
+          _queuedDockDocuments[context] = (_queuedDockDocuments[context] || []).filter(function (item) { return item !== arrival; });
+          if (context === _dockContextKey) _persistDockState();
+        });
+      });
+    });
+    return chain.then(function () { return outcome; }).finally(function () {
+      _drainingDocuments = false;
+      // Only retry arrivals received while loading. A failed read waits for
+      // another visit, rather than turning into an immediate retry loop.
+      if ((_queuedDockDocuments[_dockContextKey] || []).some(function (item) { return context !== _dockContextKey || pending.indexOf(item) < 0; })) {
+        return _drainDocumentArrivals();
+      }
+    });
+  }
+
   function _findFileTab(path) {
     if (!path) return null;
     for (var i = 0; i < _dockTabs.length; i++) {
@@ -1183,7 +1292,7 @@ var FilePreview = (function () {
   function _syncRestoreButton() {
     if (!_dockRestoreButton) return;
     var unread = _dockTabs.some(function (tab) { return tab.unread; });
-    _dockRestoreButton.textContent = '◧ ' + _dockTabs.length;
+    _dockRestoreButton.textContent = '预览 ' + _dockTabs.length + (unread ? ' · 新文档' : '');
     _dockRestoreButton.classList.toggle('has-unread', unread);
     _dockRestoreButton.title = unread ? '有新文档' : '';
   }
@@ -1267,6 +1376,7 @@ var FilePreview = (function () {
     var replaced = opts.replaces ? _findFileTab(opts.replaces) : null;
     var existing = _findFileTab(filePath);
     if (existing) {
+      if (opts.fragment) existing.fragment = opts.fragment;
       if (replaced && replaced !== existing) _removeDockTab(_dockTabs.indexOf(replaced));
       if (!activate) return Promise.resolve('exists');
       if (_dockHidden) {
@@ -1275,6 +1385,7 @@ var FilePreview = (function () {
         return Promise.resolve('hidden');
       }
       _activateDockTab(existing.id);
+      if (opts.automatic) { existing.automatic = true; _highlightDocumentTab(existing); _renderDockTabs(); }
       _scrollToFragment(existing, opts.fragment);
       return Promise.resolve('activated');
     }
@@ -1318,12 +1429,16 @@ var FilePreview = (function () {
       var tab;
       if (_dockOverlay && _dockHidden) {
         tab = _stashInHiddenDock(quietOverlay, modal, path);
+        tab.automatic = opts.automatic === true;
+        tab.fragment = opts.fragment || null;
         _replaceTab(tab, replaced && _dockTabs.indexOf(replaced) >= 0 ? replaced : null);
         _restoreFocus(focus);
         return 'hidden';
       }
       _dockCurrentPreview();
       tab = _activeDockTab();
+      tab.fragment = opts.fragment || null;
+      if (opts.automatic) { tab.automatic = true; _highlightDocumentTab(tab); }
       quietOverlay.classList.remove('fp-restoring');
       if (_dockOverlay) _dockOverlay.classList.remove('fp-restoring');
       if (!activate && previous != null && previous !== tab.id && _dockTabs.some(function (t) { return t.id === previous; })) {
@@ -1450,7 +1565,7 @@ var FilePreview = (function () {
         _mountBlockTabs();
         return Promise.resolve(true);
       }
-      return restoreDocked();
+      return restoreDocked().then(function (result) { _drainDocumentArrivals(); return result; });
     }
 
     _pendingBlockKey = null;
@@ -1495,6 +1610,11 @@ var FilePreview = (function () {
       return Promise.resolve(true);
     }
     var saved = _loadDockState();
+    var restoringArrivals = (_queuedDockDocuments[contextKey] || []).slice();
+    if (restoringArrivals.length) {
+      saved = saved || { tabs: [], width: 0, hidden: false };
+      _mergeDocumentArrivals(saved, restoringArrivals);
+    }
     if (!saved || !_canDockRight()) {
       _mountBlockTabs();
       return Promise.resolve(false);
@@ -1512,11 +1632,19 @@ var FilePreview = (function () {
       chain = chain.then(function () {
         if (!_isDockContextCurrent(contextKey, generation)) return false;
         return openFile(tab.path, tab.paneId, { restoring: true,
+          markdownFragment: tab.fragment,
           source: tab.source || { serverId: contextKey.split('\u0000')[0], paneId: tab.paneId } });
       }).then(function (opened) {
         if (!_isDockContextCurrent(contextKey, generation)) return;
         if (opened === true) {
           _dockCurrentPreview();
+          var restored = _activeDockTab();
+          restored.unread = tab.unread;
+          restored.automatic = tab.automatic;
+          restored.fragment = tab.fragment;
+          _queuedDockDocuments[contextKey] = (_queuedDockDocuments[contextKey] || []).filter(function (item) {
+            return item.path !== tab.path || restoringArrivals.indexOf(item) < 0;
+          });
           return;
         }
         if (_placement !== 'side' && _overlay) close();
@@ -1554,6 +1682,7 @@ var FilePreview = (function () {
       _pendingBlockKey = saved.activeBlock || null;
       _mountBlockTabs();
       _persistDockState();
+      _drainDocumentArrivals();
     });
     return _restorePromise;
   }
@@ -3220,6 +3349,7 @@ var FilePreview = (function () {
     var returnFocus = _modalReturnFocus;
     _modalReturnFocus = null;
     if (returnFocus && returnFocus.isConnected && typeof returnFocus.focus === 'function') returnFocus.focus();
+    _drainDocumentArrivals().catch(function () { /* keep the arrival for the next visit */ });
   }
 
   function closeModal() {
@@ -6579,6 +6709,9 @@ var FilePreview = (function () {
       }
     });
     document.addEventListener('visibilitychange', _syncAutoRefresh);
+    document.addEventListener('visibilitychange', function () {
+      _drainDocumentArrivals().catch(function () {});
+    });
     document.addEventListener('tmux-theme-change', _refreshMermaidTheme);
     ['tmux-theme-change', 'tmux-transparency-change', 'tmux-glass-change'].forEach(function (event) {
       document.addEventListener(event, _refreshPresentationTheme);
@@ -6589,7 +6722,7 @@ var FilePreview = (function () {
   }
 
   return {
-    registerLinkProvider: registerLinkProvider, openFile: openFile, openDocked: openDocked,
+    registerLinkProvider: registerLinkProvider, openFile: openFile, openDocked: openDocked, queueDocked: queueDocked,
     registerDecorator: registerDecorator,
     renderInto: renderInto, disposeRendered: _disposePreview,
     openFromBuffer: openFromBuffer, close: close, closeModal: closeModal, closeDocked: closeDocked,
