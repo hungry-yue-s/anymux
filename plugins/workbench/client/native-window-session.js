@@ -392,7 +392,12 @@ export class NativeWindowSession {
       this.linkProvider?.dispose?.();
       const source = Object.freeze({ serverId: next.serverId, paneId: next.paneId,
         isCurrent: () => this.status === 'live' && this.hydrated && this.context?.instanceId === next.instanceId });
-      this.linkProvider = this.global.FilePreview?.registerLinkProvider(this.term, next.paneId, () => next.paneId, source);
+      // The whole window is on screen: a relative path is resolved in the pane it is printed in.
+      const api = this.global.Api;
+      const panesPath = '/windows/' + encodeURIComponent(next.windowId) + '/panes';
+      const panes = () => api.get(api.workspaceUrl ? api.workspaceUrl(next.serverId, panesPath) : api.nodeUrl(next.serverId, '/api/workspace' + panesPath))
+        .then((result) => (result && result.panes) || []);
+      this.linkProvider = this.global.FilePreview?.registerLinkProvider(this.term, next.paneId, () => next.paneId, source, { panes });
       this.onContext(next);
     }
   }

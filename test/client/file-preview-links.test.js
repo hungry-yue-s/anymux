@@ -422,6 +422,62 @@ describe('a split window', () => {
     expect([hit.text, hit.unverified, hit.fallback.text]).toEqual([NOTES, true, 'n.md']);
   });
 
+  describe('and the pane a link is printed in', () => {
+    // The whole screen of the window above once a 100x16 client is attached:
+    // titles on top of the panes, the status line at the bottom.
+    const LAYOUT = [
+      { id: '%0', active: false, geometry: { x: 0, y: 1, width: 50, height: 14 } },
+      { id: '%1', active: true, geometry: { x: 51, y: 1, width: 49, height: 6 } },
+      { id: '%2', active: false, geometry: { x: 51, y: 8, width: 49, height: 7 } },
+    ];
+    const screen = ({ statusOnTop = false } = {}) => {
+      const rows = [
+        ['──· 0:sh '.padEnd(50, '─'), '──· 1:sh '.padEnd(49, '─'), '┬'],
+        ['see plugins/files/client/js/file-preview.js:5218 a', '• Changed the code in plugins/files/client/js/'],
+        ['nd the tests in test/client/file-preview-links.tes', '  file-preview.js and the tests.'],
+        ['t.js too', 'and ~/Documents/notes/terminal-links-investigatio'],
+        ['https://github.com/anthropics/claude-code/issues/1', 'n.md'],
+        ['', ''], ['', ''],
+        ['', '──▸ 2:sh '.padEnd(49, '─'), '├'],
+        ['', 'docs/known-issues.md has ENV-14 and lib/terminal/'],
+        ['', 'hyperlinks.js is new here'],
+        ['', ''], ['', ''], ['', ''], ['', ''], ['', ''],
+      ];
+      const status = { text: '[probe] 0:sh*' };
+      const cells = rows.map(([left, right, border = '│']) => ({ text: left.padEnd(50) + border + right }));
+      return mkCells(statusOnTop ? [status, ...cells] : [...cells, status], 100);
+    };
+
+    it('is found from the window\'s layout', () => {
+      const buf = screen();
+      expect(FP.paneAt(LAYOUT, buf, 10, 4)).toBe('%0');
+      expect(FP.paneAt(LAYOUT, buf, 60, 3)).toBe('%1');
+      expect(FP.paneAt(LAYOUT, buf, 60, 9)).toBe('%2');
+      // Borders and titles are in no pane.
+      expect(FP.paneAt(LAYOUT, buf, 50, 4)).toBeNull();
+      expect(FP.paneAt(LAYOUT, buf, 60, 7)).toBeNull();
+    });
+
+    it('below a status line on top', () => {
+      const buf = screen({ statusOnTop: true });
+      expect(FP.paneAt(LAYOUT, buf, 10, 5)).toBe('%0');
+      expect(FP.paneAt(LAYOUT, buf, 60, 4)).toBe('%1');
+      expect(FP.paneAt(LAYOUT, buf, 60, 10)).toBe('%2');
+    });
+
+    it('is not told from a layout the screen does not show', () => {
+      // Another window, or this one zoomed: no border where a pane would start.
+      const other = [
+        { id: '%5', geometry: { x: 0, y: 0, width: 39, height: 15 } },
+        { id: '%6', geometry: { x: 40, y: 0, width: 60, height: 15 } },
+      ];
+      expect(FP.paneAt(other, screen(), 60, 3)).toBeNull();
+      expect(FP.paneAt(LAYOUT, mkCells([{ text: 'one zoomed pane' }], 100), 60, 3)).toBeNull();
+      // A window of one pane needs no screen to tell.
+      expect(FP.paneAt([LAYOUT[0]], screen(), 60, 3)).toBe('%0');
+    });
+  });
+
   it('finds the panes in a row by cells, past wide glyphs', () => {
     expect(FP.segments(mkCells([{ text: '中文│abc│' }], 12).getLine(0)))
       .toEqual([{ lo: 0, hi: 4 }, { lo: 5, hi: 8 }, { lo: 9, hi: 12 }]);
@@ -639,12 +695,12 @@ describe('the link provider', () => {
   ], 60);
   const reply = (exists) => ({ status: 200, ok: true, json: async () => ({ success: true, data: { exists }, error: null }) });
   // Each test its own machine: answers are remembered per machine and pane.
-  function provide(buf, source) {
+  function provide(buf, source, options) {
     let provider;
-    const term = { buffer: { active: buf }, options: {}, element: null,
+    const term = { buffer: { active: buf }, options: {}, element: null, cols: 100, rows: buf.length,
       registerLinkProvider: (value) => { provider = value; return { dispose() {} }; } };
     W.Api = { nodeUrl: (serverId, path) => '/n/' + serverId + path, activeServerId: () => 'local' };
-    W.FilePreview.registerLinkProvider(term, '%1', null, source);
+    W.FilePreview.registerLinkProvider(term, '%1', null, source, options);
     return { term, provider };
   }
   afterEach(() => { delete W.Api; delete W.open; delete W._showToast; });
@@ -751,6 +807,38 @@ describe('the link provider', () => {
     release();
     await vi.waitFor(() => expect(second).toHaveBeenCalledTimes(1));
     expect(first).not.toHaveBeenCalled();
+  });
+
+  it('asks each pane of a split window about the paths printed in it', async () => {
+    const TEST = 'test/client/file-preview-links.test.js';
+    const PREVIEW = 'plugins/files/client/js/file-preview.js';
+    const fetch = vi.fn(async (url) => {
+      const paths = new URL(url, 'https://panel.test').searchParams.getAll('path');
+      return reply(paths.map((path) => path === TEST || path === PREVIEW));
+    });
+    vi.stubGlobal('fetch', fetch);
+    const rows = [
+      ['──· 0:sh '.padEnd(50, '─'), '──· 1:sh '.padEnd(49, '─'), '┬'],
+      ['see plugins/files/client/js/file-preview.js:5218 a', '• Changed the code in plugins/files/client/js/'],
+      ['nd the tests in test/client/file-preview-links.tes', '  file-preview.js and the tests.'],
+      ['t.js too', ''],
+      ['', ''],
+    ];
+    const buf = mkCells(rows.map(([left, right, border = '│']) => ({ text: left.padEnd(50) + border + right })), 100);
+    const panes = vi.fn(async () => [
+      { id: '%0', geometry: { x: 0, y: 1, width: 50, height: 4 } },
+      { id: '%3', geometry: { x: 51, y: 1, width: 49, height: 4 } },
+    ]);
+    const { provider } = provide(buf, { serverId: 'panes', paneId: '%1' }, { panes });
+    const answered = vi.fn();
+    provider.provideLinks(3, answered);
+    await vi.waitFor(() => expect(answered).toHaveBeenCalledTimes(1));
+    const asked = fetch.mock.calls.map(([url]) => new URL(url, 'https://panel.test').searchParams.get('paneId'));
+    expect(asked.sort()).toEqual(['%0', '%3']);
+    expect(answered.mock.calls[0][0].map((link) => link.text)).toEqual([TEST, PREVIEW]);
+    // The layout is kept: the next row asks no one for it.
+    provider.provideLinks(2, () => {});
+    expect(panes).toHaveBeenCalledTimes(1);
   });
 
   it('gives a link over rows of one pane as a link per row, each underlining the others', () => {

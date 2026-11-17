@@ -57,7 +57,9 @@ describe('file preview active pane wiring', () => {
 
   it('uses the resolver for toolbar, terminal links, mobile taps, and shortcut', () => {
     expect(terminalSource).toContain('_openFilePreviewFromBuffer();');
-    expect(terminalSource).toContain('FilePreview.registerLinkProvider(term, state.currentPane, _resolvePreviewPaneId);');
+    expect(terminalSource).toContain('FilePreview.registerLinkProvider(term, state.currentPane, _resolvePreviewPaneId,');
+    // Split mode adds the window's layout, so a link resolves in the pane it is printed in.
+    expect(terminalSource).toContain("nozoom ? { panes: function () { return TerminalTarget.listPanes(); } } : undefined);");
     expect(terminalSource).toContain('FilePreview.activateHit(tapHit, paneId);');
     expect(appSource).toContain("typeof _openFilePreviewFromBuffer === 'function'");
   });
@@ -66,7 +68,7 @@ describe('file preview active pane wiring', () => {
     // A remote pane's paths resolve through that machine's own /api/files,
     // never through the panel host's filesystem.
     expect(terminalSource).not.toMatch(/FilePreview !== 'undefined' && !TerminalTarget\.isRemote\(\)/);
-    expect(terminalSource).toContain('FilePreview.registerLinkProvider(term, state.currentPane, _resolvePreviewPaneId)');
+    expect(terminalSource).toContain('FilePreview.registerLinkProvider(term, state.currentPane, _resolvePreviewPaneId,');
     const previewSource = readFileSync('plugins/files/client/js/file-preview.js', 'utf8');
     expect(previewSource).not.toMatch(/fetch\('\/api\/files\//);
     expect(previewSource).toContain("_machine() + '/api/files/");

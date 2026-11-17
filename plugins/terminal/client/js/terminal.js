@@ -1312,7 +1312,10 @@ function _mountTerminal(termContainer, nozoom) {
   if (typeof FilePreview !== 'undefined' && TerminalTarget.hasNode()) {
     // Paths resolve on the pane's own machine: FilePreview calls go through the
     // server in view (Api.activeUrl). A basic-mode host has no file API.
-    FilePreview.registerLinkProvider(term, state.currentPane, _resolvePreviewPaneId);
+    // Split mode shows the whole window: a relative path is resolved in the
+    // pane it is printed in, found from the window's layout.
+    FilePreview.registerLinkProvider(term, state.currentPane, _resolvePreviewPaneId, undefined,
+      nozoom ? { panes: function () { return TerminalTarget.listPanes(); } } : undefined);
   }
 
   term.open(termContainer);

@@ -5130,20 +5130,127 @@ var FilePreview = (function () {
   }
 
   // The logical lines the links on row `bufRow` are read from, one for each
-  // segment with text, and every path still to be asked about.
-  function _rowLinkLines(buffer, bufRow, lookup, settled) {
-    var out = { lines: [], pending: [] };
+  // segment with text, and every path still to be asked about. `parts` keeps
+  // each segment with its own: in a split window each is another pane, and a
+  // relative path means something else in each. lookupFor(seg), when given,
+  // is the lookup for that segment's pane.
+  function _rowLinkLines(buffer, bufRow, lookup, settled, lookupFor) {
+    var out = { lines: [], pending: [], parts: [] };
     var line = buffer.getLine(bufRow);
     if (!line) return out;
     _segmentsOf(line).forEach(function (seg) {
       if (!/\S/.test(_segText(line, seg, false))) return;
-      var read = _linkLine(buffer, bufRow, lookup, settled, seg);
+      var read = _linkLine(buffer, bufRow, lookupFor ? lookupFor(seg) : lookup, settled, seg);
       out.lines.push(read.logical);
+      out.parts.push({ seg: seg, logical: read.logical, pending: read.pending });
       read.pending.forEach(function (path) {
         if (out.pending.indexOf(path) < 0) out.pending.push(path);
       });
     });
     return out;
+  }
+
+  // --- Which pane a link is in ---
+  //
+  // In a split window the screen shows every pane, and a relative path means
+  // what it means in the pane it is printed in. tmux reports where each pane
+  // is in the window (the workspace API's `geometry`, in cells); the screen
+  // adds the status line when it is on top, and that offset is read off the
+  // screen: it is where the borders between the panes are drawn.
+
+  var LAYOUT_FRESH_MS = 3000;
+  var LAYOUT_MAX_OFFSET = 5;          // tmux shows at most five status lines
+  var DIVIDER_CELL_RE = new RegExp(DIVIDER_RE.source);
+  var RULE_START_RE = new RegExp('^\\s*' + RULE_RE.source);
+
+  // The pane layout of the window a terminal shows, fetched with
+  // fetchPanes() and kept briefly; null without a way to fetch it. A failed
+  // fetch counts as no layout until it is due again.
+  function _paneLayout(term, fetchPanes) {
+    if (typeof fetchPanes !== 'function') return null;
+    var panes = null;
+    var at = 0;
+    var size = '';
+    var flight = null;
+    var sizeOf = function () { return term.cols + 'x' + term.rows; };
+    var fresh = function () {
+      return panes && Date.now() - at < LAYOUT_FRESH_MS && size === sizeOf() ? panes : null;
+    };
+    return {
+      fresh: fresh,
+      load: function () {
+        var known = fresh();
+        if (known) return Promise.resolve(known);
+        if (!flight) {
+          var asked = sizeOf();
+          flight = Promise.resolve().then(fetchPanes).then(function (list) {
+            return Array.isArray(list) ? list : [];
+          }, function () { return []; }).then(function (list) {
+            panes = list;
+            at = Date.now();
+            size = asked;
+            flight = null;
+            return list;
+          });
+        }
+        return flight;
+      },
+    };
+  }
+
+  function _geometryOf(pane) {
+    var g = pane && pane.geometry;
+    return g && [g.x, g.y, g.width, g.height].every(function (n) { return typeof n === 'number' && n >= 0; }) ? g : null;
+  }
+
+  // Rows of status line above the window: the offset at which the most
+  // borders (a horizontal line just above or below a pane) are on screen.
+  function _layoutOffset(list, buffer) {
+    var base = buffer.baseY || 0;
+    var best = 0;
+    var bestScore = 0;
+    for (var off = 0; off <= LAYOUT_MAX_OFFSET; off++) {
+      var score = 0;
+      for (var i = 0; i < list.length; i++) {
+        var g = _geometryOf(list[i]);
+        var rows = [g.y - 1, g.y + g.height];
+        for (var k = 0; k < rows.length; k++) {
+          var line = rows[k] + off >= 0 ? buffer.getLine(base + rows[k] + off) : null;
+          if (line && RULE_START_RE.test(line.translateToString(false, g.x, g.x + g.width))) score++;
+        }
+      }
+      if (score > bestScore) { best = off; bestScore = score; }
+    }
+    return best;
+  }
+
+  // The layout is that of the screen: every pane that does not start at the
+  // left edge has a vertical border just left of it. A zoomed window, another
+  // window or borders drawn otherwise do not pass.
+  function _layoutOnScreen(list, buffer, off) {
+    var base = buffer.baseY || 0;
+    return list.every(function (pane) {
+      var g = _geometryOf(pane);
+      if (g.x === 0) return true;
+      var line = buffer.getLine(base + off + g.y + Math.floor(g.height / 2));
+      return !!line && DIVIDER_CELL_RE.test(line.translateToString(false, g.x - 1, g.x));
+    });
+  }
+
+  // The id of the pane cell (col, bufRow) is in, or null when that cannot be
+  // told (a border, a layout that is not the screen's).
+  function _paneAt(panes, buffer, col, bufRow) {
+    var list = (panes || []).filter(function (pane) { return pane && pane.id && _geometryOf(pane); });
+    if (list.length === 1) return list[0].id;
+    if (!list.length) return null;
+    var off = _layoutOffset(list, buffer);
+    if (!_layoutOnScreen(list, buffer, off)) return null;
+    var row = bufRow - (buffer.baseY || 0) - off;
+    var inside = list.filter(function (pane) {
+      var g = _geometryOf(pane);
+      return col >= g.x && col < g.x + g.width && row >= g.y && row < g.y + g.height;
+    });
+    return inside.length === 1 ? inside[0].id : null;
   }
 
   // Convert a string offset in the merged logical line to { y (1-based
@@ -5321,11 +5428,13 @@ var FilePreview = (function () {
   // clients, see lib/terminal/hyperlinks.js) says where each one leads, on
   // every cell of it: no guess from the text, and no wrap can break it. xterm
   // asks for these before the provider below.
-  function _hyperlinkHandler(term, paneId, resolvePaneId, origin, isCurrent) {
+  // actOnPane(col, bufRow, action) runs action(paneId, source) for the pane
+  // the link's first cell is in.
+  function _hyperlinkHandler(term, actOnPane, isCurrent) {
     return {
       // file: links and the bare paths some programs emit are the point.
       allowNonHttpProtocols: true,
-      activate: function (_event, uri) {
+      activate: function (_event, uri, range) {
         var target = typeof LinkDetect !== 'undefined' ? LinkDetect.parseHyperlink(uri) : null;
         if (!target) return;
         // Like a detected link: window.open stays inside the click.
@@ -5338,9 +5447,9 @@ var FilePreview = (function () {
           if (window._showToast) window._showToast('终端来源尚未确认，请连接后重试');
           return;
         }
-        _resolvePaneForAction(paneId, resolvePaneId, function (livePaneId) {
-          _activateLink({ kind: 'file', text: target.text, lineRef: target.lineRef },
-            origin ? origin.paneId : livePaneId, origin);
+        var start = range && range.start ? range.start : { x: 0, y: 0 };
+        actOnPane(start.x - 1, start.y - 1, function (pane, source) {
+          _activateLink({ kind: 'file', text: target.text, lineRef: target.lineRef }, pane, source);
         });
       },
       // The text on screen is the program's choice; show where the link goes.
@@ -5508,13 +5617,32 @@ var FilePreview = (function () {
     );
   }
 
-  function registerLinkProvider(term, paneId, resolvePaneId, source) {
+  // options.panes(), when the terminal shows a whole tmux window, resolves to
+  // that window's panes as the workspace API lists them; a relative path is
+  // then resolved in the pane it is printed in. Without it, in the pane this
+  // terminal was given (or the one resolvePaneId names).
+  function registerLinkProvider(term, paneId, resolvePaneId, source, options) {
     var origin = source ? { serverId: source.serverId, paneId: source.paneId || paneId } : null;
     var isCurrent = source && typeof source.isCurrent === 'function' ? source.isCurrent : null;
+    var layout = _paneLayout(term, options && options.panes);
+    // action(paneId, source) for the pane of cell (col, bufRow).
+    var actOnPane = function (col, bufRow, action) {
+      var given = function () {
+        _resolvePaneForAction(paneId, resolvePaneId, function (livePaneId) {
+          action(origin ? origin.paneId : livePaneId, origin);
+        });
+      };
+      if (!layout) return given();
+      layout.load().then(function (panes) {
+        var pane = _paneAt(panes, term.buffer.active, col, bufRow);
+        if (!pane) return given();
+        action(pane, origin ? { serverId: origin.serverId, paneId: pane } : null);
+      });
+    };
     // Hyperlinks the program marked itself. Set here and not at construction:
     // this is where the pane and its machine are known.
     try {
-      if (term.options) term.options.linkHandler = _hyperlinkHandler(term, paneId, resolvePaneId, origin, isCurrent);
+      if (term.options) term.options.linkHandler = _hyperlinkHandler(term, actOnPane, isCurrent);
     } catch (_) { /* a terminal without the option only has detected links */ }
     var latest = 0;
     return term.registerLinkProvider({
@@ -5524,18 +5652,51 @@ var FilePreview = (function () {
         // Paths are checked where the pane runs, against its directory.
         var where = origin || _sourceForPane(paneId);
         var machine = _machine(where);
-        var lookup = function (path) { return _knownToExist(machine, where.paneId, path); };
-        var first = _rowLinkLines(term.buffer.active, bufRow, lookup, false);
+        // The pane a segment of this row is in; null while the layout that
+        // says so has not arrived, and nothing is known about its paths then.
+        var paneFor = function (panes, seg) {
+          if (!layout) return where.paneId;
+          if (!panes) return null;
+          return _paneAt(panes, term.buffer.active, seg.lo, bufRow) || where.paneId;
+        };
+        var lookupFor = function (panes) {
+          return function (seg) {
+            var pane = paneFor(panes, seg);
+            return function (path) { return pane === null ? undefined : _knownToExist(machine, pane, path); };
+          };
+        };
+        var read = function (settled) {
+          return _rowLinkLines(term.buffer.active, bufRow, null, settled, lookupFor(layout ? layout.fresh() : null));
+        };
+        var first = read(false);
         if (first.pending.length === 0 || (isCurrent && !isCurrent())) {
           return callback(linksOn(first.lines, lineNumber));
         }
-        _withinWait(_checkExists(machine, where.paneId, first.pending)).then(function () {
+        var askPanes = function (panes) {
+          // Each pane is asked about its own paths, against its own directory.
+          var groups = [];
+          _rowLinkLines(term.buffer.active, bufRow, null, false, lookupFor(panes)).parts.forEach(function (part) {
+            if (!part.pending.length) return;
+            var pane = paneFor(panes, part.seg);
+            var group = groups.filter(function (g) { return g.pane === pane; })[0];
+            if (!group) groups.push(group = { pane: pane, paths: [] });
+            part.pending.forEach(function (path) {
+              if (group.paths.indexOf(path) < 0) group.paths.push(path);
+            });
+          });
+          return Promise.all(groups.map(function (group) {
+            return _checkExists(machine, group.pane, group.paths);
+          }));
+        };
+        var known = layout ? layout.fresh() : null;
+        var asked = !layout || known ? askPanes(known) : layout.load().then(askPanes);
+        _withinWait(asked).then(function () {
           // xterm asked again meanwhile (the pointer moved, the row was
           // repainted). That request answers for itself; a late answer here
           // would land in its place.
           if (seq !== latest) return;
           // Read the screen again: it may have changed while the machine answered.
-          callback(linksOn(_rowLinkLines(term.buffer.active, bufRow, lookup, true).lines, lineNumber));
+          callback(linksOn(read(true).lines, lineNumber));
         });
       },
     });
@@ -5568,8 +5729,10 @@ var FilePreview = (function () {
             if (window._showToast) window._showToast('终端来源尚未确认，请连接后重试');
             return;
           }
-          _resolvePaneForAction(paneId, resolvePaneId, function (livePaneId) {
-            _activateLink(f, origin ? origin.paneId : livePaneId, origin);
+          // The pane the link starts in: a relative path means what it means there.
+          var first = _logicalStrOffsetToTermPos(logical.rows, f.startCol);
+          actOnPane(first.x - 1, first.y - 1, function (pane, src) {
+            _activateLink(f, pane, src);
           });
         };
         var pieces = _rowRanges(logical.rows, f);
@@ -6458,6 +6621,7 @@ var FilePreview = (function () {
       hyperlinkRows: _hyperlinkRows,
       rowLinkLines: _rowLinkLines,
       segments: _segmentsOf,
+      paneAt: _paneAt,
       rowRanges: _rowRanges,
       hitTest: hitTest,
       knownToExist: _knownToExist,
