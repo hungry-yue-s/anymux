@@ -256,6 +256,91 @@ describe('a token a TUI broke where its row was full', () => {
   });
 });
 
+describe('a path a TUI broke where it may break one', () => {
+  // Codex wraps with textwrap on Unicode line breaking: a path breaks after a
+  // `/` or a hyphen, and the row ends there, short of the margin, because the
+  // next piece no longer fitted. "• " first, then a two-column hanging indent.
+  const FIRST = 'plugins/files/client/js/file-preview.js';
+  const SECOND = 'test/client/file-preview-links.test.js';
+  const codex = () => mkCells([
+    { text: '• I updated the link provider in plugins/files/client/js/' },
+    { text: '  file-preview.js:5218 and added tests in test/client/file-' },
+    { text: '  preview-links.test.js so that wrapped paths keep working.' },
+  ], 60);
+
+  it('is one link from every row although none is full, with or without the machine\'s word', () => {
+    const buf = codex();
+    // Not asked yet: the rows as they are, and what to ask.
+    expect(linkTexts(buf, unknown)).toEqual([
+      ['plugins/files/client/js/'], ['file-preview.js', 'test/client/file-'], ['preview-links.test.js']]);
+    expect(FP.linkLine(buf, 1, unknown, false).pending).toEqual([
+      FIRST, 'plugins/files/client/js/', 'file-preview.js', SECOND, 'test/client/file-', 'preview-links.test.js']);
+    // An older Node, a path the panel may not read: nobody can say.
+    expect(linkTexts(buf, unknown, true)).toEqual([[FIRST, SECOND], [FIRST, SECOND], [FIRST, SECOND]]);
+    expect(linkTexts(buf, (path) => path === FIRST || path === SECOND))
+      .toEqual([[FIRST, SECOND], [FIRST, SECOND], [FIRST, SECOND]]);
+  });
+
+  it('stays a directory when that is what the machine has', () => {
+    expect(linkTexts(codex(), (path) => path === 'plugins/files/client/js/')[0]).toEqual(['plugins/files/client/js/']);
+  });
+
+  it('reads the target Codex prints in brackets after a link\'s label', () => {
+    const buf = mkCells([
+      { text: '• The seam rule is in file-preview.js (plugins/files/client/js/' },
+      { text: '  file-preview.js:4811) and its tests are next to it.' },
+    ], 64);
+    expect(linkTexts(buf, unknown, true)).toEqual([['file-preview.js', FIRST], ['file-preview.js', FIRST]]);
+  });
+
+  it('reads through a tree prefix', () => {
+    const joined = 'plugins/terminal/client/js/terminal-fonts-data.js';
+    const buf = mkCells([
+      { text: '• Edited 2 files' },
+      { text: '  └ plugins/terminal/client/js/terminal-fonts-' },
+      { text: '    data.js (+12 -3)' },
+    ], 50);
+    expect(linkTexts(buf, unknown, true)).toEqual([[], [joined], [joined]]);
+  });
+
+  it('takes a box\'s inner edge for the right edge', () => {
+    const boxed = (first) => mkCells([
+      { text: first },
+      { text: '│ file-preview.js for the details         │' },
+    ], 44);
+    expect(linkTexts(boxed('│ see the code in plugins/files/client/js/ │'), unknown, true)).toEqual([[FIRST], [FIRST]]);
+    // Twelve columns were left: a wrapper would have put `file-` there.
+    expect(linkTexts(boxed('│ see plugins/files/client/js/             │'), unknown, true))
+      .toEqual([['plugins/files/client/js/'], ['file-preview.js']]);
+  });
+
+  it('is not made of a directory and the next word of the sentence', () => {
+    const buf = mkCells([
+      { text: '• The screenshots are under ~/Documents/notes/2026/screens/' },
+      { text: '  for later.' },
+    ], 60);
+    expect(linkTexts(buf, unknown, true)).toEqual([['~/Documents/notes/2026/screens/'], []]);
+  });
+
+  it('is left to the file system where the next piece would have fitted', () => {
+    const buf = mkCells([
+      { text: '$ ls plugins/files/client/js/' },
+      { text: 'file-preview.js  other.js' },
+    ], 80);
+    expect(linkTexts(buf, unknown, true)).toEqual([['plugins/files/client/js/'], ['file-preview.js', 'other.js']]);
+    expect(FP.linkLine(buf, 0, unknown, false).pending).toEqual([FIRST]);
+  });
+
+  it('does not continue a URL: one that ends in a slash is complete as often as not', () => {
+    const buf = mkCells([
+      { text: '• The documentation is hosted at https://example.com/docs/' },
+      { text: '  getting-started.md is the first page to read.' },
+    ], 60);
+    expect(linkTexts(buf, unknown, true)).toEqual([['https://example.com/docs/'], ['getting-started.md']]);
+    expect(FP.linkLine(buf, 0, unknown, false).pending).toEqual([]);
+  });
+});
+
 describe('rows that only look like one token stay apart', () => {
   it('a URL on its own row, then prose', () => {
     const buf = mkCells([
@@ -621,6 +706,64 @@ describe('the link provider', () => {
       const { term } = provide(mkCells([{ text: 'x' }], 20), { serverId: 'osc', paneId: '%1', isCurrent: () => false });
       term.options.linkHandler.activate({}, 'file:///home/u/notes.md');
       expect(W._showToast).toHaveBeenCalledWith('终端来源尚未确认，请连接后重试');
+    });
+
+    describe('that run over several rows', () => {
+      // xterm's own provider answers one row at a time; `cells` says which
+      // columns (from 1, both included) of each row lead where.
+      const URL = 'https://example.com/a/long/address';
+      function linked(rows, cols) {
+        const { term } = provide(mkCells(rows, cols), { serverId: 'osc', paneId: '%1' });
+        term._core = { _linkProviderService: { linkProviders: [{
+          _oscLinkService: {},
+          provideLinks(y, callback) {
+            callback((rows[y - 1].cells || []).map(([from, to, uri]) => (
+              { text: uri, range: { start: { x: from, y }, end: { x: to, y } } })));
+          },
+        }, {}] } };
+        return term;
+      }
+      const cellsOf = (ranges) => ranges.map((range) => [range.start.y, range.start.x, range.end.x]);
+      const at = (y, from, to) => ({ start: { x: from, y }, end: { x: to, y } });
+
+      it('finds the rows of a link a TUI wrapped, from whichever row the pointer is on', () => {
+        const term = linked([
+          { text: '• see https://example.com/a/', cells: [[7, 28, URL]] },
+          { text: '  long/', cells: [[3, 7, URL]] },
+          { text: '  address for more', cells: [[3, 9, URL]] },
+        ], 30);
+        expect(cellsOf(FP.hyperlinkRows(term, URL, at(1, 7, 28)))).toEqual([[2, 3, 7], [3, 3, 9]]);
+        expect(cellsOf(FP.hyperlinkRows(term, URL, at(2, 3, 7)))).toEqual([[3, 3, 9], [1, 7, 28]]);
+        expect(cellsOf(FP.hyperlinkRows(term, URL, at(3, 3, 9)))).toEqual([[2, 3, 7], [1, 7, 28]]);
+      });
+
+      it('finds the rest of a link the terminal wrapped, and one inside a tmux pane', () => {
+        const soft = linked([
+          { text: 'x'.repeat(20), cells: [[1, 20, URL]] },
+          { text: 'xxxx', wrapped: true, cells: [[1, 4, URL]] },
+        ], 20);
+        expect(cellsOf(FP.hyperlinkRows(soft, URL, at(1, 1, 20)))).toEqual([[2, 1, 4]]);
+        const split = linked([
+          { text: 'left pane │ see https://e.com/', cells: [[17, 30, URL]] },
+          { text: 'more left │   long/address', cells: [[15, 26, URL]] },
+        ], 30);
+        expect(cellsOf(FP.hyperlinkRows(split, URL, at(1, 17, 30)))).toEqual([[2, 15, 26]]);
+      });
+
+      it('leaves alone a row that leads elsewhere, or names the same address again', () => {
+        const term = linked([
+          { text: '  https://example.com/one', cells: [[3, 25, 'https://example.com/one']] },
+          { text: '  https://example.com/two', cells: [[3, 25, 'https://example.com/two']] },
+          { text: '  and again: one', cells: [[14, 16, 'https://example.com/two']] },
+        ], 30);
+        expect(FP.hyperlinkRows(term, 'https://example.com/one', at(1, 3, 25))).toEqual([]);
+        expect(FP.hyperlinkRows(term, 'https://example.com/two', at(2, 3, 25))).toEqual([]);
+      });
+
+      it('underlines one row, as xterm does, in a build without that provider', () => {
+        const { term } = provide(mkCells([{ text: 'x' }], 20), { serverId: 'osc', paneId: '%1' });
+        expect(FP.hyperlinkRows(term, URL, at(1, 1, 1))).toEqual([]);
+      });
     });
   });
 });

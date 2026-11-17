@@ -4744,7 +4744,8 @@ var FilePreview = (function () {
   //
   // _looseSeam reads two rows that way and says how sure it is:
   //   strong - the row is full at the right edge of its block and the token
-  //            would not have fitted on one row.
+  //            would not have fitted on one row; or the row ends at a break
+  //            opportunity and what follows could not have fitted after it.
   //   weak   - it could be one token.
   // _linkLine then decides. A path is asked about on the pane's machine: the
   // joined path existing joins the rows, and either row's own path existing
@@ -4757,12 +4758,25 @@ var FilePreview = (function () {
   var GUTTER_RE = new RegExp('^[\\s' + FRAME_CLASS + ']*');
   var GUTTER_FRAME_RE = new RegExp('[' + FRAME_CLASS + '](\\s*)$');
   var RIGHT_FRAME_RE = new RegExp('(\\s*)[' + FRAME_CLASS + '][\\s' + FRAME_CLASS + ']*$');
+  var FRAME_GLYPH_RE = new RegExp('[' + FRAME_CLASS + ']');
   var CJK_IDEOGRAPH_RE = /[一-鿿]/;
   var LOOSE_MAX_MARKER = 8;   // `10. `, `- [ ] `: how far left of its continuation a first row may start
   var LOOSE_MAX_TOKEN = 2048;
   var LOOSE_EDGE_MARGIN = 8;  // the right margin a TUI keeps
   var LOOSE_BLOCK_ROWS = 6;   // neighbours that show where a block's text ends
   var LOOSE_MAX_ROWS = 12;    // rows one link may be put together from
+  // Where a wrapper that breaks inside a path may do so (Unicode line breaking
+  // as Codex's textwrap applies it): after a `/` that a letter follows, after
+  // a hyphen between letters or digits, and next to an ideograph.
+  var BREAK_SEAM_RE = /\/[A-Za-z_]$|[A-Za-z0-9]-[A-Za-z0-9]$/;
+  var PIECE_END_RE = /\/(?=[A-Za-z_])|[A-Za-z0-9]-(?=[A-Za-z0-9])|(?=[一-鿿])/;
+
+  // What such a wrapper keeps together at the start of `head`: the text up to
+  // its first break opportunity.
+  function _firstPiece(head) {
+    var m = PIECE_END_RE.exec(head);
+    return m ? head.slice(0, m.index + m[0].length) : head;
+  }
 
   // A row without its frame: content is text[start, end). padLeft / padRight
   // count the spaces between a frame glyph and the content, -1 without a frame.
@@ -4855,13 +4869,24 @@ var FilePreview = (function () {
       return blockEdge;
     };
     var edge = exact || (a.padRight < 0 && above.length - endCol <= LOOSE_EDGE_MARGIN && atBlockEdge());
-    var strong = !cjkLead && longer && edge;
-    if (!strong && !edge && !LinkDetect.shouldJoinHardWrap(aText, true, bText) && !(longer && atBlockEdge())) {
+    // `es/12345`, `ing-started`, `v2`: not `for` or `and.`
+    var rest = /[\/.\-_=&?%#~+0-9]/.test(head.replace(/[.,;:!?)\]}>'"]+$/, ''));
+    // A wrapper that breaks after `/` and `-` leaves its row short instead: the
+    // row ends at the last break before the piece that no longer fitted. So
+    // when the piece the row below starts with would have run past the right
+    // edge, the break was the wrapper's, wherever the row above ends. A plain
+    // word there is more likely the sentence going on after a directory.
+    var limit = a.padRight < 0 ? above.length
+      : _advanceCol(above, 0, a.end + a.padRight) - Math.max(0, b.padLeft);
+    var forced = !cjkLead && rest && BREAK_SEAM_RE.test(tail.slice(-2) + head.charAt(0))
+      && endCol + _advanceCol(below, b.start, _firstPiece(head).length) - b.start > limit;
+    var full = !cjkLead && longer && edge;
+    if (!full && !forced && !edge && !LinkDetect.shouldJoinHardWrap(aText, true, bText) && !(longer && atBlockEdge())) {
       return null;
     }
-    // `es/12345`, `ing-started`, `v2`: not `for` or `and.`
-    var urlRest = /[\/.\-_=&?%#~+0-9]/.test(head.replace(/[.,;:!?)\]}>'"]+$/, ''));
-    return { strip: b.start, end: a.end, strong: strong, url: strong && (exact || urlRest), tail: tail, head: head };
+    // A URL has nothing to be checked against, and one that ends in `/` is
+    // complete as often as not: only a full row joins it.
+    return { strip: b.start, end: a.end, strong: full || forced, url: full && (exact || rest), tail: tail, head: head };
   }
 
   // What the rows of a seam name when each is read on its own: the path that
@@ -5150,13 +5175,112 @@ var FilePreview = (function () {
         });
       },
       // The text on screen is the program's choice; show where the link goes.
-      hover: function (_event, uri) {
+      hover: function (_event, uri, range) {
         if (term.element) term.element.title = uri;
+        _underlineRows(term, _hyperlinkRows(term, uri, range));
       },
       leave: function () {
         if (term.element) term.element.removeAttribute('title');
+        _underlineRows(term, []);
       },
     };
+  }
+
+  // xterm reports the cells a hyperlink has on one row as a link of their own,
+  // so under the pointer only that row is underlined, although every row
+  // opens the same address. The other rows are found and underlined here.
+
+  // xterm's own provider of hyperlinks, or null in a build that keeps it
+  // elsewhere: then one row is underlined, as xterm does by itself.
+  function _hyperlinkProvider(term) {
+    try {
+      var list = term._core._linkProviderService.linkProviders;
+      for (var i = 0; i < list.length; i++) {
+        if (list[i] && list[i]._oscLinkService && typeof list[i].provideLinks === 'function') return list[i];
+      }
+    } catch (_) { /* not this build */ }
+    return null;
+  }
+
+  // From cell `col` on in direction `dir` the row holds nothing but padding,
+  // up to its end or to a frame (a box, the border of a tmux pane).
+  function _onlyPadding(line, col, dir) {
+    for (; col >= 0 && col < line.length; col += dir) {
+      var cell = line.getCell(col);
+      var glyph = cell ? cell.getChars() : '';
+      if (glyph && glyph !== ' ') return FRAME_GLYPH_RE.test(glyph);
+    }
+    return true;
+  }
+
+  // The cells the hyperlink to `uri` has on the rows around `range` (its cells
+  // on one row, as xterm counts them: from 1, both ends included). A row
+  // belongs to the same link when it carries the same address, the upper of
+  // two rows ends with it and the lower one starts with it.
+  function _hyperlinkRows(term, uri, range) {
+    var provider = _hyperlinkProvider(term);
+    var buffer = term.buffer && term.buffer.active;
+    if (!provider || !buffer || !range) return [];
+    var linksOn = function (y) {
+      var found = [];
+      try {
+        provider.provideLinks(y, function (links) { found = links || []; });
+      } catch (_) { found = []; }
+      return found;
+    };
+    var rows = [];
+    [1, -1].forEach(function (dir) {
+      var cur = range;
+      for (var n = 0; n < LOOSE_MAX_ROWS; n++) {
+        var here = buffer.getLine(cur.start.y - 1);
+        var there = buffer.getLine(cur.start.y - 1 + dir);
+        if (!here || !there) return;
+        if (!_onlyPadding(here, dir > 0 ? cur.end.x : cur.start.x - 2, dir)) return;
+        var next = null;
+        linksOn(cur.start.y + dir).forEach(function (link) {
+          if (next || link.text !== uri) return;
+          if (_onlyPadding(there, dir > 0 ? link.range.start.x - 2 : link.range.end.x, -dir)) next = link.range;
+        });
+        if (!next) return;
+        rows.push(next);
+        cur = next;
+      }
+    });
+    return rows;
+  }
+
+  var _linkUnderlines = typeof WeakMap === 'function' ? new WeakMap() : null;
+
+  // Underline `ranges` the way xterm underlines the row under the pointer, in
+  // place of whatever this terminal had underlined before.
+  function _underlineRows(term, ranges) {
+    if (!_linkUnderlines) return;
+    (_linkUnderlines.get(term) || []).forEach(function (bar) { bar.remove(); });
+    _linkUnderlines.delete(term);
+    var screen = ranges.length && term.element && typeof term.element.querySelector === 'function'
+      ? term.element.querySelector('.xterm-screen') : null;
+    if (!screen) return;
+    var box = screen.getBoundingClientRect();
+    var cellWidth = box.width / term.cols;
+    var cellHeight = box.height / term.rows;
+    if (!(cellWidth > 0) || !(cellHeight > 0)) return;
+    var first = term.buffer.active.viewportY;
+    var color = (term.options && term.options.theme && term.options.theme.foreground) || 'currentColor';
+    var ratio = window.devicePixelRatio || 1;
+    var bars = [];
+    ranges.forEach(function (range) {
+      var row = range.start.y - 1 - first;
+      if (row < 0 || row >= term.rows) return;
+      var bar = document.createElement('div');
+      bar.style.cssText = 'position:absolute;pointer-events:none;z-index:6;height:1px;'
+        + 'left:' + (range.start.x - 1) * cellWidth + 'px;'
+        + 'top:' + ((row + 1) * cellHeight - 1 - 1 / ratio) + 'px;'
+        + 'width:' + (range.end.x - range.start.x + 1) * cellWidth + 'px';
+      bar.style.background = color;
+      screen.appendChild(bar);
+      bars.push(bar);
+    });
+    if (bars.length) _linkUnderlines.set(term, bars);
   }
 
   function _openWeb(href) {
@@ -6130,6 +6254,7 @@ var FilePreview = (function () {
       getLogicalLine: _getLogicalLine,
       linkLine: _linkLine,
       looseSeam: _looseSeam,
+      hyperlinkRows: _hyperlinkRows,
       hitTest: hitTest,
       knownToExist: _knownToExist,
       checkExists: _checkExists,

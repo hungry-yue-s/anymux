@@ -307,6 +307,12 @@ node-pty 报告退出比进程消失晚约 1 秒（中位 1.0 到 1.4 秒），�
 
 **边界与关闭方法。** `FORCE_HYPERLINK` 对所有读它的程序生效，包括输出被重定向到文件或管道的时候，那时文件里会多出转义序列。不想要就在 `~/.tmux.conf` 里写 `set-environment -g FORCE_HYPERLINK 0`，面板不会覆盖。没验证的：Claude Code 给哪些文字发 OSC 8、换行后的续行上是否保留，只从它的程序文件里看到网址和 Markdown 链接会发；所以页面上的换行合并（CLAUDE.md「终端链接契约」）仍然需要。
 
+**Codex（2026-11-17 补充）。** 用户在 Mac 上的 Codex 里实测：网址能整条打开，但悬停时下划线只画指针所在的那一行。读 Codex 的源码（`codex-rs/tui/src` 的 `wrapping.rs`、`insert_history.rs`、`terminal_hyperlinks.rs`、`markdown_render/local_links.rs`）得到的结论，没有在活的 Codex 窗格里逐项核对：
+
+- 网址它自己发 OSC 8，每行一对转义序列，不带 id。tmux 给每个不带 id 的链接分配一个新的外部 id（`vendor/tmux/hyperlinks.c`），所以到 xterm 时同一条链接的每一行是不同的链接；xterm 的提供者本来也只按行报告范围。页面按“相同地址、上一行以它结尾、下一行以它开头”把这些行认作同一条，其余行的下划线自己画（`_hyperlinkRows`、`_underlineRows`）。
+- 文件路径它不发 OSC 8（源码注明普通 Markdown 的文件链接不升级为超链接），Markdown 链接显示成 `标签 (相对会话目录的路径:行号)`，仍然靠页面识别。
+- 不含网址的行用 textwrap 按 Unicode 断行规则换行（first-fit，宽度是终端全宽，续行缩进两格）：路径在 `/` 后接字母处、字母数字之间的 `-` 后断开，行停在断点上、不顶到右边界。原先的强接缝只认“行满”，这种断法全落在弱接缝上，只有文件系统答得上时才合并：按这套规则生成 60–160 列的样例，答不上时 126 处里只接上 21 处。现在“续行的第一段放不进上一行剩下的宽度”也算强接缝，同一批样例（后来加到 217 处）在答得上、答不上、都不存在三种情况下全部接上，没有多接。
+
 ## 捕获环境备注
 
 两条和产物无关但值得记下来的事。CDP 的 `Page.startScreencast` 在这台共享 Chrome 上返回的帧偶发无样式，所以所有动画改成定时 `page.screenshot` 静帧合成，脚本在 `.playwright-mcp/readme-shot/shot.mjs`。截图里的主机名、内网和公网 IP、服务器名、进程名都在捕获期做了 DOM 文本替换脱敏，tmux 状态栏的主机名用 session 级 `status-right` 覆盖掉，规则见同目录 `shot.mjs` 的 `SANITIZE_RULES`。
