@@ -38,6 +38,21 @@ describe('Fix 1 — path:line:col', () => {
   });
 });
 
+describe('a path that starts in a hidden directory', () => {
+  it('is a path, also in brackets after Chinese', () => {
+    expect(texts('完整方案已在右侧打开 (.anymux/docs/anymux-label-proposal.md)。'))
+      .toEqual(['.anymux/docs/anymux-label-proposal.md']);
+    expect(texts('see .github/workflows/ci.yml now')).toEqual(['.github/workflows/ci.yml']);
+    const l = one('.claude/settings.json:12');
+    expect([l.text, l.lineRef]).toEqual(['.claude/settings.json', 12]);
+  });
+  it('is not made of a number, an ellipsis or the end of a sentence', () => {
+    expect(find('a ratio of .5/10')).toHaveLength(0);
+    expect(find('wait...github/foo')).toHaveLength(0);
+    expect(find('done.src/foo')).toHaveLength(0);
+  });
+});
+
 describe('Fix 2 — www / localhost', () => {
   it('www. -> https href', () => {
     const l = one('see www.example.com/x now');

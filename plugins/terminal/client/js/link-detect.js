@@ -64,7 +64,10 @@ var LinkDetect = (function () {
   var WIN_ABS_RE = re(NPW + '(?:[A-Za-z]:\\\\|[A-Z]:/)' + PB + '+');
   var TILDE_RE = re(NP + '~[a-zA-Z0-9_\\-]*/' + PB + '+(?:/' + PB + '+)*');
   var REL_RE = re(NP + '\\.\\.?/' + PB + '+(?:/' + PB + '+)*');
-  var BARE_RE = re(NP + '[a-zA-Z0-9_\\-]+(?:/' + PB + '+)+');
+  // The first directory may be a hidden one (`.anymux/docs/a.md`,
+  // `.github/workflows/ci.yml`); its name starts with a letter or `_`, so a
+  // number such as `.5/10` is not taken for one.
+  var BARE_RE = re(NP + '(?:\\.[a-zA-Z_][\\w\\-]*|[a-zA-Z0-9_\\-]+)(?:/' + PB + '+)+');
   // CJK allowed only in the LEADING name; interior dotted segments + the
   // trailing lookahead stay ASCII so `报告.pdf和笔记.txt` splits into two (D17).
   var FILE_TAIL = '(?:\\.[\\w\\-]+)*\\.[a-z][a-z0-9]{0,5}(?![\\w\\-/.])';
