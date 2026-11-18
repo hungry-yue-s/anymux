@@ -6,6 +6,7 @@ import { BLOCKS, WORKSPACE_BLOCKS } from '../helpers/blocks.js';
 const INSTANCE = '1873:1700000000';
 const PREVIEW = fs.readFileSync('plugins/files/client/js/file-preview.js', 'utf8');
 const HOST = fs.readFileSync('plugins/ui/client/js/block-host.js', 'utf8');
+const CSS = fs.readFileSync('plugins/ui/client/css/blocks.css', 'utf8');
 
 const COMMIT = 'c1c1c1c1c1c1c1c1';
 const NOTES_DIFF = 'diff --git a/notes.md b/notes.md\nindex 1..2 100644\n--- a/notes.md\n+++ b/notes.md\n@@ -1,2 +1,2 @@\n-# One\n+# Two\n same\n';
@@ -118,6 +119,35 @@ describe('agent commit previews', () => {
     expect(win.NotificationPanel.unreadCount()).toBe(1);
   });
 
+  it('keeps docked Git to its existing toolbar and puts window actions in More', async () => {
+    const { win, doc } = setup(); await settled();
+    const style = doc.createElement('style'); style.textContent = CSS; doc.head.appendChild(style);
+    const header = () => doc.querySelector('.blk-frame > .blk-frame-head');
+    expect(win.getComputedStyle(header()).display).toBe('none');
+    expect(doc.querySelector('.fp-dock-actions')).toBeNull();
+    const menu = doc.querySelector('.git-bar .blk-window-menu');
+    const summary = menu.querySelector('summary');
+    const action = (label) => [...menu.querySelectorAll('button')].find((b) => b.textContent === label);
+    summary.click(); expect(menu.open).toBe(true);
+    menu.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    expect(menu.open).toBe(false);
+    expect(doc.querySelector('.fp-dock')).not.toBeNull();
+    summary.click(); doc.querySelector('.git-message').dispatchEvent(new win.MouseEvent('mousedown', { bubbles: true }));
+    expect(menu.open).toBe(false);
+
+    summary.click(); action('浮动窗口').click();
+    expect(menu.open).toBe(false);
+    expect(win.getComputedStyle(header()).display).toBe('flex');
+    doc.querySelector('.blk-mode-float [aria-label="停靠到右侧"]').click();
+    summary.click(); action('最大化').click();
+    expect(doc.querySelector('.ms-main > .blk-mode-max')).not.toBeNull();
+    doc.querySelector('.blk-mode-max [aria-label="还原（Esc）"]').click();
+    expect(win.getComputedStyle(header()).display).toBe('none');
+    summary.click(); action('隐藏右侧边栏（Esc）').click();
+    expect(doc.querySelector('.fp-dock')).toBeNull();
+    doc.querySelector('.fp-dock-restore').click();
+    expect(doc.querySelector('.blk-window-menu')).toBe(menu);
+  });
   it('opens the requested commit directly, retaining the repository draft', async () => {
     const { win, doc, get, frame } = setup();
     await settled();

@@ -136,7 +136,7 @@
 
 /* --- BlockHost: dock, float, maximize, sheet ---------------------------------------------- */
 
-/* Blocks and files share tabs; window controls belong to their content header. */
+/* Blocks and files share tabs; docked tools use their existing content toolbar. */
 .fp-dock-panels > .blk-frame { width: 100%; height: 100%; }
 /* Every tab says what it is: a block by its own icon, a file by its kind. */
 .fp-dock-tab { display: flex; align-items: center; gap: 6px; }
@@ -165,9 +165,12 @@
 .blk-frame-resize { display: none; }
 
 .blk-mode-dock { flex: 1; }
-.blk-mode-dock > .blk-frame-head { padding: 4px 8px; gap: 6px; background: var(--b-panel); }
-.blk-mode-dock > .blk-frame-head .blk-frame-icon { display: none; }
-.blk-mode-dock > .blk-frame-head .blk-frame-title { font-size: 12px; font-weight: 400; color: var(--b-muted); }
+.blk-mode-dock > .blk-frame-head { display: none; }
+.blk-window-menu { position: relative; flex: none; }
+.blk-window-menu > summary { list-style: none; }
+.blk-window-menu > summary::-webkit-details-marker { display: none; }
+.blk-window-menu > .blk-menu { position: absolute; top: calc(100% + 6px); right: 0; z-index: 10; min-width: 180px; }
+.blk-frame:not(.blk-mode-dock) .blk-window-menu { display: none; }
 .blk-mode-float { position: absolute; z-index: 30; border: 1px solid var(--b-line-strong); border-radius: 12px; overflow: hidden; box-shadow: var(--b-shadow); }
 .blk-mode-float > .blk-frame-head { cursor: grab; }
 body.blk-dragging .blk-mode-float > .blk-frame-head { cursor: grabbing; }

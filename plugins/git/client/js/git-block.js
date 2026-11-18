@@ -1437,6 +1437,7 @@
 
     return {
       el: root,
+      toolbar: right,
       onShow: function () { acknowledgeCommit(); if (!firstLoad) load(false); },
       update: function (params) {
         if (params && params.commit) {

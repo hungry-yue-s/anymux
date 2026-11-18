@@ -41,6 +41,7 @@ var BlockHost = (function () {
     max: '<path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5"/>',
     restore: '<path d="M3 8h5V3M21 8h-5V3M3 16h5v5M21 16h-5v5"/>',
     close: '<path d="M18 6 6 18M6 6l12 12"/>',
+    more: '<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>',
   };
 
   function svg(paths) {
@@ -394,7 +395,7 @@ var BlockHost = (function () {
     actions.replaceChildren();
     var mode = effectiveMode(instance);
     if (mode === 'dock') {
-      actions.append.apply(actions, sidebarActions(instance));
+      if (instance.impl.toolbar) instance.impl.toolbar.appendChild(dockMenu(instance));
       return;
     }
     if (mode === 'sheet') {
@@ -491,12 +492,36 @@ var BlockHost = (function () {
 
   // --- sidebar ---------------------------------------------------------------
 
-  function sidebarActions(instance) {
-    return [
-      iconButton('float', '浮动窗口', function () { setMode(instance.id, 'float'); }),
-      iconButton('max', '最大化', function () { setMode(instance.id, 'max'); }),
-      iconButton('hide', '隐藏右侧边栏（Esc）', function () { sidebar().hide(); }),
-    ];
+  function dockMenu(instance) {
+    if (instance.dockMenu) return instance.dockMenu;
+    var menu = el('details', 'blk-window-menu');
+    var more = el('summary', 'blk-btn blk-icon-btn');
+    more.innerHTML = iconMarkup('more');
+    more.setAttribute('aria-label', '更多窗口操作');
+    more.title = '更多窗口操作';
+    var actions = el('div', 'blk-menu');
+    [
+      ['浮动窗口', function () { setMode(instance.id, 'float'); }],
+      ['最大化', function () { setMode(instance.id, 'max'); }],
+      ['隐藏右侧边栏（Esc）', function () { sidebar().hide(); }],
+    ].forEach(function (action) {
+      var button = el('button', 'blk-menu-item', action[0]);
+      button.type = 'button';
+      button.addEventListener('click', function () { menu.open = false; more.focus(); action[1](); });
+      actions.appendChild(button);
+    });
+    menu.addEventListener('keydown', function (e) {
+      if (e.key !== 'Escape' || !menu.open) return;
+      e.preventDefault();
+      e.stopPropagation();
+      menu.open = false;
+      more.focus();
+    });
+    instance.closeDockMenu = function (e) { if (!menu.contains(e.target)) menu.open = false; };
+    document.addEventListener('mousedown', instance.closeDockMenu, true);
+    menu.append(more, actions);
+    instance.dockMenu = menu;
+    return menu;
   }
 
   /** Tells the sidebar which blocks belong in its tab strip right now. */
@@ -737,6 +762,7 @@ var BlockHost = (function () {
   }
 
   function discard(instance) {
+    if (instance.closeDockMenu) document.removeEventListener('mousedown', instance.closeDockMenu, true);
     if (instance.impl && typeof instance.impl.dispose === 'function') {
       try { instance.impl.dispose(); } catch (_) { /* best effort */ }
     }

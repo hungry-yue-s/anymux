@@ -234,29 +234,6 @@ describe('one sidebar for files and tool blocks', () => {
     expect(doc.querySelector('.fp-dock-panels > .fp-modal')).toBeNull();
   });
 
-  it('keeps window controls in the block header below the shared tabs', async () => {
-    const { doc, host, preview } = setup();
-    await dockFile(preview, '/tmp/one.md');
-    host.open('tool', { name: 'git' });
-    const header = () => doc.querySelector('.fp-dock-panels > .blk-frame > .blk-frame-head');
-    expect(doc.querySelector('.fp-dock-actions')).toBeNull();
-    expect([...header().querySelectorAll('button')].map((b) => b.getAttribute('aria-label')))
-      .toEqual(['浮动窗口', '最大化', '隐藏右侧边栏（Esc）']);
-
-    header().querySelector('[aria-label="浮动窗口"]').click();
-    expect(doc.querySelector('.ms-main > .blk-mode-float')).not.toBeNull();
-    doc.querySelector('.blk-mode-float [aria-label="停靠到右侧"]').click();
-    header().querySelector('[aria-label="最大化"]').click();
-    expect(doc.querySelector('.ms-main > .blk-mode-max')).not.toBeNull();
-    doc.querySelector('.blk-mode-max [aria-label="还原（Esc）"]').click();
-    header().querySelector('[aria-label="隐藏右侧边栏（Esc）"]').click();
-    expect(doc.querySelector('.fp-dock')).toBeNull();
-    expect(tabNames(doc)).toEqual([]);
-    doc.querySelector('.fp-dock-restore').click();
-    expect(tabNames(doc)).toEqual(['one.md', 'Tool']);
-    expect(header()).not.toBeNull();
-  });
-
   it('tells a block when it comes to the front', async () => {
     const { doc, host, preview, shown } = setup();
     await dockFile(preview, '/tmp/one.md');

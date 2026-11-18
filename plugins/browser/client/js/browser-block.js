@@ -128,6 +128,7 @@
     if (api.params.url) navigate(api.params.url); else render();
     return {
       el: root,
+      toolbar: bar,
       update: function (params) { if (params && params.url) navigate(params.url); },
       onShow: function () { if (index < 0) renderStart(); },
     };
