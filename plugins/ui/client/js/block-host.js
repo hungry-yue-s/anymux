@@ -393,6 +393,10 @@ var BlockHost = (function () {
     var actions = instance.actionsEl;
     actions.replaceChildren();
     var mode = effectiveMode(instance);
+    if (mode === 'dock') {
+      actions.append.apply(actions, sidebarActions(instance));
+      return;
+    }
     if (mode === 'sheet') {
       actions.appendChild(iconButton('close', '关闭', function () { close(instance.id); }, 'blk-frame-close'));
       return;
@@ -515,7 +519,6 @@ var BlockHost = (function () {
         active: instance.id === state.active,
         unread: instance.unread,
         arrivalId: instance.arrivalId,
-        actions: sidebarActions(instance),
         onClose: function () { close(instance.id); },
         onDoubleClick: function () { setMode(instance.id, 'max'); },
       };

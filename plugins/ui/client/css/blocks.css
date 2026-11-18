@@ -6,7 +6,7 @@
   --b-font-mono: "Anymux Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   --b-font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
 }
-.blk-frame, .fp-dock-actions, .blk-picker-overlay, .blk-dialog-overlay, .blk-db, .blk-board, .blk-editor, .blk-nb,
+.blk-frame, .blk-picker-overlay, .blk-dialog-overlay, .blk-db, .blk-board, .blk-editor, .blk-nb,
 .blk-difffile, .cmd-palette-overlay, .pane-git-chip, .ms-toast {
   --b-bg: var(--workspace-bg, var(--bg-primary));
   --b-panel: var(--workspace-panel, var(--bg-card));
@@ -136,8 +136,7 @@
 
 /* --- BlockHost: dock, float, maximize, sheet ---------------------------------------------- */
 
-/* Docked blocks are tabs in the sidebar they share with file previews. A block
-   has no file header, so its window controls sit at the end of the tab strip. */
+/* Blocks and files share tabs; window controls belong to their content header. */
 .fp-dock-panels > .blk-frame { width: 100%; height: 100%; }
 /* Every tab says what it is: a block by its own icon, a file by its kind. */
 .fp-dock-tab { display: flex; align-items: center; gap: 6px; }
@@ -151,12 +150,6 @@
 .fp-dock-tab-item[data-kind="table"], .fp-dock-tab-item[data-kind="changes"], .fp-dock-tab-item[data-kind="board"] { --tab-kind: var(--accent-green); }
 .fp-dock-tab-item[data-kind="database"], .fp-dock-tab-item[data-kind="archive"], .fp-dock-tab-item[data-kind="folder"] { --tab-kind: var(--accent-yellow); }
 .fp-dock-tab-item.is-busy .blk-svg { animation: blk-pulse 1s ease-in-out infinite; }
-.fp-dock-actions { position: absolute; top: 0; right: 0; z-index: 2; display: none; align-items: center; gap: 2px; height: 36px; padding: 0 6px; }
-.fp-dock-has-actions > .fp-dock-actions { display: flex; }
-.fp-dock-has-actions > .fp-dock-tabs { padding-right: 96px; }
-.fp-dock-actions .blk-icon-btn { display: inline-grid; place-items: center; width: 26px; height: 26px; border: 0; border-radius: 6px; cursor: pointer; }
-.fp-dock-actions .blk-icon-btn:hover { background: var(--b-hover); color: var(--b-text); }
-.fp-dock-actions .blk-icon-btn:focus-visible { outline: 2px solid var(--b-accent); outline-offset: -2px; }
 
 .blk-frame { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--b-panel); color: var(--b-text); font: 13px/1.45 var(--b-font-ui); }
 .blk-frame[hidden] { display: none !important; }
@@ -172,7 +165,9 @@
 .blk-frame-resize { display: none; }
 
 .blk-mode-dock { flex: 1; }
-.blk-mode-dock > .blk-frame-head { display: none; }
+.blk-mode-dock > .blk-frame-head { padding: 4px 8px; gap: 6px; background: var(--b-panel); }
+.blk-mode-dock > .blk-frame-head .blk-frame-icon { display: none; }
+.blk-mode-dock > .blk-frame-head .blk-frame-title { font-size: 12px; font-weight: 400; color: var(--b-muted); }
 .blk-mode-float { position: absolute; z-index: 30; border: 1px solid var(--b-line-strong); border-radius: 12px; overflow: hidden; box-shadow: var(--b-shadow); }
 .blk-mode-float > .blk-frame-head { cursor: grab; }
 body.blk-dragging .blk-mode-float > .blk-frame-head { cursor: grabbing; }
@@ -636,7 +631,7 @@ body.blk-dragging iframe, body.blk-resizing iframe, body.fp-side-resizing iframe
      float   menus, dialogs, floating and maximized blocks: nearly opaque
    Only surfaces with content moving behind them blur: a blur inside a scrolling
    pane costs every scrolled frame. */
-html[data-native-transparency] :is(.blk-frame, .fp-dock-actions, .blk-dialog-overlay) {
+html[data-native-transparency] :is(.blk-frame, .blk-dialog-overlay) {
   --g-well: rgba(0, 0, 0, .16);
   --g-bar: color-mix(in srgb, var(--workspace-panel) 24%, transparent);
   --g-raised: color-mix(in srgb, var(--workspace-panel) 46%, transparent);
@@ -650,7 +645,7 @@ html[data-native-transparency] :is(.blk-frame, .fp-dock-actions, .blk-dialog-ove
   --b-line-strong: color-mix(in srgb, var(--workspace-text) 20%, transparent);
   --b-accent-soft: color-mix(in srgb, var(--b-accent) 24%, transparent);
 }
-html[data-native-transparency][data-color-scheme="light"] :is(.blk-frame, .fp-dock-actions, .blk-dialog-overlay) {
+html[data-native-transparency][data-color-scheme="light"] :is(.blk-frame, .blk-dialog-overlay) {
   --g-well: rgba(0, 0, 0, .045);
   --g-bar: color-mix(in srgb, var(--workspace-panel) 46%, transparent);
   --g-raised: color-mix(in srgb, var(--workspace-panel) 68%, transparent);
@@ -658,7 +653,7 @@ html[data-native-transparency][data-color-scheme="light"] :is(.blk-frame, .fp-do
   --g-edge: rgba(255, 255, 255, .55);
 }
 @media (prefers-reduced-transparency: reduce) {
-  html[data-native-transparency] :is(.blk-frame, .fp-dock-actions, .blk-dialog-overlay) {
+  html[data-native-transparency] :is(.blk-frame, .blk-dialog-overlay) {
     --g-well: color-mix(in srgb, var(--workspace-bg) 80%, transparent);
     --g-bar: color-mix(in srgb, var(--workspace-panel) 80%, transparent);
     --g-raised: var(--workspace-panel);

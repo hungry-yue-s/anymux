@@ -882,12 +882,6 @@ var FilePreview = (function () {
       var replacement = bar.querySelector('[data-tab-id="' + focusedId + '"] ' + (focusWasClose ? '.fp-dock-tab-close' : '.fp-dock-tab'));
       if (replacement) replacement.focus();
     }
-    // A block has no file header, so its window controls sit in the strip.
-    var active = _activeDockTab();
-    var blockActions = active && active.block && active.block.actions ? active.block.actions : [];
-    var actionsBox = _dockOverlay.querySelector('.fp-dock-actions');
-    if (actionsBox) actionsBox.replaceChildren.apply(actionsBox, blockActions);
-    _dockOverlay.classList.toggle('fp-dock-has-actions', blockActions.length > 0);
   }
 
   function _ensureDockOverlay() {
@@ -911,10 +905,7 @@ var FilePreview = (function () {
     tabs.setAttribute('aria-label', '\u6587\u4EF6\u9884\u89C8\u6807\u7B7E');
     var panels = document.createElement('div');
     panels.className = 'fp-dock-panels';
-    var actions = document.createElement('div');
-    actions.className = 'fp-dock-actions';
     _dockOverlay.appendChild(tabs);
-    _dockOverlay.appendChild(actions);
     _dockOverlay.appendChild(panels);
   }
 
