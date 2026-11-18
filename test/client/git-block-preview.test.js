@@ -226,6 +226,18 @@ describe('agent commit previews', () => {
     expect(win.BlockHost._test.instances()).toHaveLength(1);
   });
 
+  it('routes a commit to its validated window when the source pane is unknown', async () => {
+    const { win } = setup(); await settled();
+    win.AppShell = { workspace: () => ({ instanceId: INSTANCE, sessions: [{ id: '$1', windows: [
+      { id: '@2', panes: [{ id: '%7' }] },
+    ] }] }) };
+    const addPreview = vi.fn(); win.NotificationPanel = { addPreview };
+    await win.PanelSlots.openers.get('open-git').run({ serverId: 'local', path: '/repo', paneId: null, windowId: '@2', instanceId: INSTANCE, commit: COMMIT });
+    expect(addPreview.mock.calls[0][0].target).toMatchObject({ windowId: '@2', paneId: null });
+    const key = 'anymux_window_blocks_v1:' + encodeURIComponent(['local', INSTANCE, '@2'].join('\0'));
+    expect(JSON.parse(win.localStorage.getItem(key)).blocks[0].params.commit).toBe(COMMIT);
+  });
+
   it('retains unread state in a hidden browser and highlights it when the browser returns', async () => {
     const { win, doc } = setup(); await settled();
     Object.defineProperty(doc, 'visibilityState', { value: 'hidden', configurable: true });

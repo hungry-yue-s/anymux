@@ -61,9 +61,8 @@
         (session.windows || []).forEach(function (win) {
           if (win.id !== target.windowId) return;
           var panes = win.panes || [];
-          var pane = panes.filter(function (p) { return p.id === target.paneId; })[0]
-            || panes.filter(function (p) { return p.active; })[0] || panes[0];
-          if (pane) current = Object.assign({}, target, { sessionId: session.id, paneId: pane.id });
+          var pane = panes.filter(function (p) { return p.id === target.paneId; })[0];
+          if (panes.length) current = Object.assign({}, target, { sessionId: session.id, paneId: pane ? pane.id : null });
         });
       });
       if (!current) return modal();
@@ -112,9 +111,9 @@
     event = Object.assign({}, event, { serverId: serverId });
     var paneIds = Array.isArray(event.paneIds) && event.paneIds.length ? event.paneIds : (event.paneId ? [event.paneId] : []);
     var workspace = window.AppShell && AppShell.workspace ? AppShell.workspace(serverId) : null;
-    var target = documentTarget(serverId, paneIds, workspace);
-    var resolveTarget = target || !paneIds.length ? Promise.resolve(target)
-      : ui.client(serverId).get('/api/workspace').then(function (workspace) { return documentTarget(serverId, paneIds, workspace); }, function () { return null; });
+    var target = documentTarget(serverId, paneIds, workspace, event);
+    var resolveTarget = target || (!paneIds.length && !event.windowId) ? Promise.resolve(target)
+      : ui.client(serverId).get('/api/workspace').then(function (workspace) { return documentTarget(serverId, paneIds, workspace, event); }, function () { return null; });
     return resolveTarget.then(function (target) {
       if (!window.FilePreview || !target) { noticeDocument(event, target); return; }
       var opts = Object.assign({}, target, { activate: event.activate !== false, automatic: true,

@@ -1656,9 +1656,9 @@
     var serverId = event.serverId || ui.currentContext().serverId;
     var workspace = window.AppShell && AppShell.workspace ? AppShell.workspace(serverId) : null;
     var paneIds = event.paneId ? [event.paneId] : [];
-    var target = ui.windowTarget(serverId, paneIds, workspace);
+    var target = ui.windowTarget(serverId, paneIds, workspace, event);
     var resolveTarget = target ? Promise.resolve(target)
-      : ui.client(serverId).get('/api/workspace').then(function (data) { return ui.windowTarget(serverId, paneIds, data); });
+      : ui.client(serverId).get('/api/workspace').then(function (data) { return ui.windowTarget(serverId, paneIds, data, event); });
     return resolveTarget.then(function (target) {
       var result = target ? BlockHost.openInWindow('git', { path: event.path, commit: event.commit }, target) : 'unavailable';
       var short = event.commit.slice(0, 8);

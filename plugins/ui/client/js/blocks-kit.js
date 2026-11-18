@@ -421,16 +421,19 @@ var Blocks = (function () {
    * with a new route there is no answer: all it knows is about the window being left.
    * `key` changes whenever an answer found for this one no longer applies.
    */
-  function windowTarget(serverId, paneIds, workspace) {
+  function windowTarget(serverId, paneIds, workspace, source) {
+    source = source || {};
+    if (source.instanceId && (!workspace || workspace.instanceId !== source.instanceId)) return null;
     var key = window.FilePreview && FilePreview.blockDock && FilePreview.blockDock.context();
     var parts = key ? key.split('\u0000') : [];
     var targets = [];
     (workspace && workspace.sessions || []).forEach(function (session) {
       (session.windows || []).forEach(function (win) {
+        if (source.windowId && win.id !== source.windowId) return;
         var pane = (win.panes || []).filter(function (p) { return paneIds.indexOf(p.id) >= 0; })[0];
-        if (pane) targets.push({ serverId: serverId, sessionId: session.id, windowId: win.id,
+        if (pane || source.windowId) targets.push({ serverId: serverId, sessionId: session.id, windowId: win.id,
           instanceId: workspace.instanceId || (parts[0] === serverId ? parts[1] : null),
-          paneId: pane.id, windowName: win.name, session: session.name, windowIndex: win.index });
+          paneId: pane ? pane.id : null, windowName: win.name, session: session.name, windowIndex: win.index });
       });
     });
     return targets.filter(function (target) { return parts[0] === serverId && target.windowId === parts[2]; })[0] || targets[0] || null;

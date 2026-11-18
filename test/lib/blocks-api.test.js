@@ -12,6 +12,7 @@ import {
 import { createSqliteRouter, quoteIdent } from '../../lib/api/sqlite.js';
 import { createOpenRouter, createNotebookRouter } from '../../lib/api/open.js';
 import { IS_WINDOWS, toPosixPath } from '../../lib/msys.js';
+import { resolvePreviewSource } from '../../lib/preview-source.js';
 
 // Paths in the API are the ones panes show: MSYS paths on Windows.
 const apiPath = (native) => (IS_WINDOWS ? toPosixPath(native) : native);
@@ -27,13 +28,19 @@ beforeAll(async () => {
   const pathGuard = createPathGuard(roots);
   events = [];
   gitEvents = [];
+  const sourceDeps = {
+    workspace: { getWorkspace: async () => ({ instanceId: '1:1', complete: true,
+      sessions: [{ id: '$1', windows: [{ id: '@1', panes: [{ id: '%2' }] }] }] }) },
+    tmux: { getServerInstance: async () => '1:1', listPaneCommands: async () => [{ paneId: '%2', path: apiPath(dir) }] },
+  };
+  const resolveSource = source => resolvePreviewSource(sourceDeps, source);
   app = express();
   app.use(express.json());
   app.use('/api/files', createFilesRouter(roots));
-  app.use('/api/git', createGitRouter({ pathGuard, generateMessage: async () => null, broadcast: (event) => gitEvents.push(event) }));
+  app.use('/api/git', createGitRouter({ pathGuard, resolveSource, generateMessage: async () => null, broadcast: (event) => gitEvents.push(event) }));
   app.use('/api/sqlite', createSqliteRouter({ pathGuard }));
   app.use('/api/notebook', createNotebookRouter({ pathGuard, run: async () => ({ ok: true }) }));
-  app.use('/api/open', createOpenRouter({ pathGuard, broadcast: (event) => events.push(event) }));
+  app.use('/api/open', createOpenRouter({ pathGuard, resolveSource, broadcast: (event) => events.push(event) }));
 });
 
 afterAll(async () => {
@@ -119,7 +126,7 @@ describe('git block API', () => {
     const res = await request(app).post('/api/git/open').send({ path: path + '/a.txt', paneId: '%2', commit: hash.slice(0, 8) });
     expect(res.status).toBe(200);
     expect(res.body.data).toMatchObject({ path, commit: hash });
-    expect(gitEvents.at(-1)).toEqual({ type: 'open-git', path, paneId: '%2', commit: hash });
+    expect(gitEvents.at(-1)).toEqual({ type: 'open-git', path, paneId: '%2', windowId: '@1', instanceId: '1:1', commit: hash });
     expect(execFileSync('git', ['-C', repo, 'status', '--porcelain'], { encoding: 'utf8' })).toBe('');
     expect(execFileSync('git', ['-C', repo, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim()).toBe(hash);
     for (const commit of ['--all', 'main', 'HEAD~1', '00000000']) {
@@ -130,6 +137,12 @@ describe('git block API', () => {
     }
     expect((await request(app).post('/api/git/open').send({ path, paneId: 'oops', commit: hash })).status).toBe(400);
     expect((await request(app).post('/api/git/open').send({ path: '/not-allowed', paneId: '%2', commit: hash })).status).toBeGreaterThanOrEqual(400);
+    const count = gitEvents.length;
+    expect((await request(app).post('/api/git/open').send({ path, paneId: '%0', commit: hash })).status).toBe(409);
+    expect(gitEvents).toHaveLength(count);
+    const recovered = await request(app).post('/api/git/open').send({ path, paneId: '%0', cwd: apiPath(dir), commit: hash });
+    expect(recovered.status).toBe(200);
+    expect(gitEvents.at(-1)).toMatchObject({ paneId: null, windowId: '@1', instanceId: '1:1', commit: hash });
   });
 
   it('can anchor history at a requested commit beyond the normal history limit', async () => {
@@ -385,6 +398,21 @@ describe('file save', () => {
 });
 
 describe('anymux open and notebooks', () => {
+  it('rejects a stale dock source and recovers only when cwd identifies its live window', async () => {
+    const native = join(dir, 'recovered.html');
+    await writeFile(native, '<h1>recovered</h1>');
+    const count = events.length;
+    const body = { path: apiPath(native), placement: 'dock', paneId: '%0' };
+    const rejected = await request(app).post('/api/open').send(body);
+    expect(rejected.status).toBe(409);
+    expect(rejected.body.error).toContain('--pane');
+    expect(events).toHaveLength(count);
+    const recovered = await request(app).post('/api/open').send({ ...body, cwd: apiPath(dir) });
+    expect(recovered.status).toBe(200);
+    expect(events.at(-1)).toMatchObject({ path: apiPath(native), paneId: null, windowId: '@1', instanceId: '1:1' });
+    events.splice(count);
+  });
+
   it('broadcasts files and urls to the browsers', async () => {
     const native = join(dir, 'open.txt');
     await writeFile(native, 'x');

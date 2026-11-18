@@ -24,9 +24,9 @@ import tls from 'node:tls';
 import { appPathCandidates } from '../lib/legacy-names.js';
 
 const USAGE = `usage:
-  anymux open [--dock | --background] [--replaces <old path>] <file[#heading] | url>
+  anymux open [--dock | --background] [--pane %N] [--replaces <old path>] <file[#heading] | url>
   anymux doc path <name> [--html]
-  anymux git show [commit] [--repo <directory>]
+  anymux git show [commit] [--repo <directory>] [--pane %N]
   anymux split [-h] [-c dir] [cmd...]
   anymux run [-t pane] <cmd...>
   anymux capture [-t pane] [-n lines]
@@ -144,9 +144,9 @@ async function cmdOpen(args) {
   const replaces = takeOption(args, ['--replaces']);
   const kind = takeOption(args, ['--kind']);
   const owner = takeOption(args, ['--owner']);
+  const pane = takeOption(args, ['--pane', '-t']) || currentPane();
   const raw = rest(args)[0];
   if (!raw) die(USAGE);
-  const pane = currentPane();
   let body;
   if (/^https?:\/\//i.test(raw)) {
     body = { url: raw };
@@ -155,6 +155,7 @@ async function cmdOpen(args) {
     body = { path: absolutePath(target) };
     if (dock || background) {
       body.placement = 'dock';
+      body.cwd = process.cwd();
       if (background) body.activate = false;
     }
     if (fragment) body.fragment = fragment;
@@ -164,19 +165,18 @@ async function cmdOpen(args) {
   }
   if (pane) body.paneId = pane;
   const result = await postJson('/api/open', body);
-  process.stdout.write(`opened ${result.path || result.url}${body.placement === 'dock' ? ' (side panel)' : ''}\n`);
+  process.stdout.write(`requested ${result.path || result.url}${body.placement === 'dock' ? ' (side panel, window ' + result.windowId + ')' : ''}\n`);
 }
 
 async function cmdGit(args) {
   if (args.shift() !== 'show') die(USAGE);
   const repo = takeOption(args, ['--repo', '-C']) || '.';
+  const paneId = takeOption(args, ['--pane', '-t']) || currentPane();
   const remaining = rest(args);
   const commit = remaining[0] || 'HEAD';
   if (remaining.length > 1 || !/^(HEAD|[0-9a-f]{4,64})$/i.test(commit)) die('anymux: expected a commit hash or HEAD');
-  const paneId = currentPane();
-  if (!paneId) die('anymux: git show needs a tmux pane (TMUX_PANE)');
-  const data = await postJson('/api/git/open', { path: absolutePath(repo), paneId, commit });
-  process.stdout.write(`opened commit ${data.commit} in ${data.path}\n`);
+  const data = await postJson('/api/git/open', { path: absolutePath(repo), paneId, commit, cwd: process.cwd() });
+  process.stdout.write(`requested commit ${data.commit} in ${data.path} (window ${data.windowId})\n`);
 }
 
 async function cmdDoc(args) {

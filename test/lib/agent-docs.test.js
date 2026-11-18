@@ -197,7 +197,8 @@ describe('agent documents API', () => {
     app.use(express.json());
     const pathGuard = createPathGuard([root.api]);
     app.use('/api/agent-docs', createAgentDocsRouter({ pathGuard, roots: [root.api], typeText }));
-    app.use('/api/open', createOpenRouter({ pathGuard, broadcast: (event) => events.push(event) }));
+    app.use('/api/open', createOpenRouter({ pathGuard, broadcast: (event) => events.push(event),
+      resolveSource: async body => ({ paneId: body.paneId || null, windowId: '@1', instanceId: '1:1' }) }));
     return { root, project, app, typed, events };
   }
 
@@ -263,9 +264,9 @@ describe('agent documents API', () => {
     expect(res.body.success).toBe(true);
     expect(events).toEqual([
       { type: 'open-file', path: project.api + '/.superpowers/sdd/x/progress.md', paneId: '%1', placement: 'dock', activate: false,
-        kind: 'progress', owner: 'superpowers' },
+        kind: 'progress', owner: 'superpowers', windowId: '@1', instanceId: '1:1' },
       { type: 'open-file', path: project.api + '/docs/design.md', paneId: null, placement: 'dock', activate: true,
-        replaces: project.api + '/.anymux/docs/design.md', fragment: '下一步', kind: 'design', owner: 'me' },
+        replaces: project.api + '/.anymux/docs/design.md', fragment: '下一步', kind: 'design', owner: 'me', windowId: '@1', instanceId: '1:1' },
     ]);
     for (const extra of [{ placement: 'side' }, { activate: 'yes' }, { kind: 'a b' }, { fragment: 'x\ny' }, { replaces: 'relative/x.md' }]) {
       expect((await request(app).post('/api/open').send({ path: project.api + '/docs/design.md', ...extra })).status).toBe(400);

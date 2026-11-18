@@ -164,6 +164,22 @@ describe('opening a document straight into the dock', () => {
 });
 
 describe('documents announced by a pane', () => {
+  it('queues a validated window-only arrival without inventing a source pane', async () => {
+    const { window, openers, preview, notices } = setup();
+    await openers['open-file'].run({ placement: 'dock', path: '/w/window.html', paneId: null, windowId: '@5', instanceId: INSTANCE });
+    expect(notices.mock.calls[0][0].target).toMatchObject({ windowId: '@5', paneId: null });
+    expect(tabs(window)).toEqual([]);
+    await preview.switchDockContext('local', '@5', INSTANCE);
+    expect(tabs(window).map(tab => tab.name)).toEqual(['window.html']);
+    expect(window.document.querySelector('.agent-doc-bar')).toBeNull();
+  });
+
+  it('does not deliver a preview into a reused window after a tmux restart', async () => {
+    const { openers, notices } = setup();
+    await openers['open-file'].run({ placement: 'dock', path: '/w/old.html', paneId: '%7', windowId: '@5', instanceId: '1:1' });
+    expect(notices.mock.calls[0][0].target).toBeNull();
+  });
+
   it('acknowledges a queued document when its source window is visited and the preview is visible', async () => {
     const { window, openers, preview } = setup();
     window.eval(readFileSync('plugins/notifications/client/js/notifications.js', 'utf8'));
@@ -259,7 +275,7 @@ describe('documents announced by a pane', () => {
     window.AppShell.workspace = () => ({ ...original, sessions: [{ id: '$9', windows: [{ id: '@5', panes: [{ id: '%8' }] }] }] });
     await notices.mock.calls[0][1]();
     expect(window.Router.go).toHaveBeenCalledWith({ name: 'terminal', params: {
-      serverId: 'local', sessionId: '$9', windowId: '@5', paneId: '%8',
+      serverId: 'local', sessionId: '$9', windowId: '@5', paneId: null,
     } });
   });
 
