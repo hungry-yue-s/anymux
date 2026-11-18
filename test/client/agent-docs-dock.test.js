@@ -43,11 +43,13 @@ function setup({ width = 1440, docInfo = null } = {}) {
   window.BlockHost = {};
   window.eval(readFileSync('plugins/ui/client/js/blocks-kit.js', 'utf8'));
   var windowTarget = window.Blocks.ui.windowTarget;
+  var revealWindow = window.Blocks.ui.revealWindow;
   window.Blocks = {
     icon: () => '',
     rendererFor: () => null,
     ui: {
       windowTarget,
+      revealWindow,
       el: (tag) => window.document.createElement(tag), button: () => window.document.createElement('button'),
       iconButton: () => window.document.createElement('button'), errorText: String, toast,
       currentContext: () => ({ serverId: 'local', paneId: '%2', onTerminal: true }),
@@ -59,12 +61,14 @@ function setup({ width = 1440, docInfo = null } = {}) {
     },
   };
   new Function('window', 'document', 'fetch', 'Auth', previewSource)(window, window.document, fetch, undefined);
+  const notices = vi.fn();
+  window.NotificationPanel = { addDocument: notices, previewViewed: vi.fn() };
   window.eval(commandsSource);
   window.eval(barSource);
   window.FilePreview.switchDockContext('local', '@0', INSTANCE);
   const typing = window.document.querySelector('.xterm-helper-textarea');
   typing.focus();
-  return { window, preview: window.FilePreview, openers, toast, sent, typing, fetch };
+  return { window, preview: window.FilePreview, openers, toast, notices, sent, typing, fetch };
 }
 
 const settle = () => new Promise((resolve) => { setTimeout(resolve, 0); });
@@ -76,6 +80,20 @@ const tabs = (window) => Array.from(window.document.querySelectorAll('.fp-dock .
 const modals = (window) => window.document.querySelectorAll('.fp-overlay:not(.fp-dock)').length;
 
 describe('opening a document straight into the dock', () => {
+  it('waits for View before switching windows and opens mobile documents in their source window', async () => {
+    const { window, openers, toast, notices } = setup({ width: 375 });
+    const addDocument = vi.fn(); window.NotificationPanel = { addDocument };
+    window.Router = { go: vi.fn((route) => window.setTimeout(() => window.FilePreview.switchDockContext('local', route.params.windowId, INSTANCE), 20)) };
+    await openers['open-file'].run({ placement: 'dock', path: '/w/p/notice.html', paneId: '%7' });
+    expect(window.Router.go).not.toHaveBeenCalled();
+    expect(toast).not.toHaveBeenCalled();
+    const open = addDocument.mock.calls[0][1];
+    await open();
+    expect(window.Router.go).toHaveBeenCalledWith(expect.objectContaining({ params: expect.objectContaining({ windowId: '@5' }) }));
+    expect(window.FilePreview.blockDock.context()).toBe(['local', INSTANCE, '@5'].join('\0'));
+    expect(modals(window)).toBe(1);
+  });
+
   it('makes a dock with the document, shows no modal and leaves the keyboard in the terminal', async () => {
     const { window, preview, typing } = setup();
     await expect(preview.openDocked('/w/p/.anymux/docs/plan.html', '%1')).resolves.toBe('activated');
@@ -146,6 +164,52 @@ describe('opening a document straight into the dock', () => {
 });
 
 describe('documents announced by a pane', () => {
+  it('acknowledges a queued document when its source window is visited and the preview is visible', async () => {
+    const { window, openers, preview } = setup();
+    window.eval(readFileSync('plugins/notifications/client/js/notifications.js', 'utf8'));
+    await openers['open-file'].run({ placement: 'dock', path: '/w/p/viewed.html', paneId: '%7' });
+    expect(window.NotificationPanel.unreadCount()).toBe(1);
+    await preview.switchDockContext('local', '@5', INSTANCE);
+    expect(window.NotificationPanel.unreadCount()).toBe(0);
+  });
+
+  it('keeps a collapsed preview unread after visiting its window', async () => {
+    const { window, openers, preview } = setup();
+    window.eval(readFileSync('plugins/notifications/client/js/notifications.js', 'utf8'));
+    const target = { serverId: 'local', instanceId: INSTANCE, windowId: '@5', paneId: '%7' };
+    const key = 'tmux_file_preview_dock_v4:' + encodeURIComponent(['local', INSTANCE, '@5'].join('\0'));
+    window.localStorage.setItem(key, JSON.stringify({ version: 1, hidden: true, activePath: '/w/p/unread.html', tabs: [{ path: '/w/p/unread.html', paneId: '%7' }] }));
+    window.NotificationPanel.addDocument({ id: 'collapsed', type: 'document', path: '/w/p/unread.html', serverId: 'local', target });
+    await preview.switchDockContext('local', '@5', INSTANCE);
+    expect(window.document.querySelector('.fp-dock')).toBeNull();
+    expect(window.NotificationPanel.unreadCount()).toBe(1);
+    window.document.querySelector('.fp-dock-restore').click();
+    expect(window.NotificationPanel.unreadCount()).toBe(0);
+  });
+
+  it('acknowledges only the final visible tab when several queued documents restore', async () => {
+    const { window, openers, preview } = setup();
+    window.eval(readFileSync('plugins/notifications/client/js/notifications.js', 'utf8'));
+    await openers['open-file'].run({ placement: 'dock', path: '/w/first.html', paneId: '%7' });
+    await openers['open-file'].run({ placement: 'dock', path: '/w/second.html', paneId: '%7' });
+    await preview.switchDockContext('local', '@5', INSTANCE);
+    expect(tabs(window).find(tab => tab.active).name).toBe('second.html');
+    expect(window.NotificationPanel.unreadCount()).toBe(1);
+  });
+
+  it('does not acknowledge a restored file hidden behind the saved Git tab', async () => {
+    const { window, preview } = setup();
+    window.eval(readFileSync('plugins/notifications/client/js/notifications.js', 'utf8'));
+    const frame = window.document.createElement('section'); frame.textContent = 'Git';
+    preview.blockDock.sync([{ key: 'repo', persistKey: 'git:repo', element: frame, title: 'Git', active: true }]);
+    const key = 'tmux_file_preview_dock_v4:' + encodeURIComponent(['local', INSTANCE, '@5'].join('\0'));
+    window.localStorage.setItem(key, JSON.stringify({ version: 1, tabs: [{ path: '/w/note.html' }], activePath: '/w/note.html', activeBlock: 'git:repo', hidden: false }));
+    window.NotificationPanel.addDocument({ id: 'behind-git', path: '/w/note.html', serverId: 'local', target: { instanceId: INSTANCE, windowId: '@5' } });
+    await preview.switchDockContext('local', '@5', INSTANCE);
+    expect(window.document.querySelector('.fp-dock-tab-item.active').textContent).toContain('Git');
+    expect(window.NotificationPanel.unreadCount()).toBe(1);
+  });
+
   it('adds background progress to a dock that currently contains only a tool block', async () => {
     const { window, preview } = setup();
     const frame = window.document.createElement('section');
@@ -160,40 +224,40 @@ describe('documents announced by a pane', () => {
   });
 
   it('allows an explicit notice click to replace a modal that automatic arrivals leave alone', async () => {
-    const { window, preview, openers, toast } = setup();
+    const { window, preview, openers, toast, notices } = setup();
     await preview.openFile('/w/reading.html', '%1');
     await openers['open-file'].run({ placement: 'dock', path: '/w/requested.html', paneId: '%1' });
     expect(window.document.querySelector('.fp-title').textContent).toContain('reading.html');
-    await toast.mock.calls[0][1].action.run();
+    await notices.mock.calls[0][1]();
     expect(window.document.querySelector('.fp-title').textContent).toContain('requested.html');
     expect(modals(window)).toBe(1);
   });
 
   it('opens a notice in the mobile reader when the screen cannot show a dock', async () => {
-    const { window, openers, toast } = setup({ width: 600 });
+    const { window, openers, toast, notices } = setup({ width: 600 });
     await openers['open-file'].run({ placement: 'dock', path: '/w/mobile.html', paneId: '%1' });
-    await toast.mock.calls[0][1].action.run();
+    await notices.mock.calls[0][1]();
     expect(modals(window)).toBe(1);
     expect(window.document.querySelector('.fp-title').textContent).toContain('mobile.html');
   });
 
   it('reveals the requested document after expanding a collapsed dock', async () => {
-    const { window, preview, openers, toast } = setup();
+    const { window, preview, openers, toast, notices } = setup();
     await preview.openDocked('/w/old.html', '%1');
     window.document.querySelector('[aria-label="隐藏右侧预览"]').click();
     await openers['open-file'].run({ placement: 'dock', path: '/w/new.html', paneId: '%1' });
-    await toast.mock.calls[0][1].action.run();
+    await notices.mock.calls[0][1]();
     expect(tabs(window).find(t => t.active).name).toBe('new.html');
     expect(window.document.querySelector('.fp-dock')).not.toBeNull();
   });
 
   it('resolves a moved window again when a persisted notification is opened', async () => {
-    const { window, openers, toast } = setup();
-    window.Router = { go: vi.fn() };
+    const { window, openers, toast, notices } = setup();
+    window.Router = { go: vi.fn(route => window.setTimeout(() => window.FilePreview.switchDockContext('local', route.params.windowId, INSTANCE), 20)) };
     await openers['open-file'].run({ placement: 'dock', path: '/w/moved.html', paneId: '%7' });
     const original = window.AppShell.workspace();
     window.AppShell.workspace = () => ({ ...original, sessions: [{ id: '$9', windows: [{ id: '@5', panes: [{ id: '%8' }] }] }] });
-    await toast.mock.calls[0][1].action.run();
+    await notices.mock.calls[0][1]();
     expect(window.Router.go).toHaveBeenCalledWith({ name: 'terminal', params: {
       serverId: 'local', sessionId: '$9', windowId: '@5', paneId: '%8',
     } });
@@ -258,35 +322,37 @@ describe('documents announced by a pane', () => {
   });
 
   it('selects the document clicked in a notice before asynchronous navigation restores its window', async () => {
-    const { window, preview, openers, toast } = setup();
-    window.Router = { go: vi.fn() };
+    const { window, preview, openers, toast, notices } = setup();
+    window.Router = { go: vi.fn(route => window.setTimeout(() => window.FilePreview.switchDockContext('local', route.params.windowId, INSTANCE), 20)) };
     await openers['open-file'].run({ placement: 'dock', path: '/w/first.html', paneId: '%1' });
-    const action = toast.mock.calls[0][1].action;
+    const action = notices.mock.calls[0][1];
     await openers['open-file'].run({ placement: 'dock', path: '/w/second.html', paneId: '%1' });
     await preview.switchDockContext('local', '@5', INSTANCE);
-    await action.run();
+    await action();
     expect(window.Router.go).toHaveBeenCalledWith(expect.objectContaining({ params: expect.objectContaining({ windowId: '@0' }) }));
     await preview.switchDockContext('local', '@0', INSTANCE);
     expect(tabs(window).find(t => t.active).name).toBe('first.html');
   });
 
   it('opens here with a notice, queues other windows, and restores their document on return', async () => {
-    const { window, openers, toast, preview } = setup();
+    const { window, openers, toast, notices, preview } = setup();
     const run = (event) => openers['open-file'].run({ type: 'open-file', placement: 'dock', activate: true, ...event });
     const queued = vi.spyOn(preview, 'queueDocked');
     await run({ path: '/w/p/.anymux/docs/here.html', paneId: '%1', kind: 'draft' });
     await settle(); await settle();
     expect(queued).toHaveBeenCalledWith('/w/p/.anymux/docs/here.html', '%1', expect.objectContaining({ activate: true, windowId: '@0' }));
-    expect(toast).toHaveBeenCalledWith(expect.stringContaining('已打开'), expect.objectContaining({ duration: 15000 }));
+    expect(notices).toHaveBeenCalledWith(expect.objectContaining({ message: expect.stringContaining('已打开') }), expect.any(Function));
 
     await run({ path: '/w/p/docs/superpowers/plans/there.md', paneId: '%7', paneIds: ['%7'], kind: 'plan' });
     expect(tabs(window).map(t => t.name)).toEqual(['here.html']);
     await settle();
-    expect(toast).toHaveBeenCalledWith(expect.stringContaining('已加入'), expect.objectContaining({ action: expect.objectContaining({ label: '查看文档' }) }));
+    expect(notices).toHaveBeenCalledWith(expect.objectContaining({ message: expect.stringContaining('已加入') }), expect.any(Function));
     await run({ path: '/w/p/docs/superpowers/plans/there.md', paneId: '%7', paneIds: ['%7'], kind: 'plan' });
-    expect(toast).toHaveBeenCalledTimes(2);
+    expect(notices).toHaveBeenCalledTimes(2);
+    expect(toast).not.toHaveBeenCalled();
     await run({ path: '/w/p/.superpowers/sdd/x/progress.md', paneId: '%7', activate: false, kind: 'progress' });
-    expect(toast).toHaveBeenCalledTimes(2);
+    expect(notices).toHaveBeenCalledTimes(2);
+    expect(toast).not.toHaveBeenCalled();
 
     await preview.switchDockContext('local', '@5', INSTANCE);
     expect(tabs(window)).toEqual([

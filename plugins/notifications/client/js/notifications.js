@@ -7,6 +7,8 @@ var NotificationPanel = (function () {
   var DOCUMENT_KEY = 'anymux_document_notifications_v1';
   var _documentOpeners = Object.create(null);
   var _documents = [];
+  var _attentionUntil = Object.create(null);
+  var _attentionTimer = null;
   function isPreview(n) { return n.type === 'document' || n.type === 'git'; }
   try {
     var savedDocuments = JSON.parse(window.localStorage.getItem(DOCUMENT_KEY) || '[]');
@@ -25,7 +27,8 @@ var NotificationPanel = (function () {
     if (!notice || typeof notice.id !== 'string' || typeof notice.path !== 'string') return;
     if (typeof open === 'function') _documentOpeners[notice.id] = open;
     if (_documents.some(function (n) { return n.id === notice.id; })) return;
-    var entry = Object.assign({}, notice, { type: notice.type === 'git' ? 'git' : 'document', read: false, timestamp: notice.timestamp || Date.now() });
+    var entry = Object.assign({}, notice, { type: notice.type === 'git' ? 'git' : 'document', read: !!notice.read, timestamp: notice.timestamp || Date.now() });
+    if (!entry.read) _attentionUntil[entry.id] = Date.now() + 2400;
     _documents.unshift(entry);
     _documents = _documents.slice(0, 50);
     _notifications.unshift(entry);
@@ -113,6 +116,7 @@ var NotificationPanel = (function () {
           _serverMarkRead(n.id);
         }
         _notifications.unshift(n);
+        if (!n.read) _attentionUntil[n.id] = Date.now() + 2400;
         if (!isCurrentWindow) _postNativeNotification(n);
       }
     }
@@ -126,6 +130,7 @@ var NotificationPanel = (function () {
     if (n && !n.read) {
       n.read = true;
       n.readAt = Date.now();
+      delete _attentionUntil[id];
       _updateBadge();
       _syncAttention();
       if (isPreview(n)) _saveDocuments();
@@ -137,6 +142,7 @@ var NotificationPanel = (function () {
     _notifications = [];
     _documents = [];
     _documentOpeners = Object.create(null);
+    _attentionUntil = Object.create(null);
     _saveDocuments();
     _updateBadge();
     _syncAttention();
@@ -348,16 +354,13 @@ var NotificationPanel = (function () {
         var sess = el.getAttribute('data-session');
         var winIdx = el.getAttribute('data-window-index');
         var notice = _notifications.find(function (n) { return n.id === id; });
-        markRead(id);
         if (notice && isPreview(notice)) {
-          var open = _documentOpeners[id];
-          if (open) open();
-          else if (window.Blocks) {
-            var fallback = notice.type === 'git' ? Blocks.openGitNotice : Blocks.openDocumentNotice;
-            if (fallback) fallback(notice);
-          }
+          _openPreview(notice);
         } else if (typeof navigate === 'function' && winIdx !== '' && winIdx !== null) {
+          markRead(id);
           navigate('terminal', { currentSession: sess, currentWindow: winIdx, currentPane: null });
+        } else {
+          markRead(id);
         }
         _closePanel();
       });
@@ -389,40 +392,132 @@ var NotificationPanel = (function () {
     }
   }
 
-  // Highlight the sidebar row a fresh notification came from. When the session
-  // is expanded the specific window row breathes; when collapsed (window rows
-  // not rendered) the session row breathes instead so the cue stays visible.
+  function _openPreview(notice) {
+    var open = _documentOpeners[notice.id];
+    if (!open && window.Blocks) open = notice.type === 'git' ? Blocks.openGitNotice : Blocks.openDocumentNotice;
+    if (!open) return Promise.resolve(false);
+    if (window.AppShell && AppShell.closeMobileWorkspaceSheet) AppShell.closeMobileWorkspaceSheet({ restoreFocus: false });
+    try {
+      var result = open(notice);
+      if (!result || typeof result.then !== 'function') {
+        if (notice.type !== 'git' && result !== false && document.visibilityState !== 'hidden') markRead(notice.id);
+        return Promise.resolve(result);
+      }
+      return result.then(function (result) {
+        if (notice.type !== 'git' && result !== false && document.visibilityState !== 'hidden') markRead(notice.id);
+        return result;
+      }, function () { return false; });
+    } catch (_) { return Promise.resolve(false); }
+  }
+
+  /** Called by the preview that is actually visible, never just by navigation. */
+  function previewViewed(view) {
+    if (!view || document.visibilityState === 'hidden') return;
+    _documents.forEach(function (n) {
+      if (n.read || n.type !== view.type || n.path !== view.path || (n.type === 'git' && n.commit !== view.commit) || !n.target) return;
+      var key = [n.serverId, n.target.instanceId, n.target.windowId].join('\u0000');
+      if (key === view.contextKey) markRead(n.id);
+    });
+  }
+
+  function _previewReminder(row, notices) {
+    var notice = notices[0];
+    var card = row.querySelector('.preview-window-notice');
+    if (card && card.dataset.noticeId === notice.id && card.dataset.count === String(notices.length)) return;
+    if (card) card.remove();
+    card = document.createElement('div');
+    card.className = 'preview-window-notice';
+    card.dataset.noticeId = notice.id;
+    card.dataset.count = String(notices.length);
+    var label = document.createElement('span');
+    label.className = 'preview-window-label';
+    label.textContent = (notice.type === 'git' ? '提交 ' + String(notice.commit || '').slice(0, 8) : notice.path.split('/').pop())
+      + (notices.length > 1 ? ' · +' + (notices.length - 1) : '');
+    label.title = notice.message || notice.path;
+    var view = document.createElement('button');
+    view.type = 'button'; view.className = 'preview-window-view'; view.textContent = '查看';
+    view.setAttribute('aria-label', '查看' + (notice.type === 'git' ? '提交 ' + notice.commit : '文档 ' + notice.path.split('/').pop()));
+    view.addEventListener('click', function (event) {
+      event.stopPropagation();
+      view.disabled = true;
+      _openPreview(notice).finally(function () { view.disabled = false; });
+    });
+    card.append(label, view);
+    row.appendChild(card);
+  }
+
+  // Motion belongs to an arrival, not to the lifetime of an unread notice.
+  // A sidebar rebuild must not start an old notice's animation again.
   function _syncAttention() {
-    var bySession = {};
+    clearTimeout(_attentionTimer);
+    _attentionTimer = null;
+    var now = Date.now();
+    Object.keys(_attentionUntil).forEach(function (id) { if (_attentionUntil[id] <= now) delete _attentionUntil[id]; });
+    var context = window.FilePreview && FilePreview.blockDock && FilePreview.blockDock.context();
+    var bySession = Object.create(null);
+    document.querySelectorAll('.notify-unread').forEach(function (row) { row.classList.remove('notify-unread'); });
+    var rowNotices = new Map();
+    var pulseRows = new Set();
+    var windowRows = Array.from(document.querySelectorAll('.tree-window-row'));
+    var sessionRows = Array.from(document.querySelectorAll('.tree-session-row'));
     _notifications.forEach(function (n) {
       if (n.read) return;
       if (isPreview(n) && window.Api && n.serverId !== Api.activeServerId()) return;
+      if (isPreview(n) && n.target) {
+        var target = n.target;
+        var workspace = window.AppShell && AppShell.workspace ? AppShell.workspace(n.serverId) : null;
+        if (workspace && workspace.instanceId && workspace.instanceId !== target.instanceId) return;
+        var current = context === [n.serverId, target.instanceId, target.windowId].join('\u0000') && document.visibilityState !== 'hidden';
+        if (current) delete _attentionUntil[n.id];
+        var rows = windowRows.filter(function (row) { return row.dataset.serverId === n.serverId && row.dataset.window === target.windowId; });
+        var sessionId = target.sessionId;
+        (workspace && workspace.sessions || []).forEach(function (session) {
+          if ((session.windows || []).some(function (win) { return win.id === target.windowId; })) sessionId = session.id;
+        });
+        if (!rows.length) rows = sessionRows.filter(function (row) { return row.dataset.serverId === n.serverId && row.dataset.session === sessionId; });
+        rows.forEach(function (row) {
+          if (!rowNotices.has(row)) rowNotices.set(row, []);
+          rowNotices.get(row).push(n);
+          if (_attentionUntil[n.id]) pulseRows.add(row);
+        });
+        return;
+      }
       (bySession[n.session] = bySession[n.session] || {}).unread = true;
       ((bySession[n.session].windows = bySession[n.session].windows || {})[String(n.windowIndex)] = true);
+      if (_attentionUntil[n.id]) (bySession[n.session].pulse = bySession[n.session].pulse || {})[String(n.windowIndex)] = true;
     });
 
-    document.querySelectorAll('.notify-breathe').forEach(function (el) {
-      el.classList.remove('notify-breathe');
-    });
-
-    document.querySelectorAll('.tree-session-row').forEach(function (row) {
+    sessionRows.forEach(function (row) {
       var entry = bySession[row.dataset.entityName];
       if (!entry) return;
       var group = row.parentElement;
       var windowList = group && group.querySelector('.tree-window-list');
       if (!windowList) {
-        row.classList.add('notify-breathe');
+        row.classList.add('notify-unread');
+        if (entry.pulse) pulseRows.add(row);
         return;
       }
       windowList.querySelectorAll('.tree-window-row').forEach(function (wrow) {
-        if (entry.windows[wrow.dataset.windowIndex]) wrow.classList.add('notify-breathe');
+        if (entry.windows[wrow.dataset.windowIndex]) wrow.classList.add('notify-unread');
+        if (entry.pulse && entry.pulse[wrow.dataset.windowIndex]) pulseRows.add(wrow);
       });
     });
+    document.querySelectorAll('.preview-window-notice').forEach(function (card) {
+      if (!rowNotices.has(card.parentElement)) card.remove();
+    });
+    rowNotices.forEach(function (notices, row) { _previewReminder(row, notices); });
+    document.querySelectorAll('.notify-breathe').forEach(function (row) { if (!pulseRows.has(row)) row.classList.remove('notify-breathe'); });
+    pulseRows.forEach(function (row) { row.classList.add('notify-breathe'); });
+    document.querySelectorAll('.has-preview-notice').forEach(function (row) { if (!rowNotices.has(row)) row.classList.remove('has-preview-notice'); });
+    rowNotices.forEach(function (_, row) { row.classList.add('has-preview-notice'); });
+    var deadlines = Object.keys(_attentionUntil).map(function (id) { return _attentionUntil[id]; });
+    if (deadlines.length) _attentionTimer = setTimeout(_syncAttention, Math.max(1, Math.min.apply(null, deadlines) - now));
   }
 
   return {
     addDocument: addDocument,
     addPreview: addDocument,
+    previewViewed: previewViewed,
     markRead: markRead,
     _markReadByWindow: markReadByWindow,
     clearAll: clearAll,

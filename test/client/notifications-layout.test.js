@@ -8,6 +8,94 @@ let dom;
 afterEach(() => {
   dom?.window.close();
   dom = null;
+  vi.useRealTimers();
+});
+
+describe('window preview feedback', () => {
+  function setup() {
+    dom = new JSDOM('<div class="tree-session-group"><div class="tree-session-row" data-server-id="local" data-session="$1" data-entity-name="work"><button class="tree-item">work</button></div>'
+      + '<div class="tree-window-list"><div id="source" class="tree-window-row" data-server-id="local" data-window="@5" data-window-index="5"><button class="tree-item">review</button></div>'
+      + '<div id="other" class="tree-window-row" data-server-id="local" data-window="@0" data-window-index="0"><button class="tree-item">current</button></div></div></div>',
+    { url: 'https://panel.example/', runScripts: 'outside-only', pretendToBeVisual: true });
+    const win = dom.window;
+    win.Date.now = () => Date.now();
+    let context = ['local', 'test:1', '@0'];
+    win.FilePreview = { blockDock: { context: () => context.join('\0') } };
+    win.Api = { activeServerId: () => 'local' };
+    win.AppShell = { workspace: () => ({ instanceId: 'test:1' }) };
+    win.api = { post: vi.fn(async () => ({})) };
+    win.eval(source);
+    const notice = { id: 'git-source', type: 'git', path: '/repo', commit: 'abcd1234', serverId: 'local', session: 'work', windowIndex: 5,
+      windowName: 'review', message: '提交预览已加入所属窗口的侧栏：abcd1234', target: { serverId: 'local', sessionId: '$1', instanceId: 'test:1', windowId: '@5', paneId: '%7' } };
+    return { win, panel: win.NotificationPanel, notice, visit: () => { context = ['local', 'test:1', '@5']; } };
+  }
+
+  it('puts a persistent View action on the exact source row and acknowledges a successful open', async () => {
+    const { win, panel, notice } = setup();
+    notice.type = 'document';
+    const open = vi.fn(async () => true);
+    panel.addPreview(notice, open);
+    const row = win.document.querySelector('#source');
+    const view = row.querySelector('.preview-window-view');
+    expect(view?.textContent).toBe('查看');
+    expect(win.document.querySelector('#other .preview-window-notice')).toBeNull();
+    panel.syncAttention();
+    expect(row.querySelector('.preview-window-view')).toBe(view);
+    view.click(); await new Promise(resolve => setTimeout(resolve, 0));
+    expect(open).toHaveBeenCalledOnce();
+    expect(panel.unreadCount()).toBe(0);
+    expect(row.querySelector('.preview-window-notice')).toBeNull();
+    expect(win.api.post).not.toHaveBeenCalled();
+  });
+
+  it('stops pulsing after its deadline even when the sidebar keeps refreshing', () => {
+    vi.useFakeTimers();
+    const { win, panel, notice } = setup();
+    panel.addPreview(notice, () => true);
+    expect(win.document.querySelector('#source').classList.contains('notify-breathe')).toBe(true);
+    vi.advanceTimersByTime(10000);
+    panel.syncAttention(); panel.syncAttention();
+    expect(win.document.querySelector('.notify-breathe')).toBeNull();
+    expect(win.document.querySelector('#source .preview-window-notice')).not.toBeNull();
+  });
+
+  it('stops the source window animation when it is visited and clears a viewed preview', () => {
+    const { win, panel, notice, visit } = setup();
+    panel.addPreview(notice);
+    visit(); panel.syncAttention();
+    expect(win.document.querySelector('.notify-breathe')).toBeNull();
+    panel.previewViewed({ type: 'git', path: '/repo', commit: 'abcd1234', contextKey: ['local', 'test:1', '@5'].join('\0') });
+    expect(panel.unreadCount()).toBe(0);
+    expect(JSON.parse(win.localStorage.getItem('anymux_document_notifications_v1'))[0].read).toBe(true);
+  });
+
+  it('attaches a collapsed window reminder to its session and preserves failed opens for retry', async () => {
+    const { win, panel, notice } = setup();
+    win.document.querySelector('.tree-window-list').remove();
+    panel.addPreview(notice, async () => false);
+    const view = win.document.querySelector('.tree-session-row .preview-window-view');
+    expect(view).not.toBeNull();
+    view.click(); await new Promise(resolve => setTimeout(resolve, 0));
+    expect(panel.unreadCount()).toBe(1);
+    expect(view.disabled).toBe(false);
+  });
+
+  it('closes the mobile workspace menu before opening a preview', async () => {
+    const { win, panel, notice } = setup();
+    win.AppShell.closeMobileWorkspaceSheet = vi.fn();
+    panel.addPreview(notice, async () => true);
+    win.document.querySelector('.preview-window-view').click();
+    expect(win.AppShell.closeMobileWorkspaceSheet).toHaveBeenCalledWith({ restoreFocus: false });
+  });
+
+  it('finds a moved window in its current collapsed session', () => {
+    const { win, panel, notice } = setup();
+    win.document.querySelector('.tree-window-list').remove();
+    win.document.querySelector('.tree-session-row').dataset.session = '$9';
+    win.AppShell.workspace = () => ({ instanceId: 'test:1', sessions: [{ id: '$9', windows: [{ id: '@5' }] }] });
+    panel.addPreview(notice, async () => true);
+    expect(win.document.querySelector('.tree-session-row .preview-window-view')).not.toBeNull();
+  });
 });
 
 describe('notification viewport layout', () => {
@@ -17,7 +105,7 @@ describe('notification viewport layout', () => {
     win.api = { get: vi.fn(async () => ({ success: true, data: [] })), post: vi.fn(async () => ({})) };
     win.Blocks = { openGitNotice: vi.fn() };
     win.eval(source);
-    win.NotificationPanel.addPreview({ id: 'git-local-abcd', type: 'git', path: '/repo', commit: 'abcd1234', serverId: 'local', message: '已打开提交预览：abcd1234' });
+    win.NotificationPanel.addPreview({ id: 'git-local-abcd', type: 'git', path: '/repo', commit: 'abcd1234', serverId: 'local', target: { instanceId: 'test:1', windowId: '@5' }, message: '已打开提交预览：abcd1234' });
     win.eval(source);
     await win.NotificationPanel.refresh();
     win.NotificationPanel._markReadByWindow('', 0);
@@ -26,6 +114,7 @@ describe('notification viewport layout', () => {
     win.document.querySelector('.notification-item').click();
     expect(win.Blocks.openGitNotice).toHaveBeenCalledWith(expect.objectContaining({ commit: 'abcd1234' }));
     expect(win.api.post).not.toHaveBeenCalled();
+    win.NotificationPanel.previewViewed({ type: 'git', path: '/repo', commit: 'abcd1234', contextKey: ['local', 'test:1', '@5'].join('\0') });
     win.eval(source);
     expect(win.NotificationPanel.unreadCount()).toBe(0);
   });

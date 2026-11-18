@@ -93,6 +93,31 @@ function setup(answers = {}) {
 const settled = async () => { for (let i = 0; i < 6; i += 1) await new Promise((resolve) => { setTimeout(resolve, 0); }); };
 
 describe('agent commit previews', () => {
+  it('acknowledges the exact commit when it becomes visible without clicking its notification', async () => {
+    const { win } = setup(); await settled();
+    win.eval(fs.readFileSync('plugins/notifications/client/js/notifications.js', 'utf8'));
+    win.NotificationPanel.addPreview({ id: 'viewed-commit', type: 'git', path: '/repo', commit: COMMIT, serverId: 'local',
+      target: { instanceId: INSTANCE, windowId: '@0' } });
+    expect(win.NotificationPanel.unreadCount()).toBe(1);
+    win.BlockHost.openInWindow('git', { path: '/repo', commit: COMMIT }, { serverId: 'local', instanceId: INSTANCE, windowId: '@0' });
+    await settled();
+    expect(win.NotificationPanel.unreadCount()).toBe(0);
+  });
+
+  it('keeps a failed commit preview unread after View opens its frame', async () => {
+    const { win, doc } = setup({
+      '/api/workspace': () => ({ instanceId: INSTANCE, sessions: [{ id: '$0', windows: [{ id: '@0', panes: [{ id: '%1' }] }] }] }),
+      '/api/git/show': () => Promise.reject(new Error('offline')),
+    }); await settled();
+    win.eval(fs.readFileSync('plugins/notifications/client/js/notifications.js', 'utf8'));
+    win.NotificationPanel.addPreview({ id: 'failed-commit', type: 'git', path: '/repo', commit: COMMIT, serverId: 'local',
+      target: { instanceId: INSTANCE, windowId: '@0' } });
+    win.NotificationPanel.render();
+    doc.querySelector('.notification-item').click(); await settled();
+    expect(doc.querySelector('.git-commit-card')).toBeNull();
+    expect(win.NotificationPanel.unreadCount()).toBe(1);
+  });
+
   it('opens the requested commit directly, retaining the repository draft', async () => {
     const { win, doc, get, frame } = setup();
     await settled();

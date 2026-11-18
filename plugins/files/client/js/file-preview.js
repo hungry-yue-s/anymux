@@ -1039,6 +1039,16 @@ var FilePreview = (function () {
     _syncAutoRefresh();
     _persistDockState();
     if (_blockListener) _blockListener(tab.block ? tab.block.key : null);
+    _acknowledgeFilePreview();
+  }
+
+  function _acknowledgeFilePreview() {
+    var tab = _activeDockTab();
+    if (!tab || tab.block || !_previewReady || _placement !== 'side' || _dockHidden
+      || _restoringDock || _restoringHidden || _restorePromise || !_dockOverlay || !_dockOverlay.isConnected) return;
+    if (window.NotificationPanel && window.NotificationPanel.previewViewed) {
+      window.NotificationPanel.previewViewed({ type: 'document', path: tab.path, contextKey: _dockContextKey });
+    }
   }
 
   function _closeDockTab(tabId) {
@@ -1689,6 +1699,7 @@ var FilePreview = (function () {
       _restoreContextKey = null;
       _pendingBlockKey = _pendingBlockKey || saved.activeBlock || null;
       _mountBlockTabs();
+      _acknowledgeFilePreview();
       _persistDockState();
       _drainDocumentArrivals();
     });
@@ -6744,6 +6755,7 @@ var FilePreview = (function () {
     // Lets BlockHost put tool blocks in this dock's tab strip.
     blockDock: {
       available: _canDockRight,
+      ready: function () { return _restoreContextKey === _dockContextKey && _restorePromise || Promise.resolve(); },
       sync: _syncBlockTabs,
       activate: _activateBlockTab,
       hide: function () {

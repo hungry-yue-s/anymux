@@ -1375,6 +1375,7 @@
             detail.replaceChildren(card, list, diffs);
             showAll();
             detail.scrollTop = 0;
+            acknowledgeCommit();
           }).catch(function (err) {
             if (!disposed && detail.__commit === asked) detail.replaceChildren(ui.errorBox(err));
           });
@@ -1392,6 +1393,16 @@
       return entry.promise;
     }
 
+    function acknowledgeCommit() {
+      if (!window.NotificationPanel || !NotificationPanel.previewViewed || !api.isVisible()
+        || document.visibilityState === 'hidden' || historyView.hidden
+        || document.querySelector('.fp-overlay:not(.fp-dock), .blk-dialog-overlay')) return;
+      var detail = historyView.querySelector('.git-log-detail');
+      var context = window.FilePreview && FilePreview.blockDock.context();
+      if (!context || context.split('\u0000')[0] !== api.serverId || !detail || !detail.querySelector('.git-commit-card')) return;
+      NotificationPanel.previewViewed({ type: 'git', path: target.path, commit: detail.__openCommit, contextKey: context });
+    }
+
     function show(which) {
       changesTab.classList.toggle('is-active', which === 'changes');
       historyTab.classList.toggle('is-active', which === 'history');
@@ -1401,6 +1412,7 @@
       changesView.hidden = which !== 'changes';
       historyView.hidden = which !== 'history';
       if (which === 'history' && !historyLoaded) loadHistory();
+      if (which === 'history') acknowledgeCommit();
     }
 
     // Background refresh while the block is on screen.
@@ -1425,7 +1437,7 @@
 
     return {
       el: root,
-      onShow: function () { if (!firstLoad) load(false); },
+      onShow: function () { acknowledgeCommit(); if (!firstLoad) load(false); },
       update: function (params) {
         if (params && params.commit) {
           pendingCommit = params.commit;
@@ -1627,36 +1639,15 @@
         }), workspace) : null;
       if (current && window.Router) {
         BlockHost.openInWindow('git', { path: notice.path, commit: notice.commit }, current);
-        Router.go({ name: 'terminal', params: { serverId: serverId, sessionId: current.sessionId, windowId: current.windowId, paneId: current.paneId } });
-        var until = Date.now() + 5000;
-        var wantedContext = [serverId, current.instanceId, current.windowId].join('\u0000');
-        function stillWanted() {
-          var route = Router.current && Router.current();
-          return !route || (route.name === 'terminal' && route.params.serverId === serverId && route.params.windowId === current.windowId);
-        }
-        return new Promise(function (resolve) {
-          function reveal() {
-            if (!stillWanted()) return resolve(false);
-            var context = window.FilePreview && FilePreview.blockDock.context();
-            if (context === wantedContext) {
-              // Context changes before its saved file tabs finish restoring.
-              // An explicit open closes modals, so wait rather than cancelling
-              // a file preview that is still being restored in this window.
-              return FilePreview.restoreDocked().then(function () {
-                if (!stillWanted() || FilePreview.blockDock.context() !== wantedContext) return resolve(false);
-                BlockHost.open('git', { path: notice.path, commit: notice.commit });
-                resolve(true);
-              }, function () { resolve(false); });
-            }
-            if (Date.now() >= until) return resolve(false);
-            window.setTimeout(reveal, 40);
-          }
-          reveal();
+        return ui.revealWindow(current, function () {
+          BlockHost.open('git', { path: notice.path, commit: notice.commit });
+          return true;
         });
       }
       if (ui.currentContext().serverId === serverId) BlockHost.open('git', { path: notice.path, commit: notice.commit });
-      else toast('请先切换到提交所在的服务器');
-    }).catch(function (err) { toast(errorText(err)); });
+      else { toast('请先切换到提交所在的服务器'); return false; }
+      return true;
+    }).catch(function (err) { toast(errorText(err)); return false; });
   }
   Blocks.openGitNotice = openCommitNotice;
 
@@ -1678,7 +1669,6 @@
         session: target && target.session, windowIndex: target && target.windowIndex, windowName: target && target.windowName });
       var open = function () { return openCommitNotice(notice); };
       if (window.NotificationPanel && NotificationPanel.addPreview) NotificationPanel.addPreview(notice, open);
-      toast(message, { duration: 15000, dismissible: true, action: { label: '查看提交', run: open } });
     }).catch(function (err) { toast(errorText(err)); });
   }
   PanelSlots.openers.register({ id: 'open-git', run: openCommitFromPane });

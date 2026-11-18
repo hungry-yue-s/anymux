@@ -1244,6 +1244,16 @@ describe('AppShell sidebar width applies immediately', () => {
 });
 
 describe('AppShell mobile workspace sheet', () => {
+  it('synchronizes preview reminders when the menu first opens', () => {
+    const { win, Shell, Store } = loadShell();
+    Object.defineProperty(win, 'innerWidth', { value: 375, configurable: true });
+    seedLocalTmux(Store);
+    const syncAttention = vi.fn(); win.NotificationPanel = { syncAttention };
+    Shell.openMobileWorkspaceSheet();
+    expect(syncAttention).toHaveBeenCalledOnce();
+    win.close();
+  });
+
   it('makes the thumb rail follow the current server and resolves omitted pane IDs', () => {
     const ctx = loadShell();
     seedLocalTmux(ctx.Store);

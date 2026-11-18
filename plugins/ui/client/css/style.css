@@ -2395,7 +2395,11 @@ textarea:focus-visible {
 }
 
 .notify-breathe > .tree-item {
-  animation: notify-breathe 1.6s ease-in-out infinite;
+  animation: notify-breathe 700ms ease-out 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .notify-breathe > .tree-item { animation: none; }
 }
 
 .tree-window-list .tree-item-name {

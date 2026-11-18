@@ -437,6 +437,38 @@ var Blocks = (function () {
   }
 
 
+  /** Explicit View waits for the destination and its saved previews. */
+  function revealWindow(target, open) {
+    if (!window.FilePreview) return Promise.resolve(false);
+    var serverId = target.serverId;
+    var current = target;
+    if (window.Router) Router.go({ name: 'terminal', params: { serverId: serverId, sessionId: target.sessionId, windowId: target.windowId, paneId: target.paneId } });
+    var until = Date.now() + 5000;
+    var wantedContext = [serverId, current.instanceId, current.windowId].join('\u0000');
+    function stillWanted() {
+      var route = window.Router && Router.current && Router.current();
+      return !route || (route.name === 'terminal' && route.params.serverId === serverId && route.params.windowId === current.windowId);
+    }
+    return new Promise(function (resolve) {
+      function reveal() {
+        if (!stillWanted()) return resolve(false);
+        var context = window.FilePreview && FilePreview.blockDock.context();
+        if (context === wantedContext) {
+          // Context changes before its saved file tabs finish restoring.
+          // An explicit open closes modals, so wait rather than cancelling
+          // a file preview that is still being restored in this window.
+          return FilePreview.blockDock.ready().then(function () {
+            if (!stillWanted() || FilePreview.blockDock.context() !== wantedContext) return resolve(false);
+            Promise.resolve().then(open).then(resolve, function () { resolve(false); });
+          }, function () { resolve(false); });
+        }
+        if (Date.now() >= until) return resolve(false);
+        window.setTimeout(reveal, 40);
+      }
+      reveal();
+    });
+  }
+
   function selectedContext() {
     var view = terminalView();
     if (view) return view.currentContext();
@@ -840,7 +872,7 @@ var Blocks = (function () {
       kbd: kbd, keysText: keysText, keyParts: keyParts, isMac: IS_MAC, busy: busy, spinnerLine: spinnerLine,
       toast: toast, errorText: errorText, errorBox: errorBox, confirmAction: confirmAction, promptText: promptText,
       emptyState: emptyState, isDark: isDark, client: client, currentContext: currentContext,
-      selectedContext: selectedContext, focusedContext: focusedContext, windowTarget: windowTarget,
+      selectedContext: selectedContext, focusedContext: focusedContext, windowTarget: windowTarget, revealWindow: revealWindow,
       renderDiffInto: renderDiffInto, buildPatch: buildPatch, parseUnifiedDiff: parseUnifiedDiff, downloadText: downloadText,
       iconPaths: function (name) { return ICONS[name]; },
     },

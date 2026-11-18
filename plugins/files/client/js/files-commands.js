@@ -66,15 +66,12 @@
           if (pane) current = Object.assign({}, target, { sessionId: session.id, paneId: pane.id });
         });
       });
-      if (!current || !FilePreview.blockDock.available()) return modal();
+      if (!current) return modal();
       return FilePreview.queueDocked(event.path, current.paneId, Object.assign({}, current, {
         activate: true, fragment: event.fragment,
       })).then(function () {
-        if (window.Router) Router.go({ name: 'terminal', params: {
-          serverId: serverId, sessionId: current.sessionId, windowId: current.windowId, paneId: current.paneId,
-        } });
-        var key = FilePreview.blockDock.context();
-        if (key === [serverId, current.instanceId, current.windowId].join('\u0000')) {
+        return ui.revealWindow(current, function () {
+          if (!FilePreview.blockDock.available()) return modal();
           var restore = document.querySelector('.fp-dock-restore');
           if (restore) restore.click();
           return FilePreview.openDocked(event.path, current.paneId, {
@@ -83,7 +80,7 @@
             if (result === 'busy' || result === 'unavailable') return modal();
             return result;
           });
-        }
+        });
       });
     }, modal);
   }
@@ -105,9 +102,9 @@
     if (window.NotificationPanel && NotificationPanel.addDocument) NotificationPanel.addDocument({
       id: 'doc-' + encodeURIComponent(key), type: 'document', path: event.path, paneId: event.paneId,
       serverId: event.serverId, target: target, message: message, timestamp: now,
+      read: result === 'activated' && document.visibilityState === 'visible',
       session: target && target.session, windowIndex: target && target.windowIndex, windowName: target && target.windowName,
     }, open);
-    toast(message, { duration: 15000, dismissible: true, action: { label: '查看文档', run: open } });
   }
 
   function openDocument(event) {

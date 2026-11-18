@@ -564,6 +564,7 @@
       var app = global.document.querySelector('.ms-app');
       if (app) { this._mobileAppWasInert = app.inert; app.inert = true; }
       this._renderMobileWorkspaceTree();
+      if (global.NotificationPanel && global.NotificationPanel.syncAttention) global.NotificationPanel.syncAttention();
       this._syncNav(route);
       this._moveMobileToolsToSheet();
       var trigger = this._mobileWorkspaceTrigger();

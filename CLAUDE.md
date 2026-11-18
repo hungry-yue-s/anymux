@@ -195,6 +195,8 @@ Git、浏览器等工具 block 与文件共用这个分窗（同一个标签条�
 
 完整说明见 [docs/agent-docs.md](docs/agent-docs.md)。Agent 写的长文档在终端旁的分窗里打开，用户边看边对话；适用于 Claude、Codex、Qoder、DeepSeek Harness 等任何会写文件的 agent。
 
+- 打开提醒放在左侧对应窗口（折叠时对应会话）内，点击“查看”才切到目标窗口打开，不用右下角 toast。左侧强调最多 2.4 秒，访问目标窗口就停止；只有实际显示对应内容才确认已读，恢复过程中的临时文件、收起状态或被 Git 遮住的文件不能提前确认。
+
 - **打开不打断。** `FilePreview.openDocked` 不弹 modal、不抢键盘焦点（用户可能正在给 agent 打字）。文档按服务器、tmux 实例和所属窗口保存；不在该窗口时后台加入它的分窗，返回窗口后直接恢复并展示（watcher 的事件优先当前窗口中同项目的窗格，否则定位事件所属窗口）。浏览器后台也接收 dock 文档；手机或有 modal 打开时先保存，具备显示条件后恢复。自动打开或后台加入都发提示，并记入本浏览器可回看的通知列表；新 Tab 显示“新”标记和短暂强调，未查看标记跨窗口和刷新保留。分窗收起时只加标签和角标、不展开：展开会改终端尺寸，Windows 上等于换一个 tmux 客户端。没有分窗时，后台文档（进度）不为它新建分窗。
 - **发现不靠 agent 配合。** `lib/agent-docs/watcher.js` 看窗格所在项目里 `profiles.js` 列出的目录，只宣告第一次看过之后新出现的文件；改动不再宣告（已开的标签自己刷新，用户关掉的不会弹回来）。只看预览根之内的项目。
 - **skill 自己的文档目录不动。** superpowers 的 `docs/superpowers/…`、`.superpowers/sdd/…/progress.md` 原样打开，不移动、不加面板元数据；只有 `.anymux/docs/` 草稿读 front matter 里的 `anymux:` 建议。
