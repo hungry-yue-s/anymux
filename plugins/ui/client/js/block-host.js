@@ -147,7 +147,9 @@ var BlockHost = (function () {
     var data = {
       version: 1,
       blocks: own.slice(0, 12).map(function (i) {
-        return { kind: i.kind, params: i.params, mode: i.mode, geom: i.geom || null };
+        var saved = { kind: i.kind, params: i.params, mode: i.mode, geom: i.geom || null };
+        if (i.arrivalId) { saved.unread = !!i.unread; saved.arrivalId = i.arrivalId; }
+        return saved;
       }),
       active: active ? own.indexOf(active) : -1,
     };
@@ -173,7 +175,8 @@ var BlockHost = (function () {
     data.blocks.forEach(function (saved) {
       if (!saved || !kinds[saved.kind]) return;
       var mode = saved.mode === 'float' || saved.mode === 'max' ? saved.mode : 'dock';
-      var instance = create(saved.kind, saved.params || {}, { mode: mode, serverId: serverId, windowKey: windowKey, geom: saved.geom, quiet: true });
+      var instance = create(saved.kind, saved.params || {}, { mode: mode, serverId: serverId, windowKey: windowKey, geom: saved.geom,
+        unread: saved.unread, arrivalId: saved.arrivalId, quiet: true });
       if (instance) created.push(instance);
     });
     var active = created[data.active];
@@ -278,6 +281,8 @@ var BlockHost = (function () {
       subtitle: '',
       icon: definition.icon || kind,
       busy: false,
+      unread: !!options.unread,
+      arrivalId: options.arrivalId || null,
       z: ++zTop,
     };
     buildFrame(instance);
@@ -508,6 +513,8 @@ var BlockHost = (function () {
         busy: instance.busy,
         element: instance.frame,
         active: instance.id === state.active,
+        unread: instance.unread,
+        arrivalId: instance.arrivalId,
         actions: sidebarActions(instance),
         onClose: function () { close(instance.id); },
         onDoubleClick: function () { setMode(instance.id, 'max'); },
@@ -532,6 +539,7 @@ var BlockHost = (function () {
   function onSidebarChange(id) {
     var instance = instances.find(function (i) { return i.id === id; });
     var front = instance ? scopeOf(instance) : null;
+    if (instance && instance.unread && document.visibilityState !== 'hidden') { instance.unread = false; persist(scopeOf(instance)); }
     [currentServer(), currentWindow()].forEach(function (scope) {
       if (!scope) return;
       var state = dockState[scope] = dockState[scope] || { active: null };
@@ -565,6 +573,9 @@ var BlockHost = (function () {
         instance.shown = false;
         return;
       }
+      // Automatic arrivals wait for desktop docking rather than covering the
+      // phone's terminal with a sheet. An explicit open can still show one.
+      if (instance.unread && isCompact() && !instance.shown) { frame.remove(); return; }
       var mode = effectiveMode(instance);
       frame.classList.toggle('blk-mode-dock', mode === 'dock');
       frame.classList.toggle('blk-mode-float', mode === 'float');
@@ -601,7 +612,7 @@ var BlockHost = (function () {
       }
     });
     document.body.classList.toggle('blk-sheet-open', instances.some(function (i) {
-      return isHere(i) && effectiveMode(i) === 'sheet';
+      return isVisible(i) && effectiveMode(i) === 'sheet';
     }));
   }
 
@@ -620,6 +631,42 @@ var BlockHost = (function () {
 
   // --- public operations -------------------------------------------------------
 
+  /** Save an agent arrival in its source window without navigation or focus. */
+  function openInWindow(kind, params, target) {
+    if (!kinds[kind] || !kinds[kind].perWindow || !target || !target.serverId || !target.instanceId || !target.windowId) return 'unavailable';
+    var scope = [target.serverId, target.instanceId, target.windowId].join('\u0000');
+    var key = keyOf(kind, params);
+    var arrivalId = String(Date.now()) + '-' + (nextId++);
+    if (!restoredScopes[scope] && scope !== currentWindow()) {
+      var storage = storageKey(scope);
+      try {
+        var saved = JSON.parse(window.localStorage.getItem(storage) || 'null');
+        if (!saved || saved.version !== 1 || !Array.isArray(saved.blocks)) saved = { version: 1, blocks: [], active: -1 };
+        var index = saved.blocks.findIndex(function (block) { return block.kind === kind && keyOf(kind, block.params) === key; });
+        if (index < 0) { index = saved.blocks.length; saved.blocks.push({ kind: kind }); }
+        Object.assign(saved.blocks[index], { params: Object.assign({}, saved.blocks[index].params, params), mode: 'dock', unread: true, arrivalId: arrivalId });
+        saved.active = index;
+        window.localStorage.setItem(storage, JSON.stringify(saved));
+        return 'queued';
+      } catch (_) { return 'unavailable'; }
+    }
+    restore(scope, target.serverId, scope);
+    var instance = instances.find(function (i) { return i.windowKey === scope && i.key === key; });
+    if (instance) {
+      instance.params = Object.assign({}, instance.params, params);
+      instance.mode = 'dock';
+      instance.unread = true;
+      instance.arrivalId = arrivalId;
+      if (instance.impl && instance.impl.update) instance.impl.update(params);
+    } else {
+      instance = create(kind, params, { serverId: target.serverId, windowKey: scope, mode: 'dock', quiet: true, unread: true, arrivalId: arrivalId });
+    }
+    dockState[scope] = { active: instance.id };
+    persist(scope);
+    render();
+    return scope !== currentWindow() ? 'queued' : isVisible(instance) ? 'activated' : 'hidden';
+  }
+
   function open(kind, params, options) {
     options = options || {};
     if (!kinds[kind]) return null;
@@ -630,6 +677,7 @@ var BlockHost = (function () {
     var key = keyOf(kind, params);
     var existing = key && instances.find(function (i) { return isHere(i) && i.key === key; });
     if (existing) {
+      existing.unread = false;
       if (options.mode && options.mode !== existing.mode) existing.mode = options.mode;
       existing.mode = placeableMode(existing.mode);
       if (existing.impl && typeof existing.impl.update === 'function') existing.impl.update(params || {});
@@ -761,6 +809,7 @@ var BlockHost = (function () {
   return {
     register: register,
     open: open,
+    openInWindow: openInWindow,
     close: close,
     activate: activate,
     setMode: setMode,

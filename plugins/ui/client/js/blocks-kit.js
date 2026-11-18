@@ -421,6 +421,22 @@ var Blocks = (function () {
    * with a new route there is no answer: all it knows is about the window being left.
    * `key` changes whenever an answer found for this one no longer applies.
    */
+  function windowTarget(serverId, paneIds, workspace) {
+    var key = window.FilePreview && FilePreview.blockDock && FilePreview.blockDock.context();
+    var parts = key ? key.split('\u0000') : [];
+    var targets = [];
+    (workspace && workspace.sessions || []).forEach(function (session) {
+      (session.windows || []).forEach(function (win) {
+        var pane = (win.panes || []).filter(function (p) { return paneIds.indexOf(p.id) >= 0; })[0];
+        if (pane) targets.push({ serverId: serverId, sessionId: session.id, windowId: win.id,
+          instanceId: workspace.instanceId || (parts[0] === serverId ? parts[1] : null),
+          paneId: pane.id, windowName: win.name, session: session.name, windowIndex: win.index });
+      });
+    });
+    return targets.filter(function (target) { return parts[0] === serverId && target.windowId === parts[2]; })[0] || targets[0] || null;
+  }
+
+
   function selectedContext() {
     var view = terminalView();
     if (view) return view.currentContext();
@@ -824,7 +840,7 @@ var Blocks = (function () {
       kbd: kbd, keysText: keysText, keyParts: keyParts, isMac: IS_MAC, busy: busy, spinnerLine: spinnerLine,
       toast: toast, errorText: errorText, errorBox: errorBox, confirmAction: confirmAction, promptText: promptText,
       emptyState: emptyState, isDark: isDark, client: client, currentContext: currentContext,
-      selectedContext: selectedContext, focusedContext: focusedContext,
+      selectedContext: selectedContext, focusedContext: focusedContext, windowTarget: windowTarget,
       renderDiffInto: renderDiffInto, buildPatch: buildPatch, parseUnifiedDiff: parseUnifiedDiff, downloadText: downloadText,
       iconPaths: function (name) { return ICONS[name]; },
     },

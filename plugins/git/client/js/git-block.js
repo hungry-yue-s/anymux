@@ -107,6 +107,8 @@
   function gitBlock(api) {
     var c = ui.client(api.serverId);
     var target = { path: api.params.path || '.', paneId: api.params.paneId || undefined };
+    var pendingCommit = api.params.commit || null;
+    var historyAnchor = pendingCommit;
     var root = el('div', 'git-block');
 
     // --- top bar ---
@@ -456,6 +458,7 @@
           showDiff(force);
         }
         syncCommitButton();
+        if (pendingCommit) show('history');
         if (!historyView.hidden && (force || changed)) loadHistory();
         if (diagnostic) diagnostic({ code: 'GIT_LOAD_OK', renderMs: performance.now() - renderAt, count: data.files.length });
       }).catch(function (err) {
@@ -952,15 +955,15 @@
       if (disposed) return Promise.resolve();
       historyLoaded = true;
       limit = limit || 300;
-      if (historyLoading && historyLoading.limit === limit && historyLoading.writes === writes) return historyLoading.promise;
+      if (historyLoading && historyLoading.limit === limit && historyLoading.writes === writes && historyLoading.commit === historyAnchor) return historyLoading.promise;
       if (!historyView.firstChild) historyView.appendChild(ui.spinnerLine('读取提交历史'));
-      var entry = { limit: limit, writes: writes, promise: null };
+      var entry = { limit: limit, writes: writes, commit: historyAnchor, promise: null };
       historyLoading = entry;
-      entry.promise = c.get('/api/git/log', Object.assign({ limit: limit }, target)).then(function (data) {
+      entry.promise = c.get('/api/git/log', Object.assign({ limit: limit }, historyAnchor ? { commit: historyAnchor } : {}, target)).then(function (data) {
         if (historyLoading !== entry) return;
         refreshFailedFor('history', null);
         var json = limit + '\u0000' + JSON.stringify(data.rows);
-        if (json === historyJson && historyView.querySelector('.git-log')) return;
+        if (!pendingCommit && json === historyJson && historyView.querySelector('.git-log')) return;
         historyJson = json;
         var log = el('div', 'git-log');
         log.setAttribute('role', 'listbox');
@@ -1086,7 +1089,17 @@
         if (historyResize) historyResize.observe(log);
         fitGraphGutter();
 
+        if (pendingCommit) {
+          var requested = data.rows.find(function (row) { return row.commit && row.commit.hash === pendingCommit; });
+          if (requested) {
+            var requestedLine = commitRows.find(function (line) { return line.id === api.id + '-commit-' + pendingCommit; });
+            pendingCommit = null;
+            if (requestedLine) { openCommit(requested.commit, requestedLine); requestedLine.scrollIntoView({ block: 'nearest' }); }
+          }
+        }
+
         function openCommit(commit, line) {
+          api.setParams({ commit: commit.hash });
           commitRows.forEach(function (r) {
             r.classList.toggle('is-active', r === line);
             r.setAttribute('aria-selected', String(r === line));
@@ -1414,6 +1427,13 @@
       el: root,
       onShow: function () { if (!firstLoad) load(false); },
       update: function (params) {
+        if (params && params.commit) {
+          pendingCommit = params.commit;
+          historyAnchor = params.commit;
+          historyLoaded = false;
+          api.setParams({ commit: params.commit });
+          show('history');
+        }
         if (params && params.path && params.path !== target.path && params.path !== '.') {
           target = { path: params.path, paneId: params.paneId || undefined };
           selection = null;
@@ -1592,6 +1612,76 @@
 
   PanelSlots.commands.register({ id: 'git', order: 20, group: 'block', title: 'Git', icon: 'git', keys: 'Alt+Shift+G', code: 'KeyG', run: openGit, keywords: 'git diff stage commit branch push pull 提交 暂存 分支 历史' });
   Blocks.openGit = openGit;
+
+  function openCommitNotice(notice) {
+    var target = notice.target;
+    var serverId = notice.serverId;
+    return ui.client(serverId).get('/api/workspace').then(function (workspace) {
+      // Pane IDs can be reused after a tmux restart. Only follow the stable
+      // source window within the same instance; otherwise open explicitly here.
+      var current = target && workspace.instanceId === target.instanceId
+        ? ui.windowTarget(serverId, (workspace.sessions || []).flatMap(function (session) {
+          return (session.windows || []).filter(function (win) { return win.id === target.windowId; }).flatMap(function (win) {
+            return (win.panes || []).map(function (pane) { return pane.id; });
+          });
+        }), workspace) : null;
+      if (current && window.Router) {
+        BlockHost.openInWindow('git', { path: notice.path, commit: notice.commit }, current);
+        Router.go({ name: 'terminal', params: { serverId: serverId, sessionId: current.sessionId, windowId: current.windowId, paneId: current.paneId } });
+        var until = Date.now() + 5000;
+        var wantedContext = [serverId, current.instanceId, current.windowId].join('\u0000');
+        function stillWanted() {
+          var route = Router.current && Router.current();
+          return !route || (route.name === 'terminal' && route.params.serverId === serverId && route.params.windowId === current.windowId);
+        }
+        return new Promise(function (resolve) {
+          function reveal() {
+            if (!stillWanted()) return resolve(false);
+            var context = window.FilePreview && FilePreview.blockDock.context();
+            if (context === wantedContext) {
+              // Context changes before its saved file tabs finish restoring.
+              // An explicit open closes modals, so wait rather than cancelling
+              // a file preview that is still being restored in this window.
+              return FilePreview.restoreDocked().then(function () {
+                if (!stillWanted() || FilePreview.blockDock.context() !== wantedContext) return resolve(false);
+                BlockHost.open('git', { path: notice.path, commit: notice.commit });
+                resolve(true);
+              }, function () { resolve(false); });
+            }
+            if (Date.now() >= until) return resolve(false);
+            window.setTimeout(reveal, 40);
+          }
+          reveal();
+        });
+      }
+      if (ui.currentContext().serverId === serverId) BlockHost.open('git', { path: notice.path, commit: notice.commit });
+      else toast('请先切换到提交所在的服务器');
+    }).catch(function (err) { toast(errorText(err)); });
+  }
+  Blocks.openGitNotice = openCommitNotice;
+
+  function openCommitFromPane(event) {
+    var serverId = event.serverId || ui.currentContext().serverId;
+    var workspace = window.AppShell && AppShell.workspace ? AppShell.workspace(serverId) : null;
+    var paneIds = event.paneId ? [event.paneId] : [];
+    var target = ui.windowTarget(serverId, paneIds, workspace);
+    var resolveTarget = target ? Promise.resolve(target)
+      : ui.client(serverId).get('/api/workspace').then(function (data) { return ui.windowTarget(serverId, paneIds, data); });
+    return resolveTarget.then(function (target) {
+      var result = target ? BlockHost.openInWindow('git', { path: event.path, commit: event.commit }, target) : 'unavailable';
+      var short = event.commit.slice(0, 8);
+      var message = result === 'activated' ? '已打开提交预览：' + short
+        : result === 'queued' ? '提交预览已加入所属窗口的侧栏：' + short
+        : result === 'hidden' ? '提交预览已加入侧栏：' + short : '提交预览待查看：' + short;
+      var notice = Object.assign({}, event, { serverId: serverId, target: target, type: 'git', message: message,
+        id: 'git-' + encodeURIComponent([serverId, target && target.instanceId, target && target.windowId, event.path, event.commit].join('\u0000')),
+        session: target && target.session, windowIndex: target && target.windowIndex, windowName: target && target.windowName });
+      var open = function () { return openCommitNotice(notice); };
+      if (window.NotificationPanel && NotificationPanel.addPreview) NotificationPanel.addPreview(notice, open);
+      toast(message, { duration: 15000, dismissible: true, action: { label: '查看提交', run: open } });
+    }).catch(function (err) { toast(errorText(err)); });
+  }
+  PanelSlots.openers.register({ id: 'open-git', run: openCommitFromPane });
 
   // --- git gutter in the code preview ---------------------------------------------
 

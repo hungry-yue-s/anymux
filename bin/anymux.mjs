@@ -6,6 +6,7 @@
 //                                         --dock in the side panel next to this pane
 //                                         (or a page in the browser block)
 //   anymux doc path <name> [--html]       where to write a document draft; prints the path
+//   anymux git show [commit] [--repo dir] open this commit in this pane's Git sidebar
 //   anymux split [-h] [-c dir] [cmd...]   split this pane, print the new pane id
 //   anymux run [-t pane] <cmd...>         type a command into a pane and press Enter
 //   anymux capture [-t pane] [-n lines]   print a pane's text (with scrollback)
@@ -25,6 +26,7 @@ import { appPathCandidates } from '../lib/legacy-names.js';
 const USAGE = `usage:
   anymux open [--dock | --background] [--replaces <old path>] <file[#heading] | url>
   anymux doc path <name> [--html]
+  anymux git show [commit] [--repo <directory>]
   anymux split [-h] [-c dir] [cmd...]
   anymux run [-t pane] <cmd...>
   anymux capture [-t pane] [-n lines]
@@ -165,6 +167,18 @@ async function cmdOpen(args) {
   process.stdout.write(`opened ${result.path || result.url}${body.placement === 'dock' ? ' (side panel)' : ''}\n`);
 }
 
+async function cmdGit(args) {
+  if (args.shift() !== 'show') die(USAGE);
+  const repo = takeOption(args, ['--repo', '-C']) || '.';
+  const remaining = rest(args);
+  const commit = remaining[0] || 'HEAD';
+  if (remaining.length > 1 || !/^(HEAD|[0-9a-f]{4,64})$/i.test(commit)) die('anymux: expected a commit hash or HEAD');
+  const paneId = currentPane();
+  if (!paneId) die('anymux: git show needs a tmux pane (TMUX_PANE)');
+  const data = await postJson('/api/git/open', { path: absolutePath(repo), paneId, commit });
+  process.stdout.write(`opened commit ${data.commit} in ${data.path}\n`);
+}
+
 async function cmdDoc(args) {
   const [action, ...more] = args;
   if (action !== 'path') die(USAGE);
@@ -285,6 +299,7 @@ async function main() {
   switch (command) {
     case 'open': return cmdOpen(args);
     case 'doc': return cmdDoc(args);
+    case 'git': return cmdGit(args);
     case 'split': return cmdSplit(args);
     case 'run': return cmdRun(args);
     case 'capture': return cmdCapture(args);

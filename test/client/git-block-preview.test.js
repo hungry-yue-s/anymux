@@ -92,6 +92,154 @@ function setup(answers = {}) {
 
 const settled = async () => { for (let i = 0; i < 6; i += 1) await new Promise((resolve) => { setTimeout(resolve, 0); }); };
 
+describe('agent commit previews', () => {
+  it('opens the requested commit directly, retaining the repository draft', async () => {
+    const { win, doc, get, frame } = setup();
+    await settled();
+    const draft = frame().querySelector('textarea');
+    draft.value = 'unfinished message';
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    const input = doc.createElement('input'); doc.body.appendChild(input); input.focus();
+    win.BlockHost.openInWindow('git', { path: '/repo', commit: COMMIT }, { serverId: 'local', instanceId: INSTANCE, windowId: '@0' });
+    await settled();
+    expect(frame().querySelector('textarea').value).toBe('unfinished message');
+    expect(frame().querySelector('.git-history').hidden).toBe(false);
+    expect(get).toHaveBeenCalledWith('/api/git/log', expect.objectContaining({ commit: COMMIT }));
+    expect(get).toHaveBeenCalledWith('/api/git/show', expect.objectContaining({ commit: COMMIT }));
+    expect(doc.activeElement).toBe(input);
+    expect(win.BlockHost._test.instances()).toHaveLength(1);
+  });
+
+  it('saves an arrival in the source window without opening it in the window on screen', async () => {
+    const { win, doc, get, frame } = setup();
+    await settled();
+    frame().querySelector('textarea').value = 'current draft';
+    const result = win.BlockHost.openInWindow('git', { path: '/repo', commit: COMMIT }, { serverId: 'local', instanceId: INSTANCE, windowId: '@2' });
+    expect(result).toBe('queued');
+    expect(win.BlockHost._test.instances()).toHaveLength(1);
+    expect(get.mock.calls.filter(([path]) => path === '/api/git/show')).toHaveLength(0);
+    const saved = JSON.parse(win.localStorage.getItem('anymux_window_blocks_v1:' + encodeURIComponent(['local', INSTANCE, '@2'].join('\0'))));
+    expect(saved.blocks[0]).toMatchObject({ params: { commit: COMMIT }, unread: true });
+    win.FilePreview.switchDockContext('local', '@2', INSTANCE);
+    await new Promise((resolve) => setTimeout(resolve, 850)); await settled();
+    expect(get).toHaveBeenCalledWith('/api/git/show', expect.objectContaining({ commit: COMMIT }));
+    expect(doc.querySelector('.fp-dock-tab-item.is-new')).not.toBeNull();
+    win.FilePreview.switchDockContext('local', '@0', INSTANCE);
+    expect(frame().querySelector('textarea').value).toBe('current draft');
+  });
+
+  it('keeps a collapsed dock collapsed, then marks the commit as viewed on explicit expansion', async () => {
+    const { win, doc } = setup(); await settled();
+    win.FilePreview.blockDock.hide();
+    win.BlockHost.openInWindow('git', { path: '/repo', commit: COMMIT }, { serverId: 'local', instanceId: INSTANCE, windowId: '@0' });
+    await settled();
+    expect(doc.body.classList.contains('fp-side-open')).toBe(false);
+    expect(doc.querySelector('.fp-dock-restore').classList.contains('has-unread')).toBe(true);
+    doc.querySelector('.fp-dock-restore').click();
+    expect(doc.querySelector('.fp-dock-tab-new')).not.toBeNull();
+    const key = 'anymux_window_blocks_v1:' + encodeURIComponent(['local', INSTANCE, '@0'].join('\0'));
+    expect(JSON.parse(win.localStorage.getItem(key)).blocks[0].unread).toBe(false);
+  });
+
+  it('preserves the file modal and typing focus while the commit arrives', async () => {
+    const { win, doc } = setup(); await settled();
+    win.fetch = vi.fn(async (url) => ({ status: 200, json: async () => ({ success: true, data: String(url).includes('/info')
+      ? { absPath: '/notes.txt', name: 'notes.txt', isText: true, language: 'text', size: 5 }
+      : { content: 'notes', language: 'text' } }) }));
+    await win.FilePreview.openFile('/notes.txt');
+    const modal = doc.querySelector('.fp-overlay:not(.fp-dock)');
+    expect(modal).not.toBeNull();
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    const typing = doc.createElement('input'); doc.body.appendChild(typing); typing.focus();
+    win.BlockHost.openInWindow('git', { path: '/repo', commit: COMMIT }, { serverId: 'local', instanceId: INSTANCE, windowId: '@0' });
+    await settled();
+    expect(modal.isConnected).toBe(true);
+    expect(doc.activeElement).toBe(typing);
+    win.FilePreview.closeModal(); await settled();
+    expect(doc.querySelector('.git-commit-card')).not.toBeNull();
+  });
+
+  it('handles the status event with the source server and retains a reopenable notice', async () => {
+    const { win } = setup(); await settled();
+    win.AppShell = { workspace: () => ({ instanceId: INSTANCE, sessions: [{ id: '$1', name: 'source', windows: [
+      { id: '@2', index: 2, panes: [{ id: '%7' }] },
+    ] }] }) };
+    const addPreview = vi.fn(); win.NotificationPanel = { addPreview };
+    await win.PanelSlots.openers.get('open-git').run({ serverId: 'remote', path: '/repo', paneId: '%7', commit: COMMIT });
+    expect(addPreview).toHaveBeenCalledWith(expect.objectContaining({ type: 'git', serverId: 'remote', commit: COMMIT,
+      target: expect.objectContaining({ windowId: '@2', serverId: 'remote' }) }), expect.any(Function));
+    expect(win.BlockHost._test.instances()).toHaveLength(1);
+  });
+
+  it('retains unread state in a hidden browser and highlights it when the browser returns', async () => {
+    const { win, doc } = setup(); await settled();
+    Object.defineProperty(doc, 'visibilityState', { value: 'hidden', configurable: true });
+    win.BlockHost.openInWindow('git', { path: '/repo', commit: COMMIT }, { serverId: 'local', instanceId: INSTANCE, windowId: '@0' });
+    const key = 'anymux_window_blocks_v1:' + encodeURIComponent(['local', INSTANCE, '@0'].join('\0'));
+    expect(JSON.parse(win.localStorage.getItem(key)).blocks[0].unread).toBe(true);
+    Object.defineProperty(doc, 'visibilityState', { value: 'visible', configurable: true });
+    doc.dispatchEvent(new win.Event('visibilitychange'));
+    expect(JSON.parse(win.localStorage.getItem(key)).blocks[0].unread).toBe(false);
+    expect(doc.querySelector('.fp-dock-tab-item.is-new')).not.toBeNull();
+  });
+
+  it('selects an arriving Git commit ahead of a restored file tab', async () => {
+    const { win, doc } = setup(); await settled();
+    win.fetch = vi.fn(async (url) => ({ status: 200, json: async () => ({ success: true, data: String(url).includes('/info')
+      ? { absPath: '/notes.txt', name: 'notes.txt', isText: true, language: 'text', size: 5 }
+      : { content: 'notes', language: 'text' } }) }));
+    const scope = ['local', INSTANCE, '@2'].join('\0');
+    win.localStorage.setItem('tmux_file_preview_dock_v4:' + encodeURIComponent(scope), JSON.stringify({
+      version: 1, tabs: [{ path: '/notes.txt', paneId: '%7', source: { serverId: 'local' } }], activePath: '/notes.txt', hidden: false,
+    }));
+    win.BlockHost.openInWindow('git', { path: '/repo', commit: COMMIT }, { serverId: 'local', instanceId: INSTANCE, windowId: '@2' });
+    await win.FilePreview.switchDockContext('local', '@2', INSTANCE); await settled();
+    await new Promise((resolve) => setTimeout(resolve, 850)); await settled();
+    expect(doc.querySelectorAll('.fp-dock-tab-item')).toHaveLength(2);
+    expect(doc.querySelector('.fp-dock-tab-item.active').textContent).toContain('repo');
+  });
+
+  it('reveals a commit sheet after asynchronous notice navigation on mobile', async () => {
+    const { win, doc, get } = setup(); await settled();
+    Object.defineProperty(win, 'innerWidth', { value: 375, configurable: true });
+    const workspace = { instanceId: INSTANCE, sessions: [{ id: '$1', windows: [{ id: '@2', panes: [{ id: '%7' }] }] }] };
+    get.mockImplementation(async (path) => path === '/api/workspace' ? workspace : { root: '/repo', files: [], head: null });
+    win.Router = { go() { win.setTimeout(() => win.FilePreview.switchDockContext('local', '@2', INSTANCE), 25); } };
+    await win.Blocks.openGitNotice({ serverId: 'local', path: '/repo', commit: COMMIT, target: { instanceId: INSTANCE, windowId: '@2' } });
+    expect(doc.querySelector('.blk-mode-sheet')).not.toBeNull();
+    expect(doc.body.classList.contains('blk-sheet-open')).toBe(true);
+  });
+
+  it('defers a mobile arrival without opening or locking the terminal', async () => {
+    const { win, doc } = setup(); await settled();
+    Object.defineProperty(win, 'innerWidth', { value: 375, configurable: true });
+    await win.FilePreview.switchDockContext('local', '@2', INSTANCE);
+    win.BlockHost.openInWindow('git', { path: '/repo', commit: COMMIT }, { serverId: 'local', instanceId: INSTANCE, windowId: '@2' });
+    expect(doc.body.classList.contains('blk-sheet-open')).toBe(false);
+    expect(doc.querySelector('.blk-mode-sheet')).toBeNull();
+  });
+
+  it('waits for saved file tabs to finish restoring before revealing a notice', async () => {
+    const workspace = { instanceId: INSTANCE, sessions: [{ id: '$1', windows: [{ id: '@2', panes: [{ id: '%7' }] }] }] };
+    const { win, doc } = setup({ '/api/workspace': () => workspace }); await settled();
+    win.fetch = vi.fn(async (url) => {
+      const info = String(url).includes('/info');
+      if (info) await new Promise((resolve) => setTimeout(resolve, 200));
+      return { status: 200, json: async () => ({ success: true, data: info
+        ? { absPath: '/notes.txt', name: 'notes.txt', isText: true, language: 'text', size: 5 }
+        : { content: 'notes', language: 'text' } }) };
+    });
+    const key = 'tmux_file_preview_dock_v4:' + encodeURIComponent(['local', INSTANCE, '@2'].join('\0'));
+    win.localStorage.setItem(key, JSON.stringify({ version: 1, tabs: [{ path: '/notes.txt', paneId: '%7' }], activePath: '/notes.txt', hidden: false }));
+    let switching;
+    win.Router = { go() { win.setTimeout(() => { switching = win.FilePreview.switchDockContext('local', '@2', INSTANCE); }, 25); } };
+    await win.Blocks.openGitNotice({ serverId: 'local', path: '/repo', commit: COMMIT, target: { instanceId: INSTANCE, windowId: '@2' } });
+    await switching;
+    expect(doc.querySelectorAll('.fp-dock-tab-item')).toHaveLength(2);
+    expect(JSON.parse(win.localStorage.getItem(key)).tabs.map((tab) => tab.path)).toContain('/notes.txt');
+  });
+});
+
 describe('large worktree file groups', () => {
   const file = (path, kind) => ({ path, staged: kind === 'staged', unstaged: kind !== 'staged',
     untracked: kind === 'untracked', index: kind === 'staged' ? 'M' : kind === 'untracked' ? '?' : ' ',

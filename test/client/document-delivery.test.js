@@ -24,6 +24,8 @@ describe('document delivery feedback', () => {
     sockets[0].onmessage({ data: JSON.stringify({ type: 'open-file', path: '/w/manual.md' }) });
     sockets[0].onmessage({ data: JSON.stringify({ type: 'open-url', url: 'https://example.test' }) });
     expect(opener.run).toHaveBeenCalledOnce();
+    sockets[0].onmessage({ data: JSON.stringify({ type: 'open-git', path: '/repo', paneId: '%1', commit: 'abcd1234' }) });
+    expect(opener.run).toHaveBeenLastCalledWith(expect.objectContaining({ type: 'open-git', serverId: 'remote', commit: 'abcd1234' }));
   });
 
   it('keeps document feedback visible while hovered or focused and offers an explicit close button', () => {

@@ -393,12 +393,12 @@ class StatusSocket {
           }
           return;
         }
-        if (data && (data.type === 'open-file' || data.type === 'open-url')) {
+        if (data && (data.type === 'open-file' || data.type === 'open-url' || data.type === 'open-git')) {
           // `anymux open` from a pane, handled by whichever plugin opens that kind
           // Dock documents are stored even in a background browser tab. Other
           // open requests remain visible-tab actions. Capture the socket's host.
           var opener = typeof PanelSlots !== 'undefined' ? PanelSlots.openers.get(data.type) : null;
-          if (opener && (document.visibilityState === 'visible' || (data.type === 'open-file' && data.placement === 'dock'))) {
+          if (opener && (document.visibilityState === 'visible' || data.type === 'open-git' || (data.type === 'open-file' && data.placement === 'dock'))) {
             opener.run(Object.assign({}, data, { serverId: serverId }));
           }
           return;

@@ -45,20 +45,7 @@
   var NOTICE_REPEAT_MS = 15000;
   var _noticed = {};
 
-  function documentTarget(serverId, paneIds, workspace) {
-    var key = window.FilePreview && FilePreview.blockDock && FilePreview.blockDock.context();
-    var parts = key ? key.split('\u0000') : [];
-    var targets = [];
-    (workspace && workspace.sessions || []).forEach(function (session) {
-      (session.windows || []).forEach(function (win) {
-        var pane = (win.panes || []).filter(function (p) { return paneIds.indexOf(p.id) >= 0; })[0];
-        if (pane) targets.push({ serverId: serverId, sessionId: session.id, windowId: win.id,
-          instanceId: workspace.instanceId || (parts[0] === serverId ? parts[1] : null),
-          paneId: pane.id, windowName: win.name, session: session.name, windowIndex: win.index });
-      });
-    });
-    return targets.filter(function (target) { return parts[0] === serverId && target.windowId === parts[2]; })[0] || targets[0] || null;
-  }
+  var documentTarget = ui.windowTarget;
 
   function revealDocument(event, target) {
     if (!window.FilePreview) return;

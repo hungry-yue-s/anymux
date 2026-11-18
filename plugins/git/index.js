@@ -10,7 +10,8 @@ export const name = 'git';
 export const inject = ['http', 'fileAccess'];
 
 export function apply(ctx) {
-  ctx.http.mount('/api/git', createGitRouter({ pathGuard: ctx.fileAccess.pathGuard }));
+  ctx.http.mount('/api/git', createGitRouter({ pathGuard: ctx.fileAccess.pathGuard,
+    broadcast: (event) => ctx.emit('status/event', event) }));
   // The front end, where there are pages at all.
   ctx.inject(['ui'], (ctx) => ctx.ui.contribute(new URL('./client/page.json', import.meta.url)));
 }

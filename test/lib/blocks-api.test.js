@@ -19,16 +19,18 @@ const apiPath = (native) => (IS_WINDOWS ? toPosixPath(native) : native);
 let dir;
 let app;
 let events;
+let gitEvents;
 
 beforeAll(async () => {
   dir = await realpath(await mkdtemp(join(tmpdir(), 'anymux-blocks-')));
   const roots = [apiPath(dir)];
   const pathGuard = createPathGuard(roots);
   events = [];
+  gitEvents = [];
   app = express();
   app.use(express.json());
   app.use('/api/files', createFilesRouter(roots));
-  app.use('/api/git', createGitRouter({ pathGuard, generateMessage: async () => null }));
+  app.use('/api/git', createGitRouter({ pathGuard, generateMessage: async () => null, broadcast: (event) => gitEvents.push(event) }));
   app.use('/api/sqlite', createSqliteRouter({ pathGuard }));
   app.use('/api/notebook', createNotebookRouter({ pathGuard, run: async () => ({ ok: true }) }));
   app.use('/api/open', createOpenRouter({ pathGuard, broadcast: (event) => events.push(event) }));
@@ -109,6 +111,38 @@ describe('git block API', () => {
     git('commit', '-q', '-m', 'first');
     execFileSync('git', ['-C', repo, 'config', 'user.name', 'T']);
     execFileSync('git', ['-C', repo, 'config', 'user.email', 't@e']);
+  });
+
+  it('opens an immutable commit preview from a guarded repository without changing Git state', async () => {
+    const path = apiPath(repo);
+    const hash = execFileSync('git', ['-C', repo, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+    const res = await request(app).post('/api/git/open').send({ path: path + '/a.txt', paneId: '%2', commit: hash.slice(0, 8) });
+    expect(res.status).toBe(200);
+    expect(res.body.data).toMatchObject({ path, commit: hash });
+    expect(gitEvents.at(-1)).toEqual({ type: 'open-git', path, paneId: '%2', commit: hash });
+    expect(execFileSync('git', ['-C', repo, 'status', '--porcelain'], { encoding: 'utf8' })).toBe('');
+    expect(execFileSync('git', ['-C', repo, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim()).toBe(hash);
+    for (const commit of ['--all', 'main', 'HEAD~1', '00000000']) {
+      const count = gitEvents.length;
+      const bad = await request(app).post('/api/git/open').send({ path, paneId: '%2', commit });
+      expect(bad.status).toBe(400);
+      expect(gitEvents).toHaveLength(count);
+    }
+    expect((await request(app).post('/api/git/open').send({ path, paneId: 'oops', commit: hash })).status).toBe(400);
+    expect((await request(app).post('/api/git/open').send({ path: '/not-allowed', paneId: '%2', commit: hash })).status).toBeGreaterThanOrEqual(400);
+  });
+
+  it('can anchor history at a requested commit beyond the normal history limit', async () => {
+    const path = apiPath(repo);
+    const hash = execFileSync('git', ['-C', repo, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+    execFileSync('git', ['-C', repo, 'commit', '--allow-empty', '-q', '-m', 'newer']);
+    try {
+      const res = await request(app).get('/api/git/log').query({ path, limit: 1, commit: hash });
+      expect(res.body.data.rows.find((r) => r.commit).commit.hash).toBe(hash);
+      expect((await request(app).get('/api/git/log').query({ path, commit: '--all' })).status).toBe(400);
+    } finally {
+      execFileSync('git', ['-C', repo, 'reset', '--soft', hash]);
+    }
   });
 
   it('stages selected lines through a patch, commits and undoes the commit', async () => {

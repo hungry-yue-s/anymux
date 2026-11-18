@@ -1013,7 +1013,7 @@ var FilePreview = (function () {
     if (!preserveRequest) _previewGeneration++;
     _activeDockTabId = tab.id;
     if (tab.unread && tab.automatic) _highlightDocumentTab(tab);
-    tab.unread = false;
+    if (document.visibilityState !== 'hidden') tab.unread = false;
     var panels = _dockOverlay.querySelector('.fp-dock-panels');
     if (panels) {
       _pauseVideos(panels);
@@ -1292,9 +1292,10 @@ var FilePreview = (function () {
   function _syncRestoreButton() {
     if (!_dockRestoreButton) return;
     var unread = _dockTabs.some(function (tab) { return tab.unread; });
-    _dockRestoreButton.textContent = '预览 ' + _dockTabs.length + (unread ? ' · 新文档' : '');
+    var unreadBlock = _dockTabs.some(function (tab) { return tab.block && tab.unread; });
+    _dockRestoreButton.textContent = '预览 ' + _dockTabs.length + (unread ? (unreadBlock ? ' · 新内容' : ' · 新文档') : '');
     _dockRestoreButton.classList.toggle('has-unread', unread);
-    _dockRestoreButton.title = unread ? '有新文档' : '';
+    _dockRestoreButton.title = unread ? (unreadBlock ? '有新内容' : '有新文档') : '';
   }
 
   /**
@@ -1469,6 +1470,14 @@ var FilePreview = (function () {
   }
 
   /** Puts declared blocks into the dock whenever one can exist. */
+  function _syncBlockArrival(tab) {
+    if (!tab.block.arrivalId || tab.arrivalId === tab.block.arrivalId) return;
+    tab.arrivalId = tab.block.arrivalId;
+    tab.unread = !!tab.block.unread;
+    tab.automatic = true;
+    if (tab.unread) _highlightDocumentTab(tab);
+  }
+
   function _mountBlockTabs() {
     if (!_blockTabs.length || _restoringDock || _switchingDockContext) return;
     // A file modal owns the preview globals; close() mounts once it is gone.
@@ -1483,7 +1492,9 @@ var FilePreview = (function () {
       block.element.setAttribute('aria-labelledby', 'fp-tab-' + id);
       block.element.setAttribute('data-dock-block', '');
       block.element.hidden = true;
-      _dockTabs.push({ id: id, block: block, path: '', modal: block.element });
+      var tab = { id: id, block: block, path: '', modal: block.element };
+      _syncBlockArrival(tab);
+      _dockTabs.push(tab);
     });
     _applySavedTabOrder();
     if (!_dockOverlay) return;
@@ -1512,6 +1523,11 @@ var FilePreview = (function () {
 
   /** Declares the blocks that belong in the dock; anything else leaves it. */
   function _syncBlockTabs(blocks) {
+    var arrived = blocks.find(function (block) {
+      var tab = _findBlockTab(block.key);
+      return block.active && block.unread && (!tab || tab.arrivalId !== block.arrivalId);
+    });
+    if (arrived) _pendingBlockKey = arrived.persistKey;
     var byKey = {};
     blocks.forEach(function (block) { byKey[block.key] = block; });
     for (var i = _dockTabs.length - 1; i >= 0; i--) {
@@ -1522,6 +1538,7 @@ var FilePreview = (function () {
       if (tab.block) {
         tab.block = byKey[tab.block.key];
         tab.modal = tab.block.element;
+        _syncBlockArrival(tab);
       }
     });
     _mountBlockTabs();
@@ -1679,7 +1696,7 @@ var FilePreview = (function () {
       _persistenceSuspended = false;
       _restorePromise = null;
       _restoreContextKey = null;
-      _pendingBlockKey = saved.activeBlock || null;
+      _pendingBlockKey = _pendingBlockKey || saved.activeBlock || null;
       _mountBlockTabs();
       _persistDockState();
       _drainDocumentArrivals();
@@ -6711,6 +6728,8 @@ var FilePreview = (function () {
     document.addEventListener('visibilitychange', _syncAutoRefresh);
     document.addEventListener('visibilitychange', function () {
       _drainDocumentArrivals().catch(function () {});
+      var active = _dockTabs.find(function (tab) { return tab.id === _activeDockTabId; });
+      if (document.visibilityState === 'visible' && !_dockHidden && _placement === 'side' && active && active.unread) _activateDockTab(active.id);
     });
     document.addEventListener('tmux-theme-change', _refreshMermaidTheme);
     ['tmux-theme-change', 'tmux-transparency-change', 'tmux-glass-change'].forEach(function (event) {

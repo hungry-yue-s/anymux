@@ -41,10 +41,13 @@ function setup({ width = 1440, docInfo = null } = {}) {
   ] }] }) };
   window.PanelSlots = { commands: { register() {} }, openers: { register(opener) { openers[opener.id] = opener; } } };
   window.BlockHost = {};
+  window.eval(readFileSync('plugins/ui/client/js/blocks-kit.js', 'utf8'));
+  var windowTarget = window.Blocks.ui.windowTarget;
   window.Blocks = {
     icon: () => '',
     rendererFor: () => null,
     ui: {
+      windowTarget,
       el: (tag) => window.document.createElement(tag), button: () => window.document.createElement('button'),
       iconButton: () => window.document.createElement('button'), errorText: String, toast,
       currentContext: () => ({ serverId: 'local', paneId: '%2', onTerminal: true }),

@@ -11,6 +11,25 @@ afterEach(() => {
 });
 
 describe('notification viewport layout', () => {
+  it('restores Git preview notices with their exact commit and local read state', async () => {
+    dom = new JSDOM('<button class="workspace-notification">通知</button>', { url: 'https://panel.example/', runScripts: 'outside-only' });
+    const win = dom.window;
+    win.api = { get: vi.fn(async () => ({ success: true, data: [] })), post: vi.fn(async () => ({})) };
+    win.Blocks = { openGitNotice: vi.fn() };
+    win.eval(source);
+    win.NotificationPanel.addPreview({ id: 'git-local-abcd', type: 'git', path: '/repo', commit: 'abcd1234', serverId: 'local', message: '已打开提交预览：abcd1234' });
+    win.eval(source);
+    await win.NotificationPanel.refresh();
+    win.NotificationPanel._markReadByWindow('', 0);
+    expect(win.NotificationPanel.unreadCount()).toBe(1);
+    win.NotificationPanel.render();
+    win.document.querySelector('.notification-item').click();
+    expect(win.Blocks.openGitNotice).toHaveBeenCalledWith(expect.objectContaining({ commit: 'abcd1234' }));
+    expect(win.api.post).not.toHaveBeenCalled();
+    win.eval(source);
+    expect(win.NotificationPanel.unreadCount()).toBe(0);
+  });
+
   it('does not acknowledge document tabs just because a same-named terminal window is visited', () => {
     dom = new JSDOM('<button class="workspace-notification">通知</button>', { url: 'https://panel.example/', runScripts: 'outside-only' });
     const win = dom.window;

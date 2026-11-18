@@ -7,10 +7,11 @@ var NotificationPanel = (function () {
   var DOCUMENT_KEY = 'anymux_document_notifications_v1';
   var _documentOpeners = Object.create(null);
   var _documents = [];
+  function isPreview(n) { return n.type === 'document' || n.type === 'git'; }
   try {
     var savedDocuments = JSON.parse(window.localStorage.getItem(DOCUMENT_KEY) || '[]');
     if (Array.isArray(savedDocuments)) _documents = savedDocuments.filter(function (n) {
-      return n && n.type === 'document' && typeof n.id === 'string' && typeof n.path === 'string';
+      return n && isPreview(n) && typeof n.id === 'string' && typeof n.path === 'string';
     }).slice(0, 50);
   } catch (_) { /* notification history is best effort */ }
   _notifications = _documents.slice();
@@ -24,7 +25,7 @@ var NotificationPanel = (function () {
     if (!notice || typeof notice.id !== 'string' || typeof notice.path !== 'string') return;
     if (typeof open === 'function') _documentOpeners[notice.id] = open;
     if (_documents.some(function (n) { return n.id === notice.id; })) return;
-    var entry = Object.assign({}, notice, { type: 'document', read: false, timestamp: notice.timestamp || Date.now() });
+    var entry = Object.assign({}, notice, { type: notice.type === 'git' ? 'git' : 'document', read: false, timestamp: notice.timestamp || Date.now() });
     _documents.unshift(entry);
     _documents = _documents.slice(0, 50);
     _notifications.unshift(entry);
@@ -127,7 +128,7 @@ var NotificationPanel = (function () {
       n.readAt = Date.now();
       _updateBadge();
       _syncAttention();
-      if (n.type === 'document') _saveDocuments();
+      if (isPreview(n)) _saveDocuments();
       else _serverMarkRead(id);
     }
   }
@@ -191,7 +192,7 @@ var NotificationPanel = (function () {
   }
 
   function _notificationText(n) {
-    if (n.type === 'document') {
+    if (isPreview(n)) {
       var name = n.path.split('/').pop();
       return (n.message || '新文档') + ((n.message || '').indexOf(name) >= 0 ? '' : ' · ' + name);
     }
@@ -348,10 +349,13 @@ var NotificationPanel = (function () {
         var winIdx = el.getAttribute('data-window-index');
         var notice = _notifications.find(function (n) { return n.id === id; });
         markRead(id);
-        if (notice && notice.type === 'document') {
+        if (notice && isPreview(notice)) {
           var open = _documentOpeners[id];
           if (open) open();
-          else if (window.Blocks && Blocks.openDocumentNotice) Blocks.openDocumentNotice(notice);
+          else if (window.Blocks) {
+            var fallback = notice.type === 'git' ? Blocks.openGitNotice : Blocks.openDocumentNotice;
+            if (fallback) fallback(notice);
+          }
         } else if (typeof navigate === 'function' && winIdx !== '' && winIdx !== null) {
           navigate('terminal', { currentSession: sess, currentWindow: winIdx, currentPane: null });
         }
@@ -369,12 +373,12 @@ var NotificationPanel = (function () {
     _notifications.forEach(function (n) {
       // Visiting a terminal window does not mean its document tabs were read
       // (the dock may be collapsed), and names/indexes are not global IDs.
-      if (n.type === 'document') return;
+      if (isPreview(n)) return;
       if (!n.read && n.session === session && String(n.windowIndex) === String(windowIndex)) {
         n.read = true;
         n.readAt = Date.now();
         changed = true;
-        if (n.type !== 'document') serverChanged = true;
+        if (!isPreview(n)) serverChanged = true;
       }
     });
     if (changed) {
@@ -392,7 +396,7 @@ var NotificationPanel = (function () {
     var bySession = {};
     _notifications.forEach(function (n) {
       if (n.read) return;
-      if (n.type === 'document' && window.Api && n.serverId !== Api.activeServerId()) return;
+      if (isPreview(n) && window.Api && n.serverId !== Api.activeServerId()) return;
       (bySession[n.session] = bySession[n.session] || {}).unread = true;
       ((bySession[n.session].windows = bySession[n.session].windows || {})[String(n.windowIndex)] = true);
     });
@@ -418,6 +422,7 @@ var NotificationPanel = (function () {
 
   return {
     addDocument: addDocument,
+    addPreview: addDocument,
     markRead: markRead,
     _markReadByWindow: markReadByWindow,
     clearAll: clearAll,
