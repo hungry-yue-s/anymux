@@ -435,10 +435,62 @@ describe('the bar above an agent document', () => {
     expect(toast).toHaveBeenCalledWith('已填入窗格 %1，在终端里补充后按回车发送', { error: false });
   });
 
-  it('stays hidden for files that are not agent documents', async () => {
+  it('shows the source of an ordinary file without agent actions', async () => {
+    const { window, preview } = setup();
+    window.AppShell.server = () => ({ name: '本机' });
+    window.AppShell.workspace = () => ({ sessions: [{ name: '开发', windows: [{ name: '面板', panes: [{ id: '%1' }] }] }] });
+    await preview.openFile('/w/p/README.html', '%1');
+    await settle();
+    const bar = window.document.querySelector('.ad-bar');
+    expect(bar.hidden).toBe(false);
+    expect(bar.querySelector('.ad-source').textContent).toBe('来自 本机 / 开发 / 面板 / 窗格 %1');
+    expect(bar.querySelector('.ad-chip')).toBeNull();
+    expect(bar.querySelector('button')).toBeNull();
+    preview._test.dockCurrent();
+    expect(window.document.querySelector('.fp-dock .ad-source').textContent).toContain('窗格 %1');
+  });
+
+  it('keeps a source bar when agent document metadata is unavailable and uses the source server', async () => {
+    const { window, preview } = setup();
+    window.AppShell.server = id => ({ name: id === 'remote' ? '开发机' : '本机' });
+    window.AppShell.workspace = id => id === 'remote'
+      ? { sessions: [{ name: '采集', windows: [{ name: '任务', panes: [{ id: '%7' }] }] }] } : null;
+    window.Blocks.ui.client = () => ({ get: async () => { throw new Error('not installed'); } });
+    await preview.openFile('/remote/notes.html', '%7', { source: { serverId: 'remote', paneId: '%7' } });
+    await settle();
+    const bar = window.document.querySelector('.ad-bar');
+    expect(bar.hidden).toBe(false);
+    expect(bar.querySelector('.ad-source').textContent).toBe('来自 开发机 / 采集 / 任务 / 窗格 %7');
+  });
+
+  it('does not choose a session for a linked window with several owners', async () => {
+    const { window, preview } = setup();
+    window.AppShell.server = () => ({ name: '本机' });
+    window.AppShell.workspace = () => ({ sessions: ['开发', '检查'].map(name => ({ name, windows: [{ name: '面板', panes: [{ id: '%1' }] }] })) });
+    await preview.openFile('/w/p/README.html', '%1'); await settle();
+    expect(window.document.querySelector('.ad-source').textContent).toBe('来自 本机 / 面板 / 窗格 %1');
+  });
+
+  it('shows the source of a directory clicked in a pane', async () => {
+    const { window, preview, fetch } = setup();
+    fetch.mockImplementation(async url => ({ status: 200, json: async () => ({ success: true, data: String(url).includes('/info')
+      ? { absPath: '/w', isDirectory: true, mtimeMs: 1 } : { absPath: '/w', parent: '/', entries: [], truncated: false } }) }));
+    await preview.openFile('/w', '%1'); await settle();
+    expect(window.document.querySelector('.ad-source')?.textContent).toBe('来自窗格 %1');
+  });
+
+  it('keeps the bar hidden when an ordinary file has no source pane', async () => {
+    const { window, preview } = setup();
+    await preview.openFile('/w/p/README.html', null, { source: { serverId: 'local', paneId: null } });
+    await settle();
+    expect(window.document.querySelector('.ad-bar').hidden).toBe(true);
+  });
+
+  it('retains the ordinary source bar when opened directly in the dock', async () => {
     const { window, preview } = setup();
     await preview.openDocked('/w/p/README.html', '%1');
     await settle();
-    expect(window.document.querySelector('.fp-dock .ad-bar').hidden).toBe(true);
+    expect(window.document.querySelector('.fp-dock .ad-bar').hidden).toBe(false);
+    expect(window.document.querySelector('.fp-dock .ad-source').textContent).toBe('来自窗格 %1');
   });
 });

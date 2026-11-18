@@ -1,4 +1,4 @@
-/* The bar above an agent's document (agent-docs.js), between the preview header and body. */
+/* Source and agent-document bar, between the preview header and body. */
 .ad-bar {
   flex-shrink: 0;
   display: flex;
@@ -20,7 +20,7 @@
   color: var(--fp-accent, var(--accent-blue));
   font-weight: 600;
 }
-.ad-source { font-family: 'JetBrains Mono', monospace; }
+.ad-source { min-width: 0; overflow-wrap: anywhere; font-family: 'JetBrains Mono', monospace; }
 .ad-btn {
   padding: 2px 10px;
   border: 1px solid var(--fp-line, var(--border-subtle));

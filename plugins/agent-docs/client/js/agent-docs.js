@@ -1,7 +1,7 @@
 /* global FilePreview, Blocks */
 
-// The bar above a document an agent wrote (lib/agent-docs): what kind it is,
-// which pane it came from, a Reply button and, on a draft whose front matter
+// The source bar for paths opened from a pane. Agent documents (lib/agent-docs)
+// also show their kind, a Reply button and, on a draft whose front matter
 // suggests a place in the project, Confirm / Elsewhere / Keep as draft.
 //
 // Every button types a line into the agent's pane and stops: nothing presses
@@ -47,6 +47,25 @@
     return String(path || '').split('/').filter(Boolean).pop() || path;
   }
 
+  function sourceLabel(context) {
+    var shell = window.AppShell;
+    var serverId = context.source && context.source.serverId;
+    var server = shell && shell.server && shell.server(serverId);
+    var workspace = shell && shell.workspace && shell.workspace(serverId);
+    var parts = server && server.name ? [server.name] : [];
+    var locations = [];
+    (workspace && workspace.sessions || []).forEach(function (session) {
+      (session.windows || []).forEach(function (win) {
+        if ((win.panes || []).some(function (pane) { return pane.id === context.paneId; })) locations.push({ session: session, win: win });
+      });
+    });
+    // A linked tmux window can be in several sessions: do not guess which one.
+    if (locations.length === 1 && locations[0].session.name) parts.push(locations[0].session.name);
+    if (locations.length && locations[0].win.name) parts.push(locations[0].win.name);
+    parts.push('窗格 ' + context.paneId);
+    return '来自' + (parts.length > 1 ? ' ' : '') + parts.join(' / ');
+  }
+
   /** Types `text` into the pane; the terminal gets the keyboard back when it shows that pane. */
   function reply(serverId, paneId, text) {
     var api = client(serverId);
@@ -63,29 +82,33 @@
 
   function render(bar, info, context) {
     var doc = info && info.doc;
+    var paneId = context.paneId;
     bar.replaceChildren();
-    if (!doc) {
+    if (!doc && !paneId) {
       bar.hidden = true;
       return;
     }
     bar.hidden = false;
-    bar.setAttribute('data-kind', doc.kind);
+    if (doc) bar.setAttribute('data-kind', doc.kind);
+    else bar.removeAttribute('data-kind');
     var serverId = context.source && context.source.serverId;
-    var paneId = context.paneId;
     var file = name(context.file.absPath);
 
     var row = el('div', 'ad-row');
-    var chip = el('span', 'ad-chip', doc.label);
-    chip.title = KIND_HINTS[doc.kind] || doc.owner;
-    row.appendChild(chip);
-    if (paneId) row.appendChild(el('span', 'ad-source', '来自窗格 ' + paneId));
+    if (doc) {
+      var chip = el('span', 'ad-chip', doc.label);
+      chip.title = KIND_HINTS[doc.kind] || doc.owner;
+      row.appendChild(chip);
+    }
+    if (paneId) row.appendChild(el('span', 'ad-source', sourceLabel(context)));
     row.appendChild(el('span', 'ad-spacer'));
-    if (paneId) {
+    if (doc && paneId) {
       row.appendChild(button('回复…', '在 Agent 的输入框里填入"关于 ' + file + '："，不发送', function () {
         reply(serverId, paneId, '关于 ' + file + '：');
       }));
     }
     bar.appendChild(row);
+    if (!doc) return;
 
     var proposal = doc.proposal;
     if (!proposal || proposal.status !== 'proposed' || !proposal.target) return;
@@ -122,13 +145,12 @@
     var body = context.body;
     var file = context.file;
     var bar = modal.querySelector(':scope > .ad-bar');
-    if (!file || file.isDirectory || !file.absPath) {
+    if (!file || !file.absPath) {
       if (bar) bar.remove();
       return;
     }
     var serverId = context.source && context.source.serverId;
     var api = client(serverId);
-    if (!api) return;
     if (!bar) {
       bar = el('div', 'ad-bar');
       bar.hidden = true;
@@ -136,13 +158,15 @@
     }
     var requested = file.absPath + '\u0000' + (file.mtimeMs || 0);
     bar.setAttribute('data-request', requested);
+    render(bar, null, context);
+    if (file.isDirectory || !api) return;
     api.get('/api/agent-docs/info', { path: file.absPath, paneId: context.paneId }).then(function (info) {
       if (!bar.isConnected && !modal.contains(bar)) return;
       if (bar.getAttribute('data-request') !== requested) return;
       render(bar, info, context);
     }, function () {
-      // An older Node has no /api/agent-docs: no bar.
-      if (bar.getAttribute('data-request') === requested) bar.hidden = true;
+      // Source identity does not depend on agent metadata or Node version.
+      if (bar.getAttribute('data-request') === requested) render(bar, null, context);
     });
   });
 })();
