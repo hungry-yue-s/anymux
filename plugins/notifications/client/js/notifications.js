@@ -518,7 +518,10 @@ var NotificationPanel = (function () {
         var workspace = window.AppShell && AppShell.workspace ? AppShell.workspace(n.serverId) : null;
         if (workspace && workspace.instanceId && workspace.instanceId !== target.instanceId) return;
         var current = context === [n.serverId, target.instanceId, target.windowId].join('\u0000') && document.visibilityState !== 'hidden';
-        if (current) delete _attentionUntil[n.id];
+        if (current) {
+          delete _attentionUntil[n.id];
+          return;
+        }
         var rows = windowRows.filter(function (row) { return row.dataset.serverId === n.serverId && row.dataset.window === target.windowId; });
         var sessionId = target.sessionId;
         (workspace && workspace.sessions || []).forEach(function (session) {
@@ -563,6 +566,8 @@ var NotificationPanel = (function () {
     var deadlines = Object.keys(_attentionUntil).map(function (id) { return _attentionUntil[id]; });
     if (deadlines.length) _attentionTimer = setTimeout(_syncAttention, Math.max(1, Math.min.apply(null, deadlines) - now));
   }
+
+  document.addEventListener('visibilitychange', _syncAttention);
 
   return {
     addDocument: addDocument,

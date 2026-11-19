@@ -48,6 +48,31 @@ describe('window preview feedback', () => {
     expect(win.api.post).not.toHaveBeenCalled();
   });
 
+  it('suppresses document and Git reminders for the visible current window without marking history read', () => {
+    const { win, panel, notice, visit } = setup();
+    panel.addPreview(notice);
+    expect(win.document.querySelector('#source .preview-window-notice')).not.toBeNull();
+    visit(); panel.syncAttention();
+    expect(win.document.querySelector('#source .preview-window-notice')).toBeNull();
+    panel.addDocument({ ...notice, id: 'current-document', type: 'document', path: '/report.md' });
+    expect(win.document.querySelector('#source .preview-window-notice')).toBeNull();
+    expect(win.document.querySelector('.notify-breathe')).toBeNull();
+    expect(panel.unreadCount()).toBe(2);
+    expect(JSON.parse(win.localStorage.getItem('anymux_document_notifications_v1')).every(n => !n.read)).toBe(true);
+  });
+
+  it('clears a background arrival when the current window becomes visible', () => {
+    const { win, panel, notice, visit } = setup();
+    visit();
+    Object.defineProperty(win.document, 'visibilityState', { value: 'hidden', configurable: true });
+    panel.addPreview(notice);
+    expect(win.document.querySelector('#source .preview-window-notice')).not.toBeNull();
+    Object.defineProperty(win.document, 'visibilityState', { value: 'visible', configurable: true });
+    win.document.dispatchEvent(new win.Event('visibilitychange'));
+    expect(win.document.querySelector('#source .preview-window-notice')).toBeNull();
+    expect(panel.unreadCount()).toBe(1);
+  });
+
   it('merges commits from one repository into the newest View action and saved history entry', async () => {
     const { win, panel, notice } = setup();
     const older = vi.fn(async () => false);
@@ -151,7 +176,7 @@ describe('window preview feedback', () => {
     win.document.querySelector('#source .preview-window-view').click();
     const saved = JSON.parse(win.localStorage.getItem('anymux_document_notifications_v1'));
     expect(saved.filter(n => n.reminderSeen).map(n => n.id)).toEqual([notice.id]);
-    expect(win.document.querySelector('#other .preview-window-notice')).not.toBeNull();
+    expect(win.document.querySelector('#other .preview-window-notice')).toBeNull();
   });
 
   it('stops pulsing after its deadline even when the sidebar keeps refreshing', () => {

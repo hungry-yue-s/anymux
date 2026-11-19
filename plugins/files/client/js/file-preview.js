@@ -1611,6 +1611,7 @@ var FilePreview = (function () {
     _restoringHidden = false;
     _persistenceSuspended = false;
     _dockContextKey = nextContextKey;
+    if (window.NotificationPanel && window.NotificationPanel.syncAttention) window.NotificationPanel.syncAttention();
 
     // Per-window blocks change with it. They are declared now but mounted by the
     // restore below, so they cannot land in the wrong window or ahead of its files.

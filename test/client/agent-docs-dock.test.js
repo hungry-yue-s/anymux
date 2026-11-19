@@ -164,6 +164,20 @@ describe('opening a document straight into the dock', () => {
 });
 
 describe('documents announced by a pane', () => {
+  it('clears the source reminder immediately when the real dock context switches to its window', async () => {
+    const { window, preview } = setup();
+    window.eval(readFileSync('plugins/notifications/client/js/notifications.js', 'utf8'));
+    const row = window.document.createElement('div');
+    row.className = 'tree-window-row'; row.dataset.serverId = 'local'; row.dataset.window = '@5';
+    window.document.body.appendChild(row);
+    window.NotificationPanel.addDocument({ id: 'context-switch', type: 'document', serverId: 'local', path: '/w/pending.html', read: false,
+      target: { instanceId: INSTANCE, windowId: '@5' } });
+    expect(row.querySelector('.preview-window-notice')).not.toBeNull();
+    await preview.switchDockContext('local', '@5', INSTANCE);
+    expect(row.querySelector('.preview-window-notice')).toBeNull();
+    expect(window.NotificationPanel.unreadCount()).toBe(1);
+  });
+
   it('does not acknowledge a newer same-file notice when an older real preview finishes loading', async () => {
     const { window, preview, fetch } = setup();
     window.eval(readFileSync('plugins/notifications/client/js/notifications.js', 'utf8'));
@@ -179,7 +193,11 @@ describe('documents announced by a pane', () => {
     fetch.mockImplementation(url => String(url).includes('/content')
       ? new Promise(resolve => { finish = () => resolve(original(url)); started(); }) : original(url));
     let opened;
-    panel.addDocument(notice, () => { opened = preview.openDocked(notice.path, '%1'); return opened; });
+    await preview.switchDockContext('local', '@5', INSTANCE);
+    panel.addDocument(notice, () => {
+      opened = preview.switchDockContext('local', '@0', INSTANCE).then(() => preview.openDocked(notice.path, '%1'));
+      return opened;
+    });
     row.querySelector('.preview-window-view').click();
     await contentStarted;
     panel.addDocument({ ...notice, fragment: 'new-section' }, async () => false);
