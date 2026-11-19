@@ -28,11 +28,21 @@ describe('workbench pane creation', () => {
       expect(first).toMatchObject({ paneId: '%9', windowId: '@7' });
       expect(mutations).toHaveLength(1);
       expect(mutations[0][5]).toContain('new-window -d');
+      expect(mutations[0][5]).toContain("-c '#{HOME}'");
       expect(mutations[0][5]).not.toMatch(/resize-window|set-option/);
       const restarted = fixture(dir);
       expect(await restarted.service.createWindow(body)).toEqual(first);
       expect(restarted.mutations).toHaveLength(0);
       await expect(restarted.service.createPane(body)).rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  });
+  it('starts a native window in the requested directory, as a literal path', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'native-window-cwd-'));
+    try {
+      const { service, mutations } = fixture(dir);
+      await service.createWindow({ ...body, cwd: '/srv/a#b' });
+      expect(mutations[0][5]).toContain("-c '/srv/a##b'");
+      expect(mutations[0][5]).not.toContain('#{HOME}');
     } finally { await rm(dir, { recursive: true, force: true }); }
   });
   it('creates a detached single-pane window only once for simultaneous and persisted request retries', async () => {

@@ -168,7 +168,44 @@ describe('createTmuxApi', () => {
 
     expect(calls[0].args).toEqual(expect.arrayContaining(['-F', '#{session_id}']));
     expect(calls[1].args).toEqual(expect.arrayContaining(['-F', '#{window_id}']));
-    expect(calls[2].args).toEqual(expect.arrayContaining(['-F', '#{pane_id}']));
+    expect(calls.at(-1).args).toEqual(expect.arrayContaining(['-F', '#{pane_id}']));
+  });
+
+  it('starts new sessions and windows at home, not in the panel directory', async () => {
+    const { executor, calls } = fakeExecutor({ 'new-session': '$9\n', 'new-window': '@21\n' });
+    const api = createTmuxApi(executor);
+
+    await api.createSession('work');
+    await api.createSessionReturningId('work');
+    await api.createWindow('$9', 'logs');
+    await api.createWindowReturningId('$9');
+
+    for (const { args } of calls) expect(args[args.indexOf('-c') + 1]).toBe('#{HOME}');
+    expect(calls.every(({ args }) => args.includes('-c'))).toBe(true);
+  });
+
+  it('starts a split in the directory of the pane being split', async () => {
+    const { executor, calls } = fakeExecutor({
+      'display-message': '/home/me/a#b\n',
+      'split-window': '%33\n',
+    });
+    const api = createTmuxApi(executor);
+
+    expect(await api.splitPaneReturningId('%12', 'vertical')).toBe('%33');
+    await api.splitPane('%12', 'horizontal');
+
+    // The target pane, not the session's active pane that '#{pane_current_path}' would read.
+    expect(calls[0].args).toEqual(['display-message', '-p', '-t', '%12', '#{pane_current_path}']);
+    expect(calls[1].args).toEqual(['split-window', '-v', '-t', '%12', '-c', '/home/me/a##b', '-P', '-F', '#{pane_id}']);
+    expect(calls[3].args).toEqual(['split-window', '-h', '-t', '%12', '-c', '/home/me/a##b']);
+  });
+
+  it('starts a split at home when the pane path cannot be read', async () => {
+    for (const reply of [() => { throw new Error('timeout'); }, '\n']) {
+      const { executor, calls } = fakeExecutor({ 'display-message': reply, 'split-window': '%33\n' });
+      await createTmuxApi(executor).splitPaneReturningId('%12', 'vertical');
+      expect(calls[1].args).toEqual(expect.arrayContaining(['-c', '#{HOME}']));
+    }
   });
 
   it('parses the tmux version and tolerates prerelease builds', async () => {
