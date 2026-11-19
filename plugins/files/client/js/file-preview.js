@@ -571,6 +571,7 @@ var FilePreview = (function () {
 
     var fileAtStart = _currentFile;
     var pathAtStart = fileAtStart.absPath;
+    var noticeSnapshot = _previewNotices(pathAtStart);
     var requestId = _previewGeneration;
     var body = _overlay.querySelector('.fp-body');
     if (!body) return Promise.resolve(false);
@@ -604,15 +605,21 @@ var FilePreview = (function () {
           || !!info.isDirectory !== !!fileAtStart.isDirectory
           || Number(info.mtimeMs || 0) !== Number(fileAtStart.mtimeMs || 0)
           || Number(info.size || 0) !== Number(fileAtStart.size || 0);
-        if (!changed) return false;
+        if (!changed) {
+          fileAtStart.noticeSnapshot = noticeSnapshot;
+          _acknowledgeFilePreview();
+          return false;
+        }
         return Promise.resolve(_renderResolvedPreview(body, info, null, {
           reuseCurrent: true,
           requestId: requestId,
           expectedFile: fileAtStart,
           expectedPath: pathAtStart,
+          noticeSnapshot: noticeSnapshot,
         })).then(function () {
           if (!_isPreviewRequestCurrent(requestId, body, fileAtStart, pathAtStart)) return false;
           _saveActiveDockTab();
+          _acknowledgeFilePreview();
           return true;
         });
       })
@@ -1042,12 +1049,18 @@ var FilePreview = (function () {
     _acknowledgeFilePreview();
   }
 
+  function _previewNotices(path) {
+    return window.NotificationPanel && window.NotificationPanel.previewSnapshot
+      ? window.NotificationPanel.previewSnapshot({ type: 'document', path: path, contextKey: _dockContextKey }) : null;
+  }
+
   function _acknowledgeFilePreview() {
     var tab = _activeDockTab();
     if (!tab || tab.block || !_previewReady || _placement !== 'side' || _dockHidden
       || _restoringDock || _restoringHidden || _restorePromise || !_dockOverlay || !_dockOverlay.isConnected) return;
     if (window.NotificationPanel && window.NotificationPanel.previewViewed) {
-      window.NotificationPanel.previewViewed({ type: 'document', path: tab.path, contextKey: _dockContextKey });
+      window.NotificationPanel.previewViewed({ type: 'document', path: tab.path, contextKey: _dockContextKey,
+        snapshot: tab.currentFile && tab.currentFile.noticeSnapshot });
     }
   }
 
@@ -6098,6 +6111,7 @@ var FilePreview = (function () {
 
     function commit(next, mode) {
       if (!isCurrent()) return false;
+      next.noticeSnapshot = options.noticeSnapshot;
       var scroll = options.reuseCurrent ? _capturePreviewScroll(body) : null;
       _replacePreviewBody(body, renderedBody);
       if (options.reuseCurrent && expectedFile) Object.assign(expectedFile, next);
@@ -6222,6 +6236,7 @@ var FilePreview = (function () {
       filePath = parsed.path;
       targetLine = parsed.lineRef;
     }
+    var noticeSnapshot = _previewNotices(filePath);
     var body = _createModal(filePath);
     // _createModal saves the previous dock tab before the new file owns these.
     var source = opts && opts !== true && opts.source || _sourceForPane(paneId);
@@ -6286,6 +6301,7 @@ var FilePreview = (function () {
           requestId: requestId,
           paneId: _currentPaneId,
           markdownFragment: markdownFragment,
+          noticeSnapshot: noticeSnapshot,
         });
       })
       .then(function (rendered) {

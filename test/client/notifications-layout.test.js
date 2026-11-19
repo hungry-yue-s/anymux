@@ -48,6 +48,64 @@ describe('window preview feedback', () => {
     expect(win.api.post).not.toHaveBeenCalled();
   });
 
+  it('merges commits from one repository into the newest View action and saved history entry', async () => {
+    const { win, panel, notice } = setup();
+    const older = vi.fn(async () => false);
+    const newest = vi.fn(async () => false);
+    panel.addPreview(notice, older);
+    const next = { ...notice, id: 'next-commit', commit: '22222222' };
+    panel.addPreview(next, newest);
+    expect(panel.unreadCount()).toBe(1);
+    expect(win.document.querySelector('.preview-window-label').textContent).toBe('提交 22222222');
+    const saved = JSON.parse(win.localStorage.getItem('anymux_document_notifications_v1'));
+    expect(saved).toHaveLength(1);
+    expect(saved[0].commit).toBe('22222222');
+    win.document.querySelector('.preview-window-view').click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(newest).toHaveBeenCalledOnce();
+    expect(older).not.toHaveBeenCalled();
+    panel.addPreview(next, newest);
+    expect(win.document.querySelector('.preview-window-notice')).toBeNull();
+  });
+
+  it('refreshes one file notice without allowing an older open to mark its new arrival read', async () => {
+    const { win, panel, notice } = setup();
+    let finish;
+    const first = vi.fn(() => new Promise(resolve => { finish = resolve; }));
+    const newest = vi.fn(async () => false);
+    const file = { ...notice, type: 'document', path: '/report.md' };
+    panel.addDocument(file, first);
+    win.document.querySelector('.preview-window-view').click();
+    panel.addDocument({ ...file, fragment: 'new-section', read: false }, newest);
+    finish(true);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(panel.unreadCount()).toBe(1);
+    const saved = JSON.parse(win.localStorage.getItem('anymux_document_notifications_v1'));
+    expect(saved).toHaveLength(1);
+    expect(saved[0].fragment).toBe('new-section');
+    win.document.querySelector('.preview-window-view').click();
+    expect(newest).toHaveBeenCalledOnce();
+  });
+
+  it('consolidates old saved duplicates while keeping other windows, repositories and files distinct', () => {
+    const { win, notice } = setup();
+    const latest = { ...notice, id: 'latest', commit: '22222222' };
+    const distinct = [
+      { ...notice, id: 'another-window', target: { ...notice.target, windowId: '@0' } },
+      { ...notice, id: 'another-server', serverId: 'remote' },
+      { ...notice, id: 'another-instance', target: { ...notice.target, instanceId: 'other:1' } },
+      { ...notice, id: 'another-repo', path: '/other/repo' },
+      { ...notice, id: 'one-file', type: 'document', path: '/one.md' },
+      { ...notice, id: 'two-file', type: 'document', path: '/two.md' },
+    ];
+    win.localStorage.setItem('anymux_document_notifications_v1', JSON.stringify([latest, notice, ...distinct]));
+    win.eval(source);
+    expect(win.NotificationPanel.unreadCount()).toBe(7);
+    const saved = JSON.parse(win.localStorage.getItem('anymux_document_notifications_v1'));
+    expect(saved).toHaveLength(7);
+    expect(saved[0].commit).toBe('22222222');
+  });
+
   it('dismisses the current window reminder batch on View, preserving unread history and later arrivals', async () => {
     const { win, panel, notice } = setup();
     let finish;
@@ -64,21 +122,21 @@ describe('window preview feedback', () => {
     finish(false);
     await new Promise(resolve => setTimeout(resolve, 0));
     expect(row.querySelector('.preview-window-label').textContent).toBe('提交 22222222');
-    expect(panel.unreadCount()).toBe(3);
+    expect(panel.unreadCount()).toBe(2);
     win.eval(source);
     win.NotificationPanel.syncAttention();
     expect(row.querySelector('.preview-window-label').textContent).toBe('提交 22222222');
-    expect(win.NotificationPanel.unreadCount()).toBe(3);
+    expect(win.NotificationPanel.unreadCount()).toBe(2);
     win.NotificationPanel.previewViewed({ type: 'git', path: '/repo', commit: '22222222', contextKey: ['local', 'test:1', '@5'].join('\0') });
     expect(row.querySelector('.preview-window-notice')).toBeNull();
-    expect(win.NotificationPanel.unreadCount()).toBe(2);
+    expect(win.NotificationPanel.unreadCount()).toBe(1);
   });
 
   it('evicts old previews with the persisted history limit, retaining ordinary server notifications', () => {
     const { win, panel, notice } = setup();
     panel.handleServerPush([{ id: 'server-notice', session: 'work', windowIndex: 0, timestamp: Date.now(), read: false }]);
     panel.addPreview(notice);
-    for (let i = 0; i < 50; i += 1) panel.addPreview({ ...notice, id: 'recent-' + i, read: true });
+    for (let i = 0; i < 50; i += 1) panel.addPreview({ ...notice, id: 'recent-' + i, path: '/repo-' + i, read: true });
     expect(panel.unreadCount()).toBe(1);
     expect(win.document.querySelector('.preview-window-notice')).toBeNull();
     expect(JSON.parse(win.localStorage.getItem('anymux_document_notifications_v1'))).toHaveLength(50);

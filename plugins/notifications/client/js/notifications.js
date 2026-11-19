@@ -10,11 +10,22 @@ var NotificationPanel = (function () {
   var _attentionUntil = Object.create(null);
   var _attentionTimer = null;
   function isPreview(n) { return n.type === 'document' || n.type === 'git'; }
+  function previewKey(n) {
+    var target = n.target;
+    return n.serverId && target && target.instanceId && target.windowId
+      ? JSON.stringify([n.serverId, target.instanceId, target.windowId, n.type, n.path]) : 'id:' + n.id;
+  }
   try {
     var savedDocuments = JSON.parse(window.localStorage.getItem(DOCUMENT_KEY) || '[]');
+    var seen = Object.create(null);
     if (Array.isArray(savedDocuments)) _documents = savedDocuments.filter(function (n) {
-      return n && isPreview(n) && typeof n.id === 'string' && typeof n.path === 'string';
+      if (!n || !isPreview(n) || typeof n.id !== 'string' || typeof n.path !== 'string') return false;
+      var key = previewKey(n);
+      if (seen[key]) return false;
+      seen[key] = true;
+      return true;
     }).slice(0, 50);
+    if (Array.isArray(savedDocuments) && savedDocuments.length !== _documents.length) _saveDocuments();
   } catch (_) { /* notification history is best effort */ }
   _notifications = _documents.slice();
 
@@ -25,9 +36,22 @@ var NotificationPanel = (function () {
   /** Browser-local document arrivals share the existing, persistent notice list. */
   function addDocument(notice, open) {
     if (!notice || typeof notice.id !== 'string' || typeof notice.path !== 'string') return;
-    if (typeof open === 'function') _documentOpeners[notice.id] = open;
-    if (_documents.some(function (n) { return n.id === notice.id; })) return;
-    var entry = Object.assign({}, notice, { type: notice.type === 'git' ? 'git' : 'document', read: !!notice.read, timestamp: notice.timestamp || Date.now() });
+    var exact = _documents.find(function (n) { return n.id === notice.id; });
+    var entry = Object.assign({}, exact, notice, { type: notice.type === 'git' ? 'git' : 'document' });
+    var key = previewKey(entry);
+    var previous = _documents.find(function (n) { return previewKey(n) === key; });
+    // Replayed commits stay acknowledged; an explicit file open can carry new content.
+    if (previous && entry.type === 'git' && previous.commit === entry.commit) {
+      if (typeof open === 'function') _documentOpeners[previous.id] = open;
+      return;
+    }
+    entry.read = notice.read == null ? !!(exact && exact.read) : !!notice.read;
+    entry.timestamp = notice.timestamp || Date.now();
+    entry.reminderSeen = false;
+    if (!entry.read) delete entry.readAt;
+    if (typeof open === 'function') _documentOpeners[entry.id] = open;
+    _documents = _documents.filter(function (n) { return n.id !== entry.id && previewKey(n) !== key; });
+    if (previous) delete _attentionUntil[previous.id];
     if (!entry.read) _attentionUntil[entry.id] = Date.now() + 2400;
     _documents.unshift(entry);
     _documents = _documents.slice(0, 50);
@@ -416,33 +440,42 @@ var NotificationPanel = (function () {
     try {
       var result = open(notice);
       if (!result || typeof result.then !== 'function') {
-        if (notice.type !== 'git' && result !== false && document.visibilityState !== 'hidden') markRead(notice.id);
+        if (notice.type !== 'git' && result !== false && document.visibilityState !== 'hidden' && _notifications.indexOf(notice) >= 0) markRead(notice.id);
         return Promise.resolve(result);
       }
       return result.then(function (result) {
-        if (notice.type !== 'git' && result !== false && document.visibilityState !== 'hidden') markRead(notice.id);
+        if (notice.type !== 'git' && result !== false && document.visibilityState !== 'hidden' && _notifications.indexOf(notice) >= 0) markRead(notice.id);
         return result;
       }, function () { return false; });
     } catch (_) { return Promise.resolve(false); }
+  }
+
+  function matchesPreview(n, view) {
+    return n.type === view.type && n.path === view.path && (n.type !== 'git' || n.commit === view.commit)
+      && n.target && [n.serverId, n.target.instanceId, n.target.windowId].join('\u0000') === view.contextKey;
+  }
+
+  /** Capture the arrivals a file read can acknowledge, including across tab changes. */
+  function previewSnapshot(view) {
+    return _documents.filter(function (n) { return matchesPreview(n, view); });
   }
 
   /** Called by the preview that is actually visible, never just by navigation. */
   function previewViewed(view) {
     if (!view || document.visibilityState === 'hidden') return;
     _documents.forEach(function (n) {
-      if (n.read || n.type !== view.type || n.path !== view.path || (n.type === 'git' && n.commit !== view.commit) || !n.target) return;
-      var key = [n.serverId, n.target.instanceId, n.target.windowId].join('\u0000');
-      if (key === view.contextKey) markRead(n.id);
+      if (!n.read && matchesPreview(n, view) && (!view.snapshot || view.snapshot.indexOf(n) >= 0)) markRead(n.id);
     });
   }
 
   function _previewReminder(row, notices) {
     var notice = notices[0];
     var card = row.querySelector('.preview-window-notice');
-    if (card && card.dataset.noticeId === notice.id && card.dataset.count === String(notices.length)) return;
+    if (card && card.__notice === notice && card.dataset.count === String(notices.length)) return;
     if (card) card.remove();
     card = document.createElement('div');
     card.className = 'preview-window-notice';
+    card.__notice = notice;
     card.dataset.noticeId = notice.id;
     card.dataset.count = String(notices.length);
     var label = document.createElement('span');
@@ -534,6 +567,7 @@ var NotificationPanel = (function () {
   return {
     addDocument: addDocument,
     addPreview: addDocument,
+    previewSnapshot: previewSnapshot,
     previewViewed: previewViewed,
     markRead: markRead,
     _markReadByWindow: markReadByWindow,

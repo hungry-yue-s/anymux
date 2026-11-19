@@ -164,6 +164,53 @@ describe('opening a document straight into the dock', () => {
 });
 
 describe('documents announced by a pane', () => {
+  it('does not acknowledge a newer same-file notice when an older real preview finishes loading', async () => {
+    const { window, preview, fetch } = setup();
+    window.eval(readFileSync('plugins/notifications/client/js/notifications.js', 'utf8'));
+    const row = window.document.createElement('div');
+    row.className = 'tree-window-row'; row.dataset.serverId = 'local'; row.dataset.window = '@0';
+    window.document.body.appendChild(row);
+    const panel = window.NotificationPanel;
+    const notice = { id: 'slow-file', type: 'document', serverId: 'local', path: '/w/slow.html', read: false,
+      target: { instanceId: INSTANCE, windowId: '@0' } };
+    const original = fetch.getMockImplementation();
+    let finish, started;
+    const contentStarted = new Promise(resolve => { started = resolve; });
+    fetch.mockImplementation(url => String(url).includes('/content')
+      ? new Promise(resolve => { finish = () => resolve(original(url)); started(); }) : original(url));
+    let opened;
+    panel.addDocument(notice, () => { opened = preview.openDocked(notice.path, '%1'); return opened; });
+    row.querySelector('.preview-window-view').click();
+    await contentStarted;
+    panel.addDocument({ ...notice, fragment: 'new-section' }, async () => false);
+    finish(); await opened; await settle();
+    expect(tabs(window).map(tab => tab.name)).toEqual(['slow.html']);
+    expect(panel.unreadCount()).toBe(1);
+    window.document.querySelector('.fp-dock-tab').click();
+    expect(panel.unreadCount()).toBe(1);
+    expect(JSON.parse(window.localStorage.getItem('anymux_document_notifications_v1'))[0]).toMatchObject({ fragment: 'new-section', read: false });
+    fetch.mockImplementation(url => String(url).includes('/content')
+      ? Promise.resolve({ status: 200, json: async () => ({ success: true, data: { content: '<h1>latest content</h1>', language: 'html' } }) }) : original(url));
+    await preview._test.refreshCurrent(true);
+    expect(window.document.querySelector('.fp-html-wrap iframe').srcdoc).toContain('latest content');
+    expect(panel.unreadCount()).toBe(0);
+  });
+
+  it('acknowledges a notice registered after hidden preloading when fresh metadata confirms the visible file', async () => {
+    const { window, preview } = setup();
+    window.eval(readFileSync('plugins/notifications/client/js/notifications.js', 'utf8'));
+    await preview.openDocked('/w/old.html', '%1');
+    window.document.querySelector('[aria-label="隐藏右侧预览"]').click();
+    await expect(preview.openDocked('/w/new.html', '%1')).resolves.toBe('hidden');
+    window.NotificationPanel.addDocument({ id: 'preloaded', type: 'document', serverId: 'local', path: '/w/new.html', read: false,
+      target: { instanceId: INSTANCE, windowId: '@0' } });
+    window.document.querySelector('.fp-dock-restore').click();
+    window.document.querySelectorAll('.fp-dock-tab')[1].click();
+    expect(window.NotificationPanel.unreadCount()).toBe(1);
+    await expect(preview._test.refreshCurrent(false)).resolves.toBe(false);
+    expect(window.NotificationPanel.unreadCount()).toBe(0);
+  });
+
   it('queues a validated window-only arrival without inventing a source pane', async () => {
     const { window, openers, preview, notices } = setup();
     await openers['open-file'].run({ placement: 'dock', path: '/w/window.html', paneId: null, windowId: '@5', instanceId: INSTANCE });
