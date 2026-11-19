@@ -31,7 +31,11 @@ var NotificationPanel = (function () {
     if (!entry.read) _attentionUntil[entry.id] = Date.now() + 2400;
     _documents.unshift(entry);
     _documents = _documents.slice(0, 50);
-    _notifications.unshift(entry);
+    _notifications = _notifications.filter(function (n) { return !isPreview(n); }).concat(_documents)
+      .sort(function (a, b) { return b.timestamp - a.timestamp; });
+    Object.keys(_documentOpeners).forEach(function (id) {
+      if (!_documents.some(function (n) { return n.id === id; })) delete _documentOpeners[id];
+    });
     _saveDocuments();
     _updateBadge();
     _syncAttention();
@@ -396,6 +400,18 @@ var NotificationPanel = (function () {
     var open = _documentOpeners[notice.id];
     if (!open && window.Blocks) open = notice.type === 'git' ? Blocks.openGitNotice : Blocks.openDocumentNotice;
     if (!open) return Promise.resolve(false);
+    // View acknowledges the arrival batch, independently of whether its content
+    // loads. Keep unread history for retry; later arrivals still get a reminder.
+    if (notice.target) {
+      _notifications.forEach(function (n) {
+        if (!isPreview(n) || !n.target || n.serverId !== notice.serverId
+          || n.target.instanceId !== notice.target.instanceId || n.target.windowId !== notice.target.windowId) return;
+        n.reminderSeen = true;
+        delete _attentionUntil[n.id];
+      });
+      _saveDocuments();
+      _syncAttention();
+    }
     if (window.AppShell && AppShell.closeMobileWorkspaceSheet) AppShell.closeMobileWorkspaceSheet({ restoreFocus: false });
     try {
       var result = open(notice);
@@ -462,6 +478,7 @@ var NotificationPanel = (function () {
     var sessionRows = Array.from(document.querySelectorAll('.tree-session-row'));
     _notifications.forEach(function (n) {
       if (n.read) return;
+      if (isPreview(n) && n.reminderSeen) return;
       if (isPreview(n) && window.Api && n.serverId !== Api.activeServerId()) return;
       if (isPreview(n) && n.target) {
         var target = n.target;

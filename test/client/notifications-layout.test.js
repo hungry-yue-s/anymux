@@ -48,6 +48,54 @@ describe('window preview feedback', () => {
     expect(win.api.post).not.toHaveBeenCalled();
   });
 
+  it('dismisses the current window reminder batch on View, preserving unread history and later arrivals', async () => {
+    const { win, panel, notice } = setup();
+    let finish;
+    const open = vi.fn(() => new Promise(resolve => { finish = resolve; }));
+    panel.addPreview({ ...notice, id: 'older', type: 'document', path: '/older.md' });
+    panel.addPreview(notice, open);
+    const row = win.document.querySelector('#source');
+    row.querySelector('.preview-window-view').click();
+    expect(open).toHaveBeenCalledOnce();
+    expect(row.querySelector('.preview-window-notice')).toBeNull();
+    expect(panel.unreadCount()).toBe(2);
+    const newer = { ...notice, id: 'newer', commit: '22222222' };
+    panel.addPreview(newer);
+    finish(false);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(row.querySelector('.preview-window-label').textContent).toBe('提交 22222222');
+    expect(panel.unreadCount()).toBe(3);
+    win.eval(source);
+    win.NotificationPanel.syncAttention();
+    expect(row.querySelector('.preview-window-label').textContent).toBe('提交 22222222');
+    expect(win.NotificationPanel.unreadCount()).toBe(3);
+    win.NotificationPanel.previewViewed({ type: 'git', path: '/repo', commit: '22222222', contextKey: ['local', 'test:1', '@5'].join('\0') });
+    expect(row.querySelector('.preview-window-notice')).toBeNull();
+    expect(win.NotificationPanel.unreadCount()).toBe(2);
+  });
+
+  it('evicts old previews with the persisted history limit, retaining ordinary server notifications', () => {
+    const { win, panel, notice } = setup();
+    panel.handleServerPush([{ id: 'server-notice', session: 'work', windowIndex: 0, timestamp: Date.now(), read: false }]);
+    panel.addPreview(notice);
+    for (let i = 0; i < 50; i += 1) panel.addPreview({ ...notice, id: 'recent-' + i, read: true });
+    expect(panel.unreadCount()).toBe(1);
+    expect(win.document.querySelector('.preview-window-notice')).toBeNull();
+    expect(JSON.parse(win.localStorage.getItem('anymux_document_notifications_v1'))).toHaveLength(50);
+  });
+
+  it('acknowledges only reminders from the same server, tmux instance and window', () => {
+    const { win, panel, notice } = setup();
+    panel.addPreview({ ...notice, id: 'remote', serverId: 'remote' });
+    panel.addPreview({ ...notice, id: 'old-instance', target: { ...notice.target, instanceId: 'old:1' } });
+    panel.addPreview({ ...notice, id: 'other-window', target: { ...notice.target, windowId: '@0' } });
+    panel.addPreview(notice, async () => false);
+    win.document.querySelector('#source .preview-window-view').click();
+    const saved = JSON.parse(win.localStorage.getItem('anymux_document_notifications_v1'));
+    expect(saved.filter(n => n.reminderSeen).map(n => n.id)).toEqual([notice.id]);
+    expect(win.document.querySelector('#other .preview-window-notice')).not.toBeNull();
+  });
+
   it('stops pulsing after its deadline even when the sidebar keeps refreshing', () => {
     vi.useFakeTimers();
     const { win, panel, notice } = setup();
