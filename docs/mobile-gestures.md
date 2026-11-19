@@ -90,3 +90,7 @@ your Vim leader mappings.
 The drawer's upload action sends a file from the phone to the panel host
 (20 MB cap) and copies the resulting path to the clipboard, ready to paste into
 any command.
+
+Pasting an image into a terminal (or dropping a file onto it) uploads it to the
+pane's machine and pastes the path instead, which Claude Code and Codex turn
+into an image attachment. See "终端粘贴图片契约" in the root CLAUDE.md.

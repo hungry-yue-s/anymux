@@ -42,6 +42,25 @@ describe('native workbench UI', () => {
     notice.querySelector('.terminal-status-primary').click();
     expect(session.refresh).toHaveBeenCalledOnce(); f.close();
   });
+  it('sends a pasted image to this window\'s machine and pastes into this session only', async () => {
+    const f = fixture(); const cleanup = vi.fn();
+    f.win.TerminalUpload = { install: vi.fn(() => cleanup) };
+    const view = await f.api.create({ serverId: 'dev', ...remote });
+    await f.api.render('dev', view.id, { container: f.host });
+    const session = f.sessions[0];
+    expect(f.win.TerminalUpload.install).toHaveBeenCalledOnce();
+    const options = f.win.TerminalUpload.install.mock.calls[0][1];
+    expect(options.serverId()).toBe('dev');
+    expect(options.isCurrent()).toBe(true);
+    expect(options.paste('C:/u/1_paste.png')).toBe(true);
+    expect(session.paste).toHaveBeenCalledWith('C:/u/1_paste.png');
+    f.win.PanelSlots = { hasPlugin: (id) => id !== 'upload' };
+    expect(options.serverId()).toBeNull();
+    f.api.unmount();
+    expect(cleanup).toHaveBeenCalledOnce();
+    expect(options.isCurrent()).toBe(false);
+    f.close();
+  });
   it('offers a guarded reconnect action in the persistent detached notice', async () => {
     const f = fixture(); const view = await f.api.create({ serverId: 'dev', ...remote });
     await f.api.render('dev', view.id, { container: f.host });

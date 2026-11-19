@@ -1320,6 +1320,30 @@ function _mountTerminal(termContainer, nozoom) {
 
   term.open(termContainer);
 
+  // A pasted image (or a dropped file) is uploaded to the pane's machine and
+  // its path pasted: the program in the pane cannot read this browser's
+  // clipboard. The listeners live on term.element and go with it.
+  if (window.TerminalUpload && term.element) {
+    TerminalUpload.install(term.element, {
+      serverId: function () {
+        var id = TerminalTarget.serverId || 'local';
+        var slots = window.PanelSlots;
+        if (!TerminalTarget.hasNode() || (slots && !slots.hasPlugin('upload', id))) return null;
+        return id;
+      },
+      isCurrent: function () { return terminalState.term === term; },
+      paste: function (text) {
+        var ws = terminalState.ws;
+        if (!ws || ws._ended || ws.readyState !== WebSocket.OPEN) return false;
+        if (term.options && term.options.disableStdin) return false; // xterm would drop it
+        term.paste(text);
+        return true;
+      },
+      copy: function (text) { _copyToClipboard(text); },
+      notify: _showToast,
+    });
+  }
+
   // Disable mobile soft keyboard autocorrect/autocomplete to reduce
   // IME composition interference (Enter interpreted as delete, etc.)
   if (term.textarea) {

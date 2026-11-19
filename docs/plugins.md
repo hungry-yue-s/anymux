@@ -156,7 +156,7 @@ Hub 默认允许本机直连免登录，Swift 与浏览器均适用：TCP peer �
 | `notifications` | `notifications` | launch, http | 通知存储，`/api/notifications` |
 | `agent-events` | `agentEvents` | http | Agent 钩子事件 `/api/agent-events`；有 notifications 时变成通知 |
 | `files` | `fileAccess` | http | 文件浏览与预览 `/api/files`；文件根与路径守卫 |
-| `upload` | — | launch, http | 上传 `/api/upload`；目录是它的 `dir`（原来的 `files.uploadDir` 不再读，设了会警告） |
+| `upload` | — | launch, http | 上传 `/api/upload`；目录是它的 `dir`（原来的 `files.uploadDir` 不再读，设了会警告）。页面上的 `TerminalUpload`：终端里粘贴图片、拖入文件时上传到窗格所在的机器并粘贴路径 |
 | `git` | — | http, fileAccess | Git block 的 `/api/git` |
 | `sqlite` | — | http, fileAccess | SQLite 预览 `/api/sqlite` |
 | `notebook` | — | http, fileAccess | `/api/notebook` |

@@ -235,6 +235,15 @@ export function createWorkbench(global, options = {}) {
         announceFocus();
       },
     });
+    // A pasted image (or a dropped file) goes to this window's machine; its path is pasted.
+    const session = owner.session;
+    owner.uploadCleanup = global.TerminalUpload?.install(session.term?.element, {
+      serverId: () => (hasPlugin('upload', owner.serverId) ? owner.serverId : null),
+      isCurrent: () => mounted === owner && owner.session === session,
+      paste: (text) => session.paste(text),
+      copy: (text) => session.copy(text),
+      notify: (message, duration) => global._showToast?.(message, duration),
+    });
     owner.session.ready.then(() => {
       if (mounted !== owner) return;
       announceFocus(); if (!mobile() && (doc.activeElement === doc.body || owner.root.contains(doc.activeElement))) owner.session.focus();
@@ -313,7 +322,7 @@ export function createWorkbench(global, options = {}) {
     },
     unmount() {
       generation++; const owner = mounted; mounted = null; if (!owner) return;
-      owner.toolsCleanup?.(); for (const reader of owner.histories.values()) reader.close();
+      owner.toolsCleanup?.(); owner.uploadCleanup?.(); for (const reader of owner.histories.values()) reader.close();
       global.clearTimeout(owner.fitTimer); global.removeEventListener('resize', owner.resize); doc.removeEventListener('visibilitychange', owner.visibility);
       doc.removeEventListener('pointerdown', owner.dismissMenu, true); doc.removeEventListener('keydown', owner.dismissMenu);
       if (owner.addedTerminalLayout) doc.getElementById('ms-topbar')?.classList.remove('terminal-layout');

@@ -1,0 +1,6 @@
+{
+  "serve": ["."],
+  "body": [
+    { "order": 205, "script": "/js/terminal-upload.js" }
+  ]
+}

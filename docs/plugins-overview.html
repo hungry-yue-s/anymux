@@ -627,7 +627,7 @@ footer { margin-top: 56px; padding-top: 16px; border-top: 1px solid var(--line);
     notifications: { d: "完成通知，存在磁盘上，/api/notifications 和页面上的通知面板。", deps: ['launch','http'] },
     'agent-events': { d: "Agent 钩子事件（/api/agent-events）；有通知插件时把它们变成通知。", deps: ['http'] },
     files: { d: "本机文件：浏览、预览、文件根与路径守卫（fileAccess），以及文件预览和右侧分窗。", deps: ['http'] },
-    upload: { d: "上传文件到窗格所在的目录。", deps: ['launch','http'] },
+    upload: { d: "上传文件到窗格所在的机器；终端里粘贴图片、拖入文件时上传并粘贴路径。", deps: ['launch','http'] },
     git: { d: "Git block：状态、diff、历史、提交，大提交按文件分批加载。", deps: ['http','files'] },
     sqlite: { d: "SQLite 预览：表、查询、分页，用 Node 内置的 node:sqlite，不需要 sqlite3 命令。", deps: ['http','files'] },
     notebook: { d: "Jupyter notebook 的只读预览。", deps: ['http','files'] },

@@ -141,6 +141,16 @@ Linux 使用用户级 `tmux-server.service`，macOS 使用 `com.anymux.tmux-serv
 - **mouseup 复制限桌面**（`window.innerWidth >= 768`）：移动端有自己的长按选择 + Copy 按钮 UI，不走这条。
 - 别给 Mac 用户建议"按 Shift 选择"——那是 Linux/Win 的行为，Mac 上无效。任何平台/任何模式下最可靠的是键盘 copy-mode：`prefix + [` → `v` 选 → `y` 复制（按 pane，且走 OSC 52）。
 
+## 终端粘贴图片契约
+
+窗格里的 Claude Code / Codex 读的是窗格所在机器的剪贴板，不是浏览器的；⌘V 一张截图原来只到达一次空粘贴。`plugins/upload/client/js/terminal-upload.js`（`TerminalUpload`，旧终端和原生工作台共用）改为把图片传到窗格所在的机器（`/api/upload`），再把路径当作一次粘贴发给终端，两个 agent 都会把粘贴的图片路径变成附件。拖到终端上的文件同样处理。
+
+- **在 xterm 之前截下。** 监听装在 `term.element` 的捕获阶段并 `stopImmediatePropagation`：漏给 xterm 就会多发一次空的 bracketed paste，agent 会去读它自己机器的剪贴板。
+- **有文字就是文字。** 表格、文档复制时在文字旁边附一张选区图片，那次粘贴是文字；只有文字为空、或只是这些图片自己的文件名/路径/网址时（Finder 复制文件、浏览器“复制图片”）才按图片处理。
+- **粘贴 `nativePath`，不粘贴 `path`。** Windows 上 `path` 是 MSYS 路径（`/tmp/…`），原生的 Claude Code 读不到，实测原样留成文字；`nativePath` 是正斜杠盘符路径（`C:/msys64/tmp/…`），实测成为 `[Image #1]`，MSYS shell 也认。老 Node 没有 `nativePath` 时才退回 `path`。
+- **一次粘贴一个路径。** Claude Code 不会把一次粘贴里空格分开的几个 `C:/` 路径拆开；多张图片按顺序分别粘贴，中间带空格好让 shell 分开。文件名在页面上取成一个词（不含空格和 shell 字符），扩展名是 agent 认的 png/jpg/gif/webp，其它图片格式先转成 PNG。
+- **上传期间终端换了就不粘贴。** 上传完成时终端已换窗格、窗口或断开，路径只复制到剪贴板并提示，不写进别的窗格。
+
 ## 终端链接契约
 
 终端里的路径和网址有两个来源：程序自己标出的超链接（OSC 8），和页面从文字里识别的。文字识别在 `plugins/terminal/client/js/link-detect.js`（纯函数），跨行合并和 `registerLinkProvider` 在 `plugins/files/client/js/file-preview.js`，OSC 8 的服务端部分在 `lib/terminal/hyperlinks.js`；来由和证据见 `docs/known-issues.md` ENV-14。

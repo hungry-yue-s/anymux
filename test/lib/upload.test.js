@@ -1,5 +1,16 @@
 import { describe, it, expect } from 'vitest';
-import { sanitizeFilename } from '../../lib/api/upload.js';
+import { nativeFilePath, sanitizeFilename } from '../../lib/api/upload.js';
+
+describe('nativeFilePath', () => {
+  it('gives Windows programs a drive path an MSYS shell also accepts', () => {
+    expect(nativeFilePath('C:\\msys64\\tmp\\anymux-uploads\\1_paste.png', 'win32'))
+      .toBe('C:/msys64/tmp/anymux-uploads/1_paste.png');
+  });
+
+  it('leaves POSIX paths alone', () => {
+    expect(nativeFilePath('/tmp/anymux-uploads/1_paste.png', 'linux')).toBe('/tmp/anymux-uploads/1_paste.png');
+  });
+});
 
 describe('sanitizeFilename', () => {
   it('preserves normal filenames', () => {
@@ -45,6 +56,9 @@ describe('createUploadRouter', () => {
       expect(res.status).toBe(200);
       expect(res.body.data.path).toMatch(/^shown:/);
       expect(readFileSync(res.body.data.path.slice('shown:'.length), 'utf8')).toBe('hello');
+      // The path a pasted image is read from is the real file, not the shown one.
+      expect(res.body.data.nativePath).toBe(nativeFilePath(res.body.data.path.slice('shown:'.length)));
+      expect(readFileSync(res.body.data.nativePath, 'utf8')).toBe('hello');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
