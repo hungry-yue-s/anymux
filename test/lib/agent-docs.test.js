@@ -147,7 +147,7 @@ describe('document watcher', () => {
     await watcher.tick();
     expect(events).toHaveLength(3);
     expect(events).toEqual(expect.arrayContaining([
-      { type: 'open-file', path: project.api + '/.anymux/docs/new.md', paneId: '%1', paneIds: ['%1', '%2'],
+      { type: 'open-file', path: project.api + '/.anymux/docs/new.md', paneId: null, paneIds: ['%1', '%2'],
         placement: 'dock', activate: true, origin: 'agent-doc', kind: 'draft', owner: 'anymux' },
       expect.objectContaining({ path: project.api + '/docs/superpowers/plans/2026-11-16-x.md', kind: 'plan', activate: true }),
       expect.objectContaining({ path: project.api + '/.superpowers/sdd/x/progress.md', kind: 'progress', activate: false }),

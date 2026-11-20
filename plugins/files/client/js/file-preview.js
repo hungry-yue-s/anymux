@@ -1223,6 +1223,10 @@ var FilePreview = (function () {
       var existing = saved.tabs.findIndex(function (tab) { return tab.path === arrival.path; });
       var tab = { path: arrival.path, paneId: arrival.paneId, source: arrival.source,
         unread: true, automatic: true, fragment: arrival.fragment || null };
+      if (!arrival.paneId && existing >= 0 && saved.tabs[existing].paneId) {
+        tab.paneId = saved.tabs[existing].paneId;
+        tab.source = saved.tabs[existing].source || { serverId: arrival.source.serverId, paneId: tab.paneId };
+      }
       if (existing >= 0) saved.tabs[existing] = tab;
       else if (old >= 0) saved.tabs.splice(old, 1, tab);
       else saved.tabs.push(tab);
@@ -1391,6 +1395,18 @@ var FilePreview = (function () {
     var replaced = opts.replaces ? _findFileTab(opts.replaces) : null;
     var existing = _findFileTab(filePath);
     if (existing) {
+      var source = opts.source || _sourceForPane(paneId);
+      var sourcePaneId = source.paneId || paneId;
+      if (sourcePaneId) {
+        existing.paneId = sourcePaneId;
+        existing.source = { serverId: source.serverId, paneId: sourcePaneId };
+        if (existing.id === _activeDockTabId) {
+          _currentPaneId = sourcePaneId;
+          _currentSource = existing.source;
+        }
+        _decorate(existing.modal.querySelector('.fp-body'), existing.currentFile, existing.source);
+        _persistDockState();
+      }
       if (opts.fragment) existing.fragment = opts.fragment;
       if (replaced && replaced !== existing) _removeDockTab(_dockTabs.indexOf(replaced));
       if (!activate) return Promise.resolve('exists');
@@ -6215,11 +6231,12 @@ var FilePreview = (function () {
     };
   }
 
-  function _decorate(body, file) {
+  function _decorate(body, file, source) {
     if (!_decorators.length || !body) return;
     var modal = body.closest ? body.closest('.fp-modal') : null;
     if (!modal) return;
-    var context = { modal: modal, body: body, file: file, paneId: _currentPaneId, source: _currentSource };
+    var context = { modal: modal, body: body, file: file,
+      paneId: source ? source.paneId : _currentPaneId, source: source || _currentSource };
     _decorators.forEach(function (fn) {
       try { fn(context); } catch (err) { if (window.console) console.error('[file-preview] decorator failed', err); }
     });

@@ -79,6 +79,144 @@ const tabs = (window) => Array.from(window.document.querySelectorAll('.fp-dock .
 }));
 const modals = (window) => window.document.querySelectorAll('.fp-overlay:not(.fp-dock)').length;
 
+describe('the source pane of a docked document', () => {
+  const path = '/w/p/.anymux/docs/source.html';
+  function sources() {
+    const ctx = setup({ docInfo: { kind: 'draft', label: '草稿', owner: 'anymux', proposal: null } });
+    ctx.window.AppShell.workspace = () => ({ complete: true, instanceId: INSTANCE, sessions: [{ id: '$1', windows: [
+      { id: '@0', panes: [{ id: '%1', index: 1, command: 'codex' }, { id: '%4', index: 4, command: 'node' }] },
+    ] }] });
+    return ctx;
+  }
+  const discovered = { type: 'open-file', serverId: 'local', path, paneId: '%1', paneIds: ['%1', '%4'],
+    placement: 'dock', activate: true, origin: 'agent-doc' };
+  const explicit = { type: 'open-file', serverId: 'local', path, paneId: '%4', windowId: '@0', instanceId: INSTANCE,
+    placement: 'dock', activate: true };
+
+  it('does not name the first of several project panes as the author', async () => {
+    const { window, openers } = sources();
+    await openers['open-file'].run(discovered); await settle();
+    expect(tabs(window)).toHaveLength(1);
+    expect(window.document.querySelector('.ad-source')).toBeNull();
+    expect([...window.document.querySelectorAll('.ad-bar button')].some(b => b.textContent === '回复…')).toBe(false);
+  });
+
+  it.each(['watcher-first', 'explicit-first'])('keeps the explicit source and Reply target with %s arrival order', async order => {
+    const { window, openers, sent, notices } = sources();
+    for (const event of order === 'watcher-first' ? [discovered, explicit] : [explicit, discovered]) {
+      await openers['open-file'].run(event); await settle();
+    }
+    expect(tabs(window)).toHaveLength(1);
+    expect(window.document.querySelector('.ad-source').textContent).toBe('来自4:node');
+    expect(notices.mock.calls.at(-1)[0]).toMatchObject({ paneId: '%4', target: { paneId: '%4' } });
+    [...window.document.querySelectorAll('.ad-bar button')].find(b => b.textContent === '回复…').click(); await settle();
+    expect(sent.at(-1)[2].paneId).toBe('%4');
+  });
+
+  it('updates a reused tab from pane 1 to pane 4 without replacing its body or taking focus', async () => {
+    const { window, preview, openers, typing } = sources();
+    await preview.openDocked(path, '%1'); await settle();
+    const body = window.document.querySelector('.fp-dock .fp-body'); body.scrollTop = 37;
+    typing.focus();
+    await openers['open-file'].run(explicit); await settle();
+    expect(window.document.querySelector('.ad-source').textContent).toBe('来自4:node');
+    expect(window.document.querySelector('.fp-dock .fp-body')).toBe(body);
+    expect(body.scrollTop).toBe(37); expect(window.document.activeElement).toBe(typing);
+  });
+
+  it('preserves the explicit source in a saved offscreen window when discovery follows', async () => {
+    const { window, preview, openers } = sources();
+    const workspace = window.AppShell.workspace(); workspace.sessions[0].windows[0].id = '@5';
+    window.AppShell.workspace = () => workspace;
+    await openers['open-file'].run({ ...explicit, windowId: '@5' });
+    await openers['open-file'].run(discovered);
+    await preview.switchDockContext('local', '@5', INSTANCE); await settle(); await settle();
+    expect(window.document.querySelector('.ad-source').textContent).toBe('来自4:node');
+  });
+
+  it('does not let an old pane metadata response put the Reply target back on pane 1', async () => {
+    const { window, preview, openers, sent } = sources();
+    let finishOld;
+    const pending = new Promise(resolve => { finishOld = resolve; });
+    const client = window.Blocks.ui.client;
+    window.Blocks.ui.client = id => ({ ...client(id), get: (url, params) => url === '/api/agent-docs/info' && params.paneId === '%1'
+      ? pending : client(id).get(url, params) });
+    await preview.openDocked(path, '%1');
+    await openers['open-file'].run(explicit); await settle();
+    finishOld({ doc: { kind: 'draft', label: '草稿', owner: 'anymux', proposal: null } }); await settle();
+    expect(window.document.querySelector('.ad-source').textContent).toBe('来自4:node');
+    [...window.document.querySelectorAll('.ad-bar button')].find(b => b.textContent === '回复…').click(); await settle();
+    expect(sent.at(-1)[2].paneId).toBe('%4');
+  });
+
+  it('updates an inactive tab source without changing the current tab source', async () => {
+    const { window, preview } = sources();
+    await preview.openDocked(path, '%1');
+    await preview.openDocked('/w/p/.anymux/docs/other.html', '%1'); await settle();
+    await preview.openDocked(path, '%4', { activate: false }); await settle();
+    expect(tabs(window).find(t => t.active).name).toBe('other.html');
+    expect(window.document.querySelector('.fp-dock-panels .ad-source').textContent).toBe('来自1:codex');
+    window.document.querySelectorAll('.fp-dock-tab')[0].click(); await settle();
+    expect(window.document.querySelector('.ad-source').textContent).toBe('来自4:node');
+  });
+
+  it('does not let a slower earlier open replace the newer notice Reply target', async () => {
+    const { window, openers, fetch, notices } = sources();
+    const original = fetch.getMockImplementation();
+    let finishFetch;
+    fetch.mockImplementationOnce((...args) => new Promise(resolve => { finishFetch = () => resolve(original(...args)); }));
+    const older = openers['open-file'].run({ ...explicit, paneId: '%1' }); await settle();
+    await openers['open-file'].run(explicit);
+    finishFetch(); await older; await settle(); await settle();
+    expect(window.document.querySelector('.ad-source').textContent).toBe('来自4:node');
+    expect(notices.mock.calls.at(-1)[0]).toMatchObject({ paneId: '%4', target: { paneId: '%4' } });
+  });
+
+  it('ignores an older source lookup that finishes after pane 4 has opened the file', async () => {
+    const { window, openers, notices } = sources();
+    const workspace = window.AppShell.workspace();
+    let finishOld;
+    const pending = new Promise(resolve => { finishOld = resolve; });
+    const client = window.Blocks.ui.client;
+    window.Blocks.ui.client = id => ({ ...client(id), get: (url, params) => url === '/api/workspace' ? pending : client(id).get(url, params) });
+    window.AppShell.workspace = () => null;
+    const older = openers['open-file'].run({ ...explicit, paneId: '%1' });
+    window.AppShell.workspace = () => workspace;
+    await openers['open-file'].run(explicit); await settle();
+    finishOld(workspace); await older; await settle();
+    expect(window.document.querySelector('.ad-source').textContent).toBe('来自4:node');
+    expect(notices.mock.calls.at(-1)[0].target.paneId).toBe('%4');
+  });
+
+  it('reserves the newer explicit source before either workspace lookup finishes', async () => {
+    const { window, preview, openers } = sources();
+    await preview.openDocked(path, '%4'); await settle();
+    const workspace = window.AppShell.workspace();
+    const finish = [];
+    const client = window.Blocks.ui.client;
+    window.Blocks.ui.client = id => ({ ...client(id), get: (url, params) => url === '/api/workspace'
+      ? new Promise(resolve => { finish.push(resolve); }) : client(id).get(url, params) });
+    window.AppShell.workspace = () => null;
+    const older = openers['open-file'].run({ ...explicit, paneId: '%1' });
+    const newer = openers['open-file'].run(explicit);
+    finish[0](workspace); await older; await settle();
+    expect(window.document.querySelector('.ad-source').textContent).toBe('来自4:node');
+    window.AppShell.workspace = () => workspace;
+    finish[1](workspace); await newer; await settle();
+    expect(window.document.querySelector('.ad-source').textContent).toBe('来自4:node');
+  });
+
+  it('does not choose the current window when discovery candidates belong to different windows', async () => {
+    const { window, openers, notices } = sources();
+    const workspace = window.AppShell.workspace();
+    workspace.sessions[0].windows[0].panes.pop();
+    workspace.sessions[0].windows.push({ id: '@5', panes: [{ id: '%4', index: 4, command: 'node' }] });
+    window.AppShell.workspace = () => workspace;
+    await openers['open-file'].run(discovered); await settle();
+    expect(tabs(window)).toEqual([]); expect(notices).not.toHaveBeenCalled();
+  });
+});
+
 describe('opening a document straight into the dock', () => {
   it('waits for View before switching windows and opens mobile documents in their source window', async () => {
     const { window, openers, toast, notices } = setup({ width: 375 });

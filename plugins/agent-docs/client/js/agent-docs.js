@@ -166,7 +166,7 @@
       bar.hidden = true;
       modal.insertBefore(bar, body);
     }
-    var requested = file.absPath + '\u0000' + (file.mtimeMs || 0);
+    var requested = [file.absPath, file.mtimeMs || 0, serverId || '', context.paneId || ''].join('\u0000');
     bar.setAttribute('data-request', requested);
     render(bar, null, context);
     if (file.isDirectory || !api) return;
