@@ -38,7 +38,7 @@ function fakeConnection({ detect = 'kernel=Linux\narch=x86_64\nhostname=box\ntmu
           stdout: [
             ['S', '$1', '工作 区', '1', '0', '1700000000'].join(SEP),
             ['W', '$1', '@2', '0', 'logs', '1', '80', '24', '0', '0'].join(SEP),
-            ['P', '@2', '%3', '0', '0', '80', '24', '1', 'bash', ''].join(SEP),
+            ['P', '@2', '%3', '0', '0', '80', '24', '1', 'bash', '0', ''].join(SEP),
           ].join('\n') + '\n',
           stderr: '',
         };
@@ -188,7 +188,7 @@ describe('parseTree', () => {
       ['S', '$1', 'a', '2', '1', '1'].join(SEP),
       ['W', '$1', '@1', '0', 'w0', '1', '80', '24', '0', '0'].join(SEP),
       ['W', '$1', '@2', '1', 'w1', '0', '80', '24', '1', '0'].join(SEP),
-      ['P', '@2', '%5', '0', '0', '80', '24', '1', 'vim', 'edit'].join(SEP),
+      ['P', '@2', '%5', '0', '0', '80', '24', '1', 'vim', '1', 'edit'].join(SEP),
       'noise line',
     ].join('\n'));
     expect(tree).toHaveLength(1);

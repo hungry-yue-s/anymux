@@ -41,7 +41,7 @@ describe('process and window names on Windows', () => {
   });
 
   it('applies to every parser that reads tmux', () => {
-    expect(parsePanes(['%1', '0', '0', '80', '24', '1', REPORTED, ''].join(SEP))[0].command).toBe('claude');
+    expect(parsePanes(['%1', '0', '0', '80', '24', '1', REPORTED, '0', ''].join(SEP))[0].command).toBe('claude');
     expect(parsePaneCommands(['1', '%1', REPORTED, '/c/work', '42'].join(SEP))[0].command).toBe('claude');
     expect(parseWindows(['@1', '1', REPORTED, '1', '80', '24', '0', '0'].join(SEP))[0].name).toBe('claude');
     expect(parseWindows(['@1', '1', 'Anymux', '1', '80', '24', '0', '0'].join(SEP))[0].name).toBe('Anymux');
@@ -249,22 +249,27 @@ describe('parseWindows', () => {
 describe('parsePanes', () => {
   const SEP = '=:=';
 
+  it('preserves the real pane index independently of the internal id', () => {
+    const line = ['%600', '0', '0', '80', '24', '1', 'codex', '3', '任务'].join(SEP);
+    expect(parsePanes(line)[0]).toMatchObject({ id: '%600', index: 3, command: 'codex', label: '任务' });
+  });
+
   it('parses pane lines with the field separator and @pane_label', () => {
-    const line = ['%0', '0', '0', '80', '24', '1', 'zsh', '构建服务'].join(SEP);
+    const line = ['%0', '0', '0', '80', '24', '1', 'zsh', '0', '构建服务'].join(SEP);
     expect(parsePanes(line)).toEqual([
-      { id: '%0', x: 0, y: 0, width: 80, height: 24, active: true, command: 'zsh', label: '构建服务' },
+      { id: '%0', index: 0, x: 0, y: 0, width: 80, height: 24, active: true, command: 'zsh', label: '构建服务' },
     ]);
   });
 
   it('defaults label to empty string when @pane_label unset', () => {
-    const line = ['%1', '0', '0', '80', '24', '0', 'vim', ''].join(SEP);
+    const line = ['%1', '0', '0', '80', '24', '0', 'vim', '1', ''].join(SEP);
     expect(parsePanes(line)[0].label).toBe('');
   });
 
   it('lets the command absorb a separator while id, geometry and label stay exact', () => {
-    const line = ['%2', '3', '4', '80', '24', '1', `fi${SEP}sh`, '主窗格'].join(SEP);
+    const line = ['%2', '3', '4', '80', '24', '1', `fi${SEP}sh`, '2', '主窗格'].join(SEP);
     expect(parsePanes(line)).toEqual([
-      { id: '%2', x: 3, y: 4, width: 80, height: 24, active: true, command: `fi${SEP}sh`, label: '主窗格' },
+      { id: '%2', index: 2, x: 3, y: 4, width: 80, height: 24, active: true, command: `fi${SEP}sh`, label: '主窗格' },
     ]);
   });
 

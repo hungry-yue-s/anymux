@@ -1652,7 +1652,11 @@
   }
   Blocks.openGitNotice = openCommitNotice;
 
+  var commitArrivalSequence = 0;
+  var deliveredCommitArrivals = new Map();
+
   function openCommitFromPane(event) {
+    var sequence = ++commitArrivalSequence;
     var serverId = event.serverId || ui.currentContext().serverId;
     var workspace = window.AppShell && AppShell.workspace ? AppShell.workspace(serverId) : null;
     var paneIds = event.paneId ? [event.paneId] : [];
@@ -1660,11 +1664,22 @@
     var resolveTarget = target ? Promise.resolve(target)
       : ui.client(serverId).get('/api/workspace').then(function (data) { return ui.windowTarget(serverId, paneIds, data, event); });
     return resolveTarget.then(function (target) {
-      var result = target ? BlockHost.openInWindow('git', { path: event.path, commit: event.commit }, target) : 'unavailable';
+      // Automatic deliveries only update the merged notice. Creating/updating a
+      // block here would replace the commit being read and fetch its diff.
+      var result = event.activate === false ? 'background'
+        : target ? BlockHost.openInWindow('git', { path: event.path, commit: event.commit }, target) : 'unavailable';
       var short = event.commit.slice(0, 8);
-      var message = result === 'activated' ? '已打开提交预览：' + short
+      var message = result === 'background' ? '有新提交待查看：' + short
+        : result === 'activated' ? '已打开提交预览：' + short
         : result === 'queued' ? '提交预览已加入所属窗口的侧栏：' + short
         : result === 'hidden' ? '提交预览已加入侧栏：' + short : '提交预览待查看：' + short;
+      // Source lookups may finish out of order. Keep the latest received notice
+      // for this exact repository/window, while still honoring explicit opens.
+      if (target) {
+        var arrivalKey = JSON.stringify([serverId, target.instanceId, target.windowId, event.path]);
+        if ((deliveredCommitArrivals.get(arrivalKey) || 0) > sequence) return;
+        deliveredCommitArrivals.set(arrivalKey, sequence);
+      }
       var notice = Object.assign({}, event, { serverId: serverId, target: target, type: 'git', message: message,
         id: 'git-' + encodeURIComponent([serverId, target && target.instanceId, target && target.windowId, event.path, event.commit].join('\u0000')),
         session: target && target.session, windowIndex: target && target.windowIndex, windowName: target && target.windowName });

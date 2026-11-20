@@ -491,6 +491,29 @@ describe('documents announced by a pane', () => {
 });
 
 describe('the bar above an agent document', () => {
+  it('uses the real tmux index, custom label and command instead of the internal pane id', async () => {
+    const { window, preview, toast } = setup({ docInfo: { kind: 'draft', label: '草稿', owner: 'anymux', proposal: null } });
+    window.AppShell.server = () => ({ name: '本机' });
+    window.AppShell.workspace = () => ({ sessions: [{ name: '开发', windows: [{ name: '面板', panes: [
+      { id: '%1', index: 3, label: '优化预览', command: 'codex' },
+    ] }] }] });
+    await preview.openDocked('/w/p/.anymux/docs/design.html', '%1'); await settle();
+    const bar = window.document.querySelector('.ad-bar');
+    expect(bar.querySelector('.ad-source').textContent).toBe('来自 本机 / 开发 / 面板 / [优化预览] 3:codex');
+    [...bar.querySelectorAll('button')].find(b => b.textContent === '回复…').click(); await settle();
+    expect(toast).toHaveBeenCalledWith('已填入 [优化预览] 3:codex，在终端里补充后按回车发送', { error: false });
+  });
+
+  it('shows index zero without a label and resolves it on the source server', async () => {
+    const { window, preview } = setup();
+    window.AppShell.server = () => ({ name: '开发机' });
+    window.AppShell.workspace = id => id === 'remote' ? { sessions: [{ name: '开发', windows: [{ name: '任务', panes: [
+      { id: '%7', index: 0, label: null, command: 'fish' },
+    ] }] }] } : null;
+    await preview.openFile('/remote/notes.html', '%7', { source: { serverId: 'remote', paneId: '%7' } }); await settle();
+    expect(window.document.querySelector('.ad-source').textContent).toBe('来自 开发机 / 开发 / 任务 / 0:fish');
+  });
+
   it('shows kind and pane, and types replies into the pane without sending them', async () => {
     const proposal = { status: 'proposed', target: 'docs/design.md', reason: '同类都在 docs/', alternatives: ['docs/d/x.md'], also: null };
     const { window, preview, sent, toast } = setup({ docInfo: { kind: 'draft', label: '草稿', owner: 'anymux', proposal } });
@@ -500,7 +523,7 @@ describe('the bar above an agent document', () => {
     expect(bar.hidden).toBe(false);
     expect(bar.nextElementSibling.classList.contains('fp-body')).toBe(true);
     expect(bar.querySelector('.ad-chip').textContent).toBe('草稿');
-    expect(bar.querySelector('.ad-source').textContent).toBe('来自窗格 %1');
+    expect(bar.querySelector('.ad-source').textContent).toBe('来自窗格');
     expect(bar.querySelector('.ad-proposal-text').textContent).toBe('建议放进项目：docs/design.md · 同类都在 docs/');
     const buttons = Array.from(bar.querySelectorAll('button'));
     expect(buttons.map((b) => b.textContent)).toEqual(['回复…', '确认', '改位置…', '保持草稿']);
@@ -513,7 +536,7 @@ describe('the bar above an agent document', () => {
       ['POST', '/api/agent-docs/reply', { paneId: '%1', text: '确认：把 design.html 放到 docs/design.md' }],
       ['POST', '/api/agent-docs/reply', { paneId: '%1', text: '把 design.html 放到 ' }],
     ]);
-    expect(toast).toHaveBeenCalledWith('已填入窗格 %1，在终端里补充后按回车发送', { error: false });
+    expect(toast).toHaveBeenCalledWith('已填入窗格，在终端里补充后按回车发送', { error: false });
   });
 
   it('shows the source of an ordinary file without agent actions', async () => {
@@ -524,11 +547,11 @@ describe('the bar above an agent document', () => {
     await settle();
     const bar = window.document.querySelector('.ad-bar');
     expect(bar.hidden).toBe(false);
-    expect(bar.querySelector('.ad-source').textContent).toBe('来自 本机 / 开发 / 面板 / 窗格 %1');
+    expect(bar.querySelector('.ad-source').textContent).toBe('来自 本机 / 开发 / 面板 / 窗格');
     expect(bar.querySelector('.ad-chip')).toBeNull();
     expect(bar.querySelector('button')).toBeNull();
     preview._test.dockCurrent();
-    expect(window.document.querySelector('.fp-dock .ad-source').textContent).toContain('窗格 %1');
+    expect(window.document.querySelector('.fp-dock .ad-source').textContent).toContain('窗格');
   });
 
   it('keeps a source bar when agent document metadata is unavailable and uses the source server', async () => {
@@ -541,7 +564,7 @@ describe('the bar above an agent document', () => {
     await settle();
     const bar = window.document.querySelector('.ad-bar');
     expect(bar.hidden).toBe(false);
-    expect(bar.querySelector('.ad-source').textContent).toBe('来自 开发机 / 采集 / 任务 / 窗格 %7');
+    expect(bar.querySelector('.ad-source').textContent).toBe('来自 开发机 / 采集 / 任务 / 窗格');
   });
 
   it('does not choose a session for a linked window with several owners', async () => {
@@ -549,7 +572,7 @@ describe('the bar above an agent document', () => {
     window.AppShell.server = () => ({ name: '本机' });
     window.AppShell.workspace = () => ({ sessions: ['开发', '检查'].map(name => ({ name, windows: [{ name: '面板', panes: [{ id: '%1' }] }] })) });
     await preview.openFile('/w/p/README.html', '%1'); await settle();
-    expect(window.document.querySelector('.ad-source').textContent).toBe('来自 本机 / 面板 / 窗格 %1');
+    expect(window.document.querySelector('.ad-source').textContent).toBe('来自 本机 / 面板 / 窗格');
   });
 
   it('shows the source of a directory clicked in a pane', async () => {
@@ -557,7 +580,7 @@ describe('the bar above an agent document', () => {
     fetch.mockImplementation(async url => ({ status: 200, json: async () => ({ success: true, data: String(url).includes('/info')
       ? { absPath: '/w', isDirectory: true, mtimeMs: 1 } : { absPath: '/w', parent: '/', entries: [], truncated: false } }) }));
     await preview.openFile('/w', '%1'); await settle();
-    expect(window.document.querySelector('.ad-source')?.textContent).toBe('来自窗格 %1');
+    expect(window.document.querySelector('.ad-source')?.textContent).toBe('来自窗格');
   });
 
   it('keeps the bar hidden when an ordinary file has no source pane', async () => {
@@ -572,6 +595,6 @@ describe('the bar above an agent document', () => {
     await preview.openDocked('/w/p/README.html', '%1');
     await settle();
     expect(window.document.querySelector('.fp-dock .ad-bar').hidden).toBe(false);
-    expect(window.document.querySelector('.fp-dock .ad-source').textContent).toBe('来自窗格 %1');
+    expect(window.document.querySelector('.fp-dock .ad-source').textContent).toBe('来自窗格');
   });
 });

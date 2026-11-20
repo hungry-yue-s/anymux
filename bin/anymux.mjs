@@ -6,7 +6,7 @@
 //                                         --dock in the side panel next to this pane
 //                                         (or a page in the browser block)
 //   anymux doc path <name> [--html]       where to write a document draft; prints the path
-//   anymux git show [commit] [--repo dir] open this commit in this pane's Git sidebar
+//   anymux git show [commit] [--background] [--repo dir] register or open a commit preview
 //   anymux split [-h] [-c dir] [cmd...]   split this pane, print the new pane id
 //   anymux run [-t pane] <cmd...>         type a command into a pane and press Enter
 //   anymux capture [-t pane] [-n lines]   print a pane's text (with scrollback)
@@ -26,7 +26,7 @@ import { appPathCandidates } from '../lib/legacy-names.js';
 const USAGE = `usage:
   anymux open [--dock | --background] [--pane %N] [--replaces <old path>] <file[#heading] | url>
   anymux doc path <name> [--html]
-  anymux git show [commit] [--repo <directory>] [--pane %N]
+  anymux git show [commit] [--background] [--repo <directory>] [--pane %N]
   anymux split [-h] [-c dir] [cmd...]
   anymux run [-t pane] <cmd...>
   anymux capture [-t pane] [-n lines]
@@ -170,13 +170,14 @@ async function cmdOpen(args) {
 
 async function cmdGit(args) {
   if (args.shift() !== 'show') die(USAGE);
+  const background = takeOption(args, ['--background', '-b'], { flag: true });
   const repo = takeOption(args, ['--repo', '-C']) || '.';
   const paneId = takeOption(args, ['--pane', '-t']) || currentPane();
   const remaining = rest(args);
   const commit = remaining[0] || 'HEAD';
   if (remaining.length > 1 || !/^(HEAD|[0-9a-f]{4,64})$/i.test(commit)) die('anymux: expected a commit hash or HEAD');
-  const data = await postJson('/api/git/open', { path: absolutePath(repo), paneId, commit, cwd: process.cwd() });
-  process.stdout.write(`requested commit ${data.commit} in ${data.path} (window ${data.windowId})\n`);
+  const data = await postJson('/api/git/open', { path: absolutePath(repo), paneId, commit, cwd: process.cwd(), activate: !background });
+  process.stdout.write(`requested commit ${data.commit} in ${data.path} (window ${data.windowId}${background ? ', background' : ''})\n`);
 }
 
 async function cmdDoc(args) {

@@ -47,7 +47,7 @@
     return String(path || '').split('/').filter(Boolean).pop() || path;
   }
 
-  function sourceLabel(context) {
+  function sourceParts(context) {
     var shell = window.AppShell;
     var serverId = context.source && context.source.serverId;
     var server = shell && shell.server && shell.server(serverId);
@@ -56,13 +56,22 @@
     var locations = [];
     (workspace && workspace.sessions || []).forEach(function (session) {
       (session.windows || []).forEach(function (win) {
-        if ((win.panes || []).some(function (pane) { return pane.id === context.paneId; })) locations.push({ session: session, win: win });
+        var pane = (win.panes || []).find(function (pane) { return pane.id === context.paneId; });
+        if (pane) locations.push({ session: session, win: win, pane: pane });
       });
     });
     // A linked tmux window can be in several sessions: do not guess which one.
     if (locations.length === 1 && locations[0].session.name) parts.push(locations[0].session.name);
     if (locations.length && locations[0].win.name) parts.push(locations[0].win.name);
-    parts.push('窗格 ' + context.paneId);
+    var pane = locations.length && locations[0].pane;
+    var label = pane && pane.label ? '[' + pane.label + '] ' : '';
+    var index = pane && Number.isInteger(pane.index) && pane.index >= 0 ? pane.index + ':' : '';
+    parts.push(label + index + (pane && pane.command || '窗格'));
+    return parts;
+  }
+
+  function sourceLabel(context) {
+    var parts = sourceParts(context);
     return '来自' + (parts.length > 1 ? ' ' : '') + parts.join(' / ');
   }
 
@@ -71,7 +80,8 @@
     var api = client(serverId);
     if (!api) return;
     api.send('POST', '/api/agent-docs/reply', { paneId: paneId, text: text }).then(function () {
-      toast('已填入窗格 ' + paneId + '，在终端里补充后按回车发送');
+      var pane = sourceParts({ source: { serverId: serverId }, paneId: paneId }).pop();
+      toast('已填入' + (pane === '窗格' ? pane : ' ' + pane) + '，在终端里补充后按回车发送');
       var ctx = Blocks.ui.selectedContext ? Blocks.ui.selectedContext() : null;
       var term = typeof terminalState !== 'undefined' ? terminalState.term : null; // eslint-disable-line no-undef
       if (ctx && ctx.paneId === paneId && term && typeof term.focus === 'function') term.focus();

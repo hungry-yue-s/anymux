@@ -126,7 +126,7 @@ describe('git block API', () => {
     const res = await request(app).post('/api/git/open').send({ path: path + '/a.txt', paneId: '%2', commit: hash.slice(0, 8) });
     expect(res.status).toBe(200);
     expect(res.body.data).toMatchObject({ path, commit: hash });
-    expect(gitEvents.at(-1)).toEqual({ type: 'open-git', path, paneId: '%2', windowId: '@1', instanceId: '1:1', commit: hash });
+    expect(gitEvents.at(-1)).toEqual({ type: 'open-git', path, paneId: '%2', windowId: '@1', instanceId: '1:1', commit: hash, activate: true });
     expect(execFileSync('git', ['-C', repo, 'status', '--porcelain'], { encoding: 'utf8' })).toBe('');
     expect(execFileSync('git', ['-C', repo, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim()).toBe(hash);
     for (const commit of ['--all', 'main', 'HEAD~1', '00000000']) {
@@ -143,6 +143,22 @@ describe('git block API', () => {
     const recovered = await request(app).post('/api/git/open').send({ path, paneId: '%0', cwd: apiPath(dir), commit: hash });
     expect(recovered.status).toBe(200);
     expect(gitEvents.at(-1)).toMatchObject({ paneId: null, windowId: '@1', instanceId: '1:1', commit: hash });
+  });
+
+  it('registers a background commit without mutating Git and rejects non-boolean activation', async () => {
+    const path = apiPath(repo);
+    const hash = execFileSync('git', ['-C', repo, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+    const res = await request(app).post('/api/git/open').send({ path, paneId: '%2', commit: 'HEAD', activate: false });
+    expect(res.status).toBe(200);
+    expect(res.body.data).toMatchObject({ commit: hash, activate: false });
+    expect(gitEvents.at(-1)).toMatchObject({ type: 'open-git', commit: hash, activate: false });
+    const count = gitEvents.length;
+    for (const activate of ['false', 0, null]) {
+      expect((await request(app).post('/api/git/open').send({ path, paneId: '%2', activate })).status).toBe(400);
+    }
+    expect(gitEvents).toHaveLength(count);
+    expect(execFileSync('git', ['-C', repo, 'status', '--porcelain'], { encoding: 'utf8' })).toBe('');
+    expect(execFileSync('git', ['-C', repo, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim()).toBe(hash);
   });
 
   it('can anchor history at a requested commit beyond the normal history limit', async () => {

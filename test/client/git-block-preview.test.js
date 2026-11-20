@@ -94,6 +94,71 @@ function setup(answers = {}) {
 const settled = async () => { for (let i = 0; i < 6; i += 1) await new Promise((resolve) => { setTimeout(resolve, 0); }); };
 
 describe('agent commit previews', () => {
+  it('keeps the latest received delivery when an older source lookup finishes late', async () => {
+    let finishLookup;
+    const pending = new Promise(resolve => { finishLookup = resolve; });
+    const workspace = { instanceId: INSTANCE, sessions: [{ id: '$0', windows: [{ id: '@0', panes: [{ id: '%1' }] }] }] };
+    const { win } = setup({ '/api/workspace': () => pending }); await settled();
+    win.AppShell = { workspace: () => null };
+    win.eval(fs.readFileSync('plugins/notifications/client/js/notifications.js', 'utf8'));
+    const arrive = commit => win.PanelSlots.openers.get('open-git').run({ serverId: 'local', path: '/repo', paneId: '%1',
+      windowId: '@0', instanceId: INSTANCE, commit, activate: false });
+    const older = arrive('aaaaaaaaaaaaaaaa');
+    win.AppShell.workspace = () => workspace;
+    await arrive('bbbbbbbbbbbbbbbb');
+    finishLookup(workspace); await older;
+    const notices = JSON.parse(win.localStorage.getItem('anymux_document_notifications_v1'));
+    expect(notices.map(notice => notice.commit)).toEqual(['bbbbbbbbbbbbbbbb']);
+    expect(win.NotificationPanel.unreadCount()).toBe(1);
+  });
+
+  it('only merges a background arrival and loads the exact latest commit on View', async () => {
+    const { win, doc, get, frame } = setup({
+      '/api/workspace': () => ({ instanceId: INSTANCE, sessions: [{ id: '$0', windows: [{ id: '@0', panes: [{ id: '%1' }] }] }] }),
+      '/api/git/log': query => ({ rows: [{ graph: '* ', commit: { hash: query.commit || COMMIT, short: 'commit', refs: [], subject: 'subject', author: 'T', date: 'now' } }] }),
+    });
+    await settled();
+    win.eval(fs.readFileSync('plugins/notifications/client/js/notifications.js', 'utf8'));
+    win.BlockHost.openInWindow('git', { path: '/repo', commit: COMMIT }, { serverId: 'local', instanceId: INSTANCE, windowId: '@0' });
+    await settled();
+    const card = frame().querySelector('.git-commit-card');
+    const draft = frame().querySelector('textarea'); draft.value = 'unfinished';
+    const input = doc.createElement('input'); doc.body.appendChild(input); input.focus();
+    const before = get.mock.calls.length;
+    const arrive = hash => win.PanelSlots.openers.get('open-git').run({ serverId: 'local', path: '/repo', paneId: '%1',
+      windowId: '@0', instanceId: INSTANCE, commit: hash, activate: false });
+    await arrive('bbbbbbbbbbbbbbbb'); await arrive('dddddddddddddddd'); await arrive('dddddddddddddddd');
+    await settled();
+    expect(get.mock.calls.slice(before).filter(([path]) => path.startsWith('/api/git/'))).toEqual([]);
+    expect(frame().querySelector('.git-commit-card')).toBe(card);
+    expect(draft.value).toBe('unfinished'); expect(doc.activeElement).toBe(input);
+    expect(win.BlockHost._test.instances()).toHaveLength(1);
+    win.NotificationPanel.render();
+    expect(doc.querySelectorAll('.notification-item')).toHaveLength(1);
+    doc.querySelector('.notification-item').click(); await settled();
+    expect(get).toHaveBeenCalledWith('/api/git/show', expect.objectContaining({ commit: 'dddddddddddddddd' }));
+    expect(draft.value).toBe('unfinished');
+  });
+
+  it('keeps a collapsed dock and never creates a Git block for background requests to another window', async () => {
+    const { win, doc, get } = setup(); await settled();
+    win.AppShell = { workspace: () => ({ instanceId: INSTANCE, sessions: [{ id: '$0', windows: [
+      { id: '@0', panes: [{ id: '%1' }] }, { id: '@2', panes: [{ id: '%7' }] },
+    ] }] }) };
+    win.eval(fs.readFileSync('plugins/notifications/client/js/notifications.js', 'utf8'));
+    win.FilePreview.blockDock.hide();
+    const before = get.mock.calls.length;
+    await win.PanelSlots.openers.get('open-git').run({ serverId: 'local', path: '/repo', paneId: '%7', commit: COMMIT, activate: false });
+    expect(doc.body.classList.contains('fp-side-open')).toBe(false);
+    expect(win.BlockHost._test.instances()).toHaveLength(1);
+    const key = 'anymux_window_blocks_v1:' + encodeURIComponent(['local', INSTANCE, '@2'].join('\0'));
+    expect(win.localStorage.getItem(key)).toBeNull();
+    await win.FilePreview.switchDockContext('local', '@2', INSTANCE); await settled();
+    expect(get.mock.calls.slice(before).filter(([path]) => path.startsWith('/api/git/'))).toEqual([]);
+    expect(doc.querySelector('.blk-frame')).toBeNull();
+    win.NotificationPanel.render(); expect(doc.querySelectorAll('.notification-item')).toHaveLength(1);
+  });
+
   it('acknowledges the exact commit when it becomes visible without clicking its notification', async () => {
     const { win } = setup(); await settled();
     win.eval(fs.readFileSync('plugins/notifications/client/js/notifications.js', 'utf8'));

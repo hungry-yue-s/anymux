@@ -19,7 +19,7 @@ function tmuxTreeExecutor() {
         return { stdout: ['@5', '0', 'logs', '1', '80', '24', '0', '1'].join(SEP) + '\n', stderr: '' };
       }
       if (sub === 'list-panes') {
-        return { stdout: ['%12', '0', '0', '80', '24', '1', 'zsh', ''].join(SEP) + '\n', stderr: '' };
+        return { stdout: ['%12', '0', '0', '80', '24', '1', 'zsh', '3', ''].join(SEP) + '\n', stderr: '' };
       }
       if (sub === 'display-message') {
         if (args[2] === '#{pid}:#{start_time}') return { stdout: '1873:1700000000\n', stderr: '' };
@@ -63,7 +63,7 @@ describe('WorkspaceService', () => {
     expect(result.sessions).toHaveLength(1);
     expect(result.sessions[0]).toMatchObject({ id: '$1', name: 'DataAnt' });
     expect(result.sessions[0].windows[0]).toMatchObject({ id: '@5', index: 0, name: 'logs' });
-    expect(result.sessions[0].windows[0].panes[0]).toMatchObject({ id: '%12', command: 'zsh' });
+    expect(result.sessions[0].windows[0].panes[0]).toMatchObject({ id: '%12', index: 3, command: 'zsh' });
   });
 
   it('resolves a pane that exists and rejects one that does not', async () => {
@@ -132,7 +132,7 @@ describe('WorkspaceService reading the tree in one tmux call', () => {
   const line = (tag, ...fields) => [tag, ...fields].join(SEP);
   const session = (id, name, windows) => line('S', id, name, windows, '1', '1700000000');
   const windowLine = (sessionId, id, index, name) => line('W', sessionId, id, index, name, '1', '80', '24', '0', '1');
-  const paneLine = (windowId, id) => line('P', windowId, id, '0', '0', '80', '24', '1', 'zsh', '');
+  const paneLine = (windowId, id) => line('P', windowId, id, '0', '0', '80', '24', '1', 'zsh', '3', '');
 
   /** Answers the chained read, and fails the test's way on anything piecemeal. */
   function batchExecutor(lines) {
@@ -228,7 +228,7 @@ describe('WorkspaceService reading the tree in one tmux call', () => {
           if (args[2] === '$2') throw new Error('broken session');
           return { stdout: ['@1', '0', 'w', '1', '80', '24', '0', '1'].join(SEP) + '\n', stderr: '' };
         }
-        if (sub === 'list-panes') return { stdout: ['%1', '0', '0', '80', '24', '1', 'zsh', ''].join(SEP) + '\n', stderr: '' };
+        if (sub === 'list-panes') return { stdout: ['%1', '0', '0', '80', '24', '1', 'zsh', '3', ''].join(SEP) + '\n', stderr: '' };
         return { stdout: '', stderr: '' };
       }),
     };
