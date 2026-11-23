@@ -63,4 +63,29 @@ describe('createUploadRouter', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it('re-creates a removed upload directory instead of failing the upload', async () => {
+    const { default: express } = await import('express');
+    const { default: request } = await import('supertest');
+    const { mkdtempSync, rmSync, statSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { createUploadRouter } = await import('../../lib/api/upload.js');
+
+    const root = mkdtempSync(join(tmpdir(), 'upload-test-'));
+    const dir = join(root, 'uploads');
+    try {
+      const app = express();
+      app.use('/api/upload', createUploadRouter(dir));
+      // A long-running panel: a periodic tmp cleaner removed the directory
+      // after the router was created (macOS clears /tmp entries).
+      rmSync(dir, { recursive: true, force: true });
+      const res = await request(app).post('/api/upload').attach('file', Buffer.from('png'), 'paste.png');
+
+      expect(res.status).toBe(200);
+      expect(statSync(res.body.data.nativePath).isFile()).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });

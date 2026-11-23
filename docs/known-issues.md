@@ -313,6 +313,14 @@ node-pty 报告退出比进程消失晚约 1 秒（中位 1.0 到 1.4 秒），�
 - 文件路径它不发 OSC 8（源码注明普通 Markdown 的文件链接不升级为超链接），Markdown 链接显示成 `标签 (相对会话目录的路径:行号)`，仍然靠页面识别。
 - 不含网址的行用 textwrap 按 Unicode 断行规则换行（first-fit，宽度是终端全宽，续行缩进两格）：路径在 `/` 后接字母处、字母数字之间的 `-` 后断开，行停在断点上、不顶到右边界。原先的强接缝只认“行满”，这种断法全落在弱接缝上，只有文件系统答得上时才合并：按这套规则生成 60–160 列的样例，答不上时 126 处里只接上 21 处。现在“续行的第一段放不进上一行剩下的宽度”也算强接缝，同一批样例（后来加到 217 处）在答得上、答不上、都不存在三种情况下全部接上，没有多接。
 
+### ENV-15 macOS：定期清理删掉上传目录后，终端粘贴图片一直报 ENOENT（2026-11-23）
+
+**现象。** 往终端里粘贴（或拖入）图片，弹「上传失败：ENOENT: no such file or directory, open '/tmp/anymux-uploads/&lt;时间戳&gt;_paste.png'」，与远端服务器无关，本机粘贴同样失败。
+
+**原因。** 上传目录只在面板启动时创建一次（`createUploadRouter` 里的 `mkdirSync`）。launchd 旧名服务（`com.tmux-web-panel`）不带 `--config`，`managedRuntime` 为 false，目录落到 `/tmp/anymux-uploads`；macOS 每日清理（`/etc/periodic/daily/110.clean-tmps`）删除 /tmp 里三天未访问的条目。面板（2026-11-20 起）长驻运行，目录被清掉后 multer 每次落盘都 ENOENT，直到重启前一直失败。
+
+**处理。** `lib/api/upload.js` 把 `mkdirSync(dir, { recursive: true })` 挪进 multer 的 `destination` 回调，每次上传前按需重建（启动时的一次保留，挂载失败照旧暴露）。回归测试 `test/lib/upload.test.js`「re-creates a removed upload directory instead of failing the upload」：建路由、删目录、再上传，期望 200 且文件在盘。目录里的历史粘贴文件被清理属预期，路径只是粘贴时刻的临时附件。
+
 ## 捕获环境备注
 
 两条和产物无关但值得记下来的事。CDP 的 `Page.startScreencast` 在这台共享 Chrome 上返回的帧偶发无样式，所以所有动画改成定时 `page.screenshot` 静帧合成，脚本在 `.playwright-mcp/readme-shot/shot.mjs`。截图里的主机名、内网和公网 IP、服务器名、进程名都在捕获期做了 DOM 文本替换脱敏，tmux 状态栏的主机名用 session 级 `status-right` 覆盖掉，规则见同目录 `shot.mjs` 的 `SANITIZE_RULES`。
