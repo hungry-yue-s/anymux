@@ -734,6 +734,18 @@
       menu.className = 'context-menu ms-sidebar-context-menu';
       menu.setAttribute('role', 'menu');
       menu.hidden = true;
+      menu.addEventListener('keydown', (event) => {
+        if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+        const items = Array.from(menu.querySelectorAll('[role="menuitem"]:not(:disabled)'));
+        if (!items.length) return;
+        event.preventDefault();
+        const at = items.indexOf(global.document.activeElement);
+        const next = event.key === 'Home' ? 0
+          : event.key === 'End' ? items.length - 1
+            : event.key === 'ArrowDown' ? (at < 0 ? 0 : (at + 1) % items.length)
+              : (at < 0 ? items.length - 1 : (at - 1 + items.length) % items.length);
+        items[next].focus();
+      });
       global.document.body.appendChild(menu);
       return menu;
     },
@@ -894,7 +906,7 @@
       });
 
       global.document.addEventListener('contextmenu', (event) => {
-        const sidebar = event.target.closest('.ms-sidebar');
+        const sidebar = event.target.closest('.ms-sidebar, #ms-mobile-workspace-tree');
         if (!sidebar) return;
         event.preventDefault();
         const row = event.target.closest('[data-sidebar-entity]');
@@ -904,6 +916,13 @@
         }
         this._showSidebarContextMenu(row, event);
       });
+      if (global.ContextMenu && global.ContextMenu.installLongPress) {
+        global.ContextMenu.installLongPress(
+          global.document,
+          '.ms-sidebar [data-sidebar-entity], #ms-mobile-workspace-tree [data-sidebar-entity]',
+          (row, coords) => this._showSidebarContextMenu(row, coords),
+        );
+      }
 
       global.document.addEventListener('keydown', (event) => {
         if (event.key !== 'Escape') return;
@@ -1028,6 +1047,11 @@
       if (action === 'sidebar-toggle') {
         const app = global.document.querySelector('.ms-app');
         global.AppShell.setSidebarCollapsed(!app.classList.contains('sidebar-collapsed'));
+        return;
+      }
+      if (action === 'sidebar-group-mode') {
+        const mode = node.dataset.groupMode === 'project' ? 'project' : 'session';
+        global.Store.setUi({ sidebarGroupMode: mode });
         return;
       }
       if (action === 'notifications') {

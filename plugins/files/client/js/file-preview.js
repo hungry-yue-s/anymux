@@ -409,6 +409,30 @@ var FilePreview = (function () {
     }
     grip.addEventListener('pointerdown', onDown);
     grip.addEventListener('keydown', onKeydown);
+    var onGripContext = function (e) {
+      if (!window.ContextMenu) return;
+      e.preventDefault();
+      e.stopPropagation();
+      var maximized = sideOverlay.classList.contains('fp-side-maximized');
+      window.ContextMenu.open({
+        x: e.clientX,
+        y: e.clientY,
+        label: '右侧栏分栏操作',
+        items: [
+          { id: 'reset-width', label: '重置宽度 (420px)', action: function () {
+            var next = setWidth(420);
+            rememberBlockWidth(next);
+            _persistDockState(next);
+          } },
+          { id: 'toggle-max', label: maximized ? '还原右侧栏' : '最大化右侧栏', action: function () {
+            _toggleDockMaximize();
+          } },
+          { separator: true },
+          { id: 'hide-dock', label: '隐藏右侧栏', action: function () { _hideDock(); } },
+        ],
+      });
+    };
+    grip.addEventListener('contextmenu', onGripContext);
 
     function onLayoutResize() {
       if (!sideOverlay.isConnected) return;
@@ -430,6 +454,7 @@ var FilePreview = (function () {
       _sideSetWidth = null;
       grip.removeEventListener('pointerdown', onDown);
       grip.removeEventListener('keydown', onKeydown);
+      grip.removeEventListener('contextmenu', onGripContext);
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
       window.removeEventListener('pointercancel', onUp);
@@ -845,6 +870,12 @@ var FilePreview = (function () {
         select.addEventListener('auxclick', function (e) { if (e.button === 1) _closeDockTab(tab.id); });
       }
       _bindTabDrag(item, tab, bar);
+      item.addEventListener('contextmenu', function (e) {
+        if (!window.ContextMenu) return;
+        e.preventDefault();
+        e.stopPropagation();
+        _openDockTabContextMenu(tab, e.clientX, e.clientY);
+      });
       select.addEventListener('click', function () { _activateDockTab(tab.id); });
       select.addEventListener('keydown', function (e) {
         var index = _dockTabs.indexOf(tab), next;
@@ -910,6 +941,13 @@ var FilePreview = (function () {
     tabs.className = 'fp-dock-tabs';
     tabs.setAttribute('role', 'tablist');
     tabs.setAttribute('aria-label', '\u6587\u4EF6\u9884\u89C8\u6807\u7B7E');
+    if (window.ContextMenu && window.ContextMenu.installLongPress) {
+      window.ContextMenu.installLongPress(tabs, '.fp-dock-tab-item', function (el, coords) {
+        var id = Number(el.getAttribute('data-tab-id'));
+        var match = _dockTabs.find(function (t) { return t.id === id; });
+        if (match) _openDockTabContextMenu(match, coords.clientX, coords.clientY);
+      });
+    }
     var panels = document.createElement('div');
     panels.className = 'fp-dock-panels';
     _dockOverlay.appendChild(tabs);
@@ -1062,6 +1100,63 @@ var FilePreview = (function () {
       window.NotificationPanel.previewViewed({ type: 'document', path: tab.path, contextKey: _dockContextKey,
         snapshot: tab.currentFile && tab.currentFile.noticeSnapshot });
     }
+  }
+
+  function _toggleDockMaximize() {
+    if (!_dockOverlay) return;
+    _maximized = !_maximized;
+    _dockOverlay.classList.toggle('fp-side-maximized', _maximized && _placement === 'side');
+    var active = _activeDockTab();
+    if (active && active.modal) active.modal.classList.toggle('fp-maximized', _maximized);
+    _syncMaximizeButton();
+  }
+
+  function _closeOtherDockTabs(keepTabId) {
+    var ids = _dockTabs.filter(function (t) { return t.id !== keepTabId; }).map(function (t) { return t.id; });
+    ids.forEach(function (id) { _closeDockTab(id); });
+  }
+
+  function _closeRightDockTabs(tabId) {
+    var idx = _dockTabs.findIndex(function (t) { return t.id === tabId; });
+    if (idx < 0) return;
+    var ids = _dockTabs.slice(idx + 1).map(function (t) { return t.id; });
+    ids.forEach(function (id) { _closeDockTab(id); });
+  }
+
+  function _openDockTabContextMenu(tab, x, y) {
+    if (!window.ContextMenu) return;
+    var idx = _dockTabs.indexOf(tab);
+    var hasOthers = _dockTabs.length > 1;
+    var hasRight = idx >= 0 && idx < _dockTabs.length - 1;
+    var maximized = _dockOverlay && _dockOverlay.classList.contains('fp-side-maximized');
+    var items = [];
+    if (!tab.block) {
+      items.push({ id: 'refresh', label: '刷新预览', action: function () {
+        if (_activeDockTabId !== tab.id) _activateDockTab(tab.id);
+        return _refreshCurrent(true).finally(_syncAutoRefresh);
+      } });
+    }
+    items.push({ id: 'toggle-max', label: maximized ? '还原右侧栏' : '最大化右侧栏', action: _toggleDockMaximize });
+    if (tab.path) {
+      items.push({ id: 'copy-path', label: '复制路径', action: function () {
+        _copyText(tab.path);
+        _toast('路径已复制');
+      } });
+    }
+    items.push(
+      { separator: true },
+      { id: 'close-tab', label: '关闭标签', action: function () { _closeDockTab(tab.id); } },
+      { id: 'close-others', label: '关闭其他标签', disabled: !hasOthers, action: function () { _closeOtherDockTabs(tab.id); } },
+      { id: 'close-right', label: '关闭右侧标签', disabled: !hasRight, action: function () { _closeRightDockTabs(tab.id); } },
+      { separator: true },
+      { id: 'hide-dock', label: '隐藏右侧栏', action: function () { _hideDock(); } }
+    );
+    window.ContextMenu.open({
+      x: x,
+      y: y,
+      label: '右侧栏标签操作',
+      items: items,
+    });
   }
 
   function _closeDockTab(tabId) {

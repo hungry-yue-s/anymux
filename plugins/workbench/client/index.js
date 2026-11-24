@@ -1,5 +1,5 @@
 import { createViewStore, newId, validateWindowTarget } from './model.js';
-import { NativeWindowSession } from './native-window-session.js';
+import { SeamWindowSession } from './seam-window-session.js';
 import { openHistory } from './history.js';
 import { registerWorkbenchShell } from './shell.js';
 export { registerWorkbenchShell };
@@ -62,9 +62,9 @@ export function createWorkbench(global, options = {}) {
   const doc = global.document;
   let storage; try { storage = global.localStorage; } catch { /* memory-only */ }
   const store = createViewStore(storage, options.storageScope || 'local');
-  const Session = options.Session || NativeWindowSession;
+  const Session = options.Session || SeamWindowSession;
   const tab = tabIdentity(global), pending = new Map();
-  let mounted = null, generation = 0;
+  let mounted = null, generation = 0, pendingFocusPane = null;
   const mobile = () => global.MobileUI?.isMobile() ?? global.innerWidth < 768;
   const emit = (name, detail) => global.dispatchEvent(new global.CustomEvent(name, { detail }));
   const changed = () => emit('workbench-views-changed', {});
@@ -97,10 +97,11 @@ export function createWorkbench(global, options = {}) {
       target, key: [generation, view?.id, target?.instanceId, target?.clientId, target?.sessionId, target?.windowId, target?.paneId, session?.status].join('\u0000'),
       source: target ? Object.freeze({ serverId: target.serverId, paneId: target.paneId }) : null });
   }
+  const workspaceApiUrl = (serverId, path) => global.Api.workspaceUrl ? global.Api.workspaceUrl(serverId, path) : nodeUrl(serverId, '/api/workspace' + path);
   const announceFocus = () => { emit('terminal-context-changed', context()); emit('workbench-focus-changed', context()); };
   async function supported(serverId) {
     if (!hasPlugin('control-terminal', serverId)) throw new Error('此服务器未启用原生终端插件');
-    const capability = await global.Api.get(nodeUrl(serverId, '/api/workbench/native-capability'));
+    const capability = await global.Api.get(nodeUrl(serverId, '/api/workbench/window-capability'));
     if (!capability?.available || capability.protocol !== 1) throw new Error('请更新 Node 和正在运行的 tmux。仅替换 tmux 程序不会更新已有服务，请在下一次安全重启 tmux 后启用；当前可使用兼容终端。');
     return true;
   }
@@ -208,12 +209,33 @@ export function createWorkbench(global, options = {}) {
         if (mounted !== owner || !store.get(view.id)) return;
         const saved = store.get(view.id);
         if (saved.sessionId !== confirmed.sessionId || saved.windowId !== confirmed.windowId) { store.follow(view.id, confirmed); changed(); }
+        if (pendingFocusPane && confirmed.paneId !== pendingFocusPane && owner.session?.selectPane?.(pendingFocusPane)) {
+          pendingFocusPane = null;
+        }
         announceFocus();
+      },
+      onAction: (action, detail = {}) => {
+        if (mounted !== owner) return;
+        const run = async () => {
+          if (action === 'split') return api.split(detail.direction || 'horizontal', detail.paneId);
+          if (action === 'close-pane') return api.closePane(detail.paneId);
+          if (action === 'break-pane') return api.breakPane(detail.paneId);
+          if (action === 'clear-pane') return api.clearPane(detail.paneId);
+          if (action === 'rename-pane') return api.renamePane(detail.paneId, detail.label);
+          if (action === 'equalize') return api.equalizeLayout(detail.layout || 'tiled');
+          if (action === 'history') return api.openHistory(detail.paneId);
+          if (action === 'close-window') {
+            await global.Api.del(workspaceApiUrl(owner.serverId, '/windows/' + encodeURIComponent(view.windowId)));
+            api.closeView(view.id);
+            global.Router.go({ name: 'terminal', params: { serverId: owner.serverId } });
+          }
+        };
+        return run().catch(notify);
       },
       onState: ({ status, message }) => {
         if (mounted !== owner) return;
         owner.root.dataset.status = status; owner.message.hidden = status === 'live';
-        owner.message.textContent = message || ({ connecting: '正在连接原生终端…', disconnected: '连接已断开，正在重连…', invalid: '无法连接此窗口', exited: '原生终端已结束' }[status] || '');
+        owner.message.textContent = message || ({ connecting: '正在连接工作台…', disconnected: '连接已断开，正在重连…', invalid: '无法连接此窗口', exited: '终端会话已结束' }[status] || '');
         owner.message.classList.toggle('terminal-status-notice', status === 'detached');
         owner.message.classList.toggle('is-prominent', status === 'detached');
         owner.message.classList.remove('is-collapsed');
@@ -237,7 +259,7 @@ export function createWorkbench(global, options = {}) {
     });
     // A pasted image (or a dropped file) goes to this window's machine; its path is pasted.
     const session = owner.session;
-    owner.uploadCleanup = global.TerminalUpload?.install(session.term?.element, {
+    owner.uploadCleanup = global.TerminalUpload?.install(owner.terminal, {
       serverId: () => (hasPlugin('upload', owner.serverId) ? owner.serverId : null),
       isCurrent: () => mounted === owner && owner.session === session,
       paste: (text) => session.paste(text),
@@ -328,13 +350,50 @@ export function createWorkbench(global, options = {}) {
       if (owner.addedTerminalLayout) doc.getElementById('ms-topbar')?.classList.remove('terminal-layout');
       owner.session?.dispose(); owner.actions.remove(); owner.root.remove(); doc.body.classList.remove('terminal-active'); announceFocus();
     },
-    async split(direction = 'horizontal') {
+    async split(direction = 'horizontal', targetPaneId = null) {
       if (!['horizontal', 'vertical'].includes(direction)) throw new Error('无效分割方向');
       const selected = await api.focusedContext();
-      if (context().key !== selected.key) throw new Error('原生终端焦点已变化，请重新分窗');
+      if (context().key !== selected.key) throw new Error('工作台焦点已变化，请重新分窗');
       const path = '/windows/' + encodeURIComponent(selected.windowId) + '/panes';
-      const url = global.Api.workspaceUrl ? global.Api.workspaceUrl(selected.serverId, path) : nodeUrl(selected.serverId, '/api/workspace' + path);
-      return global.Api.post(url, { paneId: selected.paneId, direction });
+      return global.Api.post(workspaceApiUrl(selected.serverId, path), { paneId: targetPaneId || selected.paneId, direction });
+    },
+    selectPane(paneId) {
+      if (!paneId) return false;
+      pendingFocusPane = paneId;
+      if (mounted?.session?.selectPane?.(paneId)) {
+        pendingFocusPane = null;
+        return true;
+      }
+      return false;
+    },
+    async closePane(paneId) {
+      const current = context();
+      const targetPane = paneId || current.paneId;
+      if (!current.serverId || !targetPane) return;
+      await global.Api.del(workspaceApiUrl(current.serverId, '/panes/' + encodeURIComponent(targetPane)));
+    },
+    async breakPane(paneId) {
+      const current = context();
+      const targetPane = paneId || current.paneId;
+      if (!current.serverId || !targetPane) return;
+      return global.Api.post(workspaceApiUrl(current.serverId, '/panes/' + encodeURIComponent(targetPane) + '/break'), {});
+    },
+    async clearPane(paneId) {
+      const current = context();
+      const targetPane = paneId || current.paneId;
+      if (!current.serverId || !targetPane) return;
+      await global.Api.post(workspaceApiUrl(current.serverId, '/panes/' + encodeURIComponent(targetPane) + '/clear'), {});
+    },
+    async renamePane(paneId, label) {
+      const current = context();
+      const targetPane = paneId || current.paneId;
+      if (!current.serverId || !targetPane) return;
+      return global.Api.patch(workspaceApiUrl(current.serverId, '/panes/' + encodeURIComponent(targetPane)), { label });
+    },
+    async equalizeLayout(layout = 'tiled') {
+      const current = context();
+      if (!current.serverId || !current.windowId) return;
+      return global.Api.post(workspaceApiUrl(current.serverId, '/windows/' + encodeURIComponent(current.windowId) + '/layout'), { layout });
     },
     async renameView(id, title) {
       const view = store.get(id); if (!view) return;
@@ -342,12 +401,12 @@ export function createWorkbench(global, options = {}) {
       if (title == null) return; if (typeof title !== 'string' || !title.trim() || title.length > 120) throw new Error('名称需为 1–120 个字符');
       store.update(id, (saved) => { saved.title = title.trim(); }); changed();
     },
-    async openHistory() {
+    async openHistory(targetPaneId = null) {
       const selected = await api.focusedContext();
       if (!mounted || context().key !== selected.key) throw new Error('原生终端焦点已变化，请重新打开历史');
-      const owner = mounted, id = selected.paneId;
+      const owner = mounted, id = targetPaneId || selected.paneId;
       if (owner.histories.has(id)) { owner.histories.get(id).dialog.focus(); return owner.histories.get(id); }
-      owner.closeDrawer(); const reader = openHistory(global, selected.target, { title: store.get(owner.viewId).title, onClose: () => owner.histories.delete(id) });
+      owner.closeDrawer(); const reader = openHistory(global, { ...selected.target, paneId: id }, { title: store.get(owner.viewId).title, onClose: () => owner.histories.delete(id) });
       owner.histories.set(id, reader); return reader;
     },
     closeView(id) { if (mounted?.viewId === id) api.unmount(); store.close(id); changed(); emit('workbench-view-closed', { viewId: id }); },

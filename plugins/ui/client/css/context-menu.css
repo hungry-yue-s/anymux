@@ -1,0 +1,118 @@
+/* Unified 5-zone Seam context menu */
+.seam-context-menu {
+  position: fixed;
+  z-index: 14000;
+  min-width: 196px;
+  max-width: min(280px, calc(100vw - 16px));
+  max-height: min(440px, calc(100dvh - 16px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 5px;
+  border: 1px solid var(--workspace-line-strong, var(--border));
+  border-radius: 9px;
+  background: var(--workspace-panel, var(--bg-card));
+  color: var(--workspace-text, var(--text-primary));
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.34), 0 2px 8px rgba(0, 0, 0, 0.18);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif;
+  font-size: 12.5px;
+  line-height: 1.4;
+  user-select: none;
+}
+
+.seam-context-menu[hidden] {
+  display: none !important;
+}
+
+.seam-ctx-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 30px;
+  padding: 5px 9px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.seam-ctx-item:hover:not(:disabled),
+.seam-ctx-item:focus-visible:not(:disabled) {
+  background: var(--workspace-hover, var(--bg-hover));
+  color: var(--workspace-text, var(--text-primary));
+  outline: none;
+}
+
+.seam-ctx-item:disabled {
+  opacity: 0.42;
+  cursor: default;
+}
+
+.seam-ctx-item.is-danger {
+  color: var(--accent-red, #f7768e);
+}
+
+.seam-ctx-item.is-danger:hover:not(:disabled),
+.seam-ctx-item.is-danger:focus-visible:not(:disabled) {
+  background: color-mix(in srgb, var(--accent-red, #f7768e) 15%, transparent);
+}
+
+.seam-ctx-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  flex: none;
+  color: var(--workspace-muted, var(--text-secondary));
+}
+
+.seam-ctx-item.is-danger .seam-ctx-icon {
+  color: inherit;
+}
+
+.seam-ctx-icon svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.75;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.seam-ctx-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.seam-ctx-shortcut {
+  flex: none;
+  margin-left: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10.5px;
+  color: var(--workspace-muted, var(--text-secondary));
+}
+
+.seam-ctx-sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--workspace-line, var(--border-subtle));
+}
+
+@media (max-width: 767px) {
+  .seam-context-menu {
+    min-width: 220px;
+    padding: 6px;
+  }
+  .seam-ctx-item {
+    min-height: 44px;
+    font-size: 13.5px;
+  }
+}

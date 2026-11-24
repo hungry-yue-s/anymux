@@ -13,7 +13,7 @@ function fixture(configDir, outcome = '@7|%9') {
     if (args[0] === 'if-shell') { mutations.push(args); if (outcome instanceof Error) throw outcome; return outcome; }
     throw Error('unexpected');
   } };
-  const service = new WorkbenchService({ pool, nativePool: pool, tmux, workspace: {}, configDir });
+  const service = new WorkbenchService({ pool, tmux, workspace: {}, configDir });
   return { service, mutations, pool, tmux };
 }
 const body = { instanceId: '77:88', sessionId: '$1', requestId: '01234567-0123-4567-8901-012345678901', cols: 100, rows: 30 };

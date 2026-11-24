@@ -40,23 +40,18 @@ describe('control terminal plugin HTTP boundary', () => {
       expect(calls).toEqual([]);
     } finally { dispose(); }
   });
-  it('gates native creation and disposes both native and raw providers on plugin removal', async () => {
+  it('gates window creation and disposes control pool on plugin removal', async () => {
     const { app, ctx, sockets, capabilities, dispose } = setup();
-    const nativeDispose = vi.spyOn(ctx.controlTerminals.nativePool, 'dispose');
     const rawDispose = vi.spyOn(ctx.controlTerminals.pool, 'dispose');
     try {
-      expect([...sockets.keys()]).toEqual(['/ws/pane-stream/*', '/ws/window-stream/*', '/ws/native-window/*']);
+      expect([...sockets.keys()]).toEqual(['/ws/pane-stream/*', '/ws/window-stream/*']);
       const winCap = await request(app).get('/api/workbench/window-capability').expect(200);
       expect(winCap.body.data).toMatchObject({ available: false, protocol: 1, binary: true });
       expect(capabilities.has('windowStream')).toBe(true);
-      const capability = await request(app).get('/api/workbench/native-capability').expect(200);
-      expect(capability.body.data).toMatchObject({ available: false, protocol: 1, mode: 'native-window', reason: 'native_client_required' });
-      expect(capabilities.has('nativeWindow')).toBe(true);
       await request(app).post('/api/workbench/windows').set('Origin', 'https://other.example').send({}).expect(403);
       await request(app).post('/api/workbench/windows').send({ instanceId: '1:2', sessionId: '$1', requestId: 'request-5678', cols: 80, rows: 24 }).expect(409);
     } finally { dispose(); }
     expect(capabilities.size).toBe(0);
-    expect(nativeDispose).toHaveBeenCalledOnce();
     expect(rawDispose).toHaveBeenCalledOnce();
   });
 });

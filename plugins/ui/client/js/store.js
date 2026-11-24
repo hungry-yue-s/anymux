@@ -3,6 +3,7 @@
   var PERSISTED_UI_KEYS = [
     'sidebarCollapsed',
     'sidebarWidth',
+    'sidebarGroupMode',
     'expandedSessionIdsByServer',
     'terminalModeByServer',
     'lastStatusServerId',
@@ -33,6 +34,7 @@
       ui: {
         sidebarCollapsed: true,
         sidebarWidth: SIDEBAR_DEFAULT_WIDTH,
+        sidebarGroupMode: 'session',
         // Keyed by server: tmux session ids like $3 repeat across servers.
         expandedSessionIdsByServer: {},
         terminalModeByServer: {},
@@ -245,6 +247,10 @@
 
     if (typeof parsed.sidebarCollapsed === 'boolean') {
       patch.sidebarCollapsed = parsed.sidebarCollapsed;
+    }
+
+    if (parsed.sidebarGroupMode === 'session' || parsed.sidebarGroupMode === 'project') {
+      patch.sidebarGroupMode = parsed.sidebarGroupMode;
     }
 
     var width = Number(parsed.sidebarWidth);

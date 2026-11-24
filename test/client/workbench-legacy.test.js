@@ -147,7 +147,7 @@ describe('local workbench bridges', () => {
     const w = setup();
     w.eval(source('plugins/ui/client/js/router.js'));
     w.eval(source('plugins/ui/client/js/store.js'));
-    w.Store.setHealth('remote', { capabilities: { nativeWindow: { available: true } } });
+    w.Store.setHealth('remote', { capabilities: { windowStream: { available: true } } });
     w.Store.setWorkspace('remote', { provider: 'tmux', instanceId: '1:2', actions: {}, sessions: [{ id: '$2', name: '开发', windows: [] }] });
     w.Workbench = { list: () => [{ id: 'v1', serverId: 'remote', title: '我的布局' }] };
     w.eval(source('plugins/ui/client/js/app-shell.js'));
@@ -159,7 +159,7 @@ describe('local workbench bridges', () => {
   it('opens an existing multi-pane window through the default native workbench entry', async () => {
     const w = setup(); w.eval(source('plugins/ui/client/js/router.js')); w.eval(source('plugins/ui/client/js/store.js'));
     const remoteWindow = { id: '@3', name: '编辑', index: 3, active: true, panes: [{ id: '%7' }, { id: '%8' }] };
-    w.Store.setHealth('remote', { capabilities: { nativeWindow: { available: true } } });
+    w.Store.setHealth('remote', { capabilities: { windowStream: { available: true } } });
     w.Store.setWorkspace('remote', { provider: 'tmux', instanceId: '1:2', actions: {}, sessions: [{ id: '$2', name: '开发', windows: [remoteWindow] }] });
     w.Workbench = { list: () => [], create: vi.fn(async () => ({ id: 'native-view' })), open: vi.fn() };
     w.eval(source('plugins/ui/client/js/app-shell.js')); w.eval(source('plugins/ui/client/js/ms-app.js'));

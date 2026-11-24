@@ -47,32 +47,34 @@
   margin: 0;
   border-left: 1px solid var(--fp-line);
   box-shadow: none;
+  background: var(--fp-bg);
 }
-.fp-overlay.fp-side .fp-modal { border: 0; border-radius: 0; }
+.fp-overlay.fp-side .fp-modal { border: 0; border-radius: 0; background: var(--fp-bg); }
 .fp-side-resizer { width: 12px; left: -6px; outline-offset: -4px; }
-.fp-side-resizer::after { width: 1px; left: 5px; background: transparent; }
+.fp-side-resizer::after { width: 3px; left: 4px; background: transparent; transition: background 120ms cubic-bezier(0.2, 0.8, 0.2, 1); }
 .fp-side-resizer:hover::after,
 .fp-side-resizer:focus-visible::after,
-body.fp-side-resizing .fp-side-resizer::after { width: 1px; background: var(--fp-accent); }
+body.fp-side-resizing .fp-side-resizer::after { width: 3px; background: var(--fp-accent); }
 .fp-side-resizer:focus-visible { outline: 2px solid var(--fp-accent); }
 .fp-dock-tabs {
-  min-height: 36px;
-  gap: 0;
+  min-height: 34px;
+  gap: 1px;
   padding: 0 6px;
-  background: var(--fp-panel);
+  background: color-mix(in srgb, var(--workspace-sidebar, var(--fp-panel)) 55%, var(--fp-bg));
   border-color: var(--fp-line);
   scrollbar-width: thin;
 }
-.fp-dock-tab-item { border: 0; border-bottom: 2px solid transparent; border-radius: 0; color: var(--fp-muted); }
+.fp-dock-tab-item { border: 0; border-bottom: 2px solid transparent; border-radius: 0; color: var(--fp-muted); transition: background 120ms cubic-bezier(0.2, 0.8, 0.2, 1), color 120ms cubic-bezier(0.2, 0.8, 0.2, 1); }
 .fp-dock-tab-item:hover { background: var(--fp-hover); color: var(--fp-text); }
-.fp-dock-tab-item.active { background: transparent; color: var(--fp-text); border-color: var(--fp-accent); }
-.fp-dock-tab { padding: 8px 6px; font: 500 12px/1.4 -apple-system, BlinkMacSystemFont, sans-serif; }
+.fp-dock-tab-item.active { background: var(--fp-bg); color: var(--fp-text); border-color: var(--fp-accent); }
+.fp-dock-tab { padding: 7px 6px; font: 500 12px/1.4 -apple-system, BlinkMacSystemFont, sans-serif; }
 /* Dragging a tab: where it lands, before or after the one under the pointer. */
 .fp-dock-tab-item.fp-dragging { opacity: .45; }
 .fp-dock-tab-item.fp-drop-before { box-shadow: inset 2px 0 0 var(--fp-accent); }
 .fp-dock-tab-item.fp-drop-after { box-shadow: inset -2px 0 0 var(--fp-accent); }
-.fp-dock-tab-close { width: 24px; height: 24px; }
-.fp-overlay.fp-side .fp-header { min-height: 40px; padding: 4px 8px; gap: 6px; }
+.fp-dock-tab-close { width: 22px; height: 22px; border-radius: 4px; opacity: 0.72; }
+.fp-dock-tab-close:hover { opacity: 1; background: var(--fp-hover); color: var(--accent-red, var(--fp-text)); }
+.fp-overlay.fp-side .fp-header { min-height: 36px; padding: 4px 10px; gap: 6px; background: transparent; border-bottom: 1px solid color-mix(in srgb, var(--fp-line) 72%, transparent); }
 .fp-overlay.fp-side .fp-btn { flex-basis: 28px; width: 28px; min-width: 28px; height: 28px; }
 .fp-overlay.fp-side .fp-title { font-size: 12px; font-weight: 400; color: var(--fp-muted); direction:rtl; text-align:left; }
 .fp-overlay.fp-side .fp-actions .fp-btn-more { width:auto; min-width:58px; flex-basis:auto; }

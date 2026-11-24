@@ -48,6 +48,7 @@ describe('Store initial state', () => {
       ui: {
         sidebarCollapsed: true,
         sidebarWidth: 248,
+        sidebarGroupMode: 'session',
         expandedSessionIdsByServer: {},
         terminalModeByServer: {},
         lastStatusServerId: null,
@@ -151,6 +152,7 @@ describe('Store ui prefs persistence', () => {
       'showCodex',
       'showPerformance',
       'sidebarCollapsed',
+      'sidebarGroupMode',
       'sidebarWidth',
       'terminalModeByServer',
     ]);
@@ -180,6 +182,7 @@ describe('Store ui prefs persistence', () => {
     expect(second.Store.getState().ui).toEqual({
       sidebarCollapsed: false,
       sidebarWidth: 300,
+      sidebarGroupMode: 'session',
       expandedSessionIdsByServer: { local: ['$1', '$2'] },
       terminalModeByServer: { prod: 'split' },
       lastStatusServerId: 'prod',
@@ -216,6 +219,7 @@ describe('Store ui prefs persistence', () => {
       tmux_ui_prefs: JSON.stringify({
         sidebarCollapsed: 'yes',
         sidebarWidth: 'wide',
+        sidebarGroupMode: 'invalid',
         expandedSessionIdsByServer: ['not', 'a', 'map'],
         terminalModeByServer: 'tab',
         lastStatusServerId: 42,
@@ -229,6 +233,7 @@ describe('Store ui prefs persistence', () => {
     const ui = Store.getState().ui;
     expect(ui.sidebarCollapsed).toBe(true);
     expect(ui.sidebarWidth).toBe(248);
+    expect(ui.sidebarGroupMode).toBe('session');
     expect(ui.expandedSessionIdsByServer).toEqual({});
     expect(ui.terminalModeByServer).toEqual({});
     expect(ui.lastStatusServerId).toBeNull();

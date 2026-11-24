@@ -9,7 +9,7 @@ export function registerWorkbenchShell(global, api) {
     && context?.onTerminal && context.serverId === route.params?.serverId && context.viewId === route.params?.viewId;
   const escape = value => global.AppShell.escape(value == null ? '' : String(value));
   const available = serverId => slots.hasPlugin('control-terminal', serverId)
-    && !!global.AppShell?.health(serverId)?.capabilities?.nativeWindow?.available;
+    && !!global.AppShell?.health(serverId)?.capabilities?.windowStream?.available;
   function currentContext() {
     const route = routeNow(), params = route?.params || {}, current = api.currentContext?.();
     if (matches(route, current)) return { ...current };
@@ -46,7 +46,11 @@ export function registerWorkbenchShell(global, api) {
       && item.sessionId === sessionId && item.windowId === win?.id);
     const created = existing || await api.create({ serverId, sessionId, instanceId: workspace.instanceId,
       ...(win ? { windowId: win.id } : {}), title: win?.name || session.name });
-    if (isCurrent()) api.open(created.id);
+    if (isCurrent()) {
+      api.open(created.id);
+      const paneId = node.dataset.pane || row?.dataset.pane;
+      if (paneId) api.selectPane?.(paneId);
+    }
   }
   const entry = {
     id: 'workbench', currentContext,

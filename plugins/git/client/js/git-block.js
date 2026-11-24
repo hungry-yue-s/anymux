@@ -1629,6 +1629,9 @@
   function openCommitNotice(notice) {
     var target = notice.target;
     var serverId = notice.serverId;
+    var blockParams = notice.commit && notice.commit !== 'WORKTREE'
+      ? { path: notice.path, commit: notice.commit }
+      : { path: notice.path };
     return ui.client(serverId).get('/api/workspace').then(function (workspace) {
       // Pane IDs can be reused after a tmux restart. Only follow the stable
       // source window within the same instance; otherwise open explicitly here.
@@ -1639,13 +1642,13 @@
           });
         }), workspace) : null;
       if (current && window.Router) {
-        BlockHost.openInWindow('git', { path: notice.path, commit: notice.commit }, current);
+        BlockHost.openInWindow('git', blockParams, current);
         return ui.revealWindow(current, function () {
-          BlockHost.open('git', { path: notice.path, commit: notice.commit });
+          BlockHost.open('git', blockParams);
           return true;
         });
       }
-      if (ui.currentContext().serverId === serverId) BlockHost.open('git', { path: notice.path, commit: notice.commit });
+      if (ui.currentContext().serverId === serverId) BlockHost.open('git', blockParams);
       else { toast('请先切换到提交所在的服务器'); return false; }
       return true;
     }).catch(function (err) { toast(errorText(err)); return false; });
@@ -1664,15 +1667,19 @@
     var resolveTarget = target ? Promise.resolve(target)
       : ui.client(serverId).get('/api/workspace').then(function (data) { return ui.windowTarget(serverId, paneIds, data, event); });
     return resolveTarget.then(function (target) {
+      var isWorktree = event.commit === 'WORKTREE';
+      var openParams = isWorktree ? { path: event.path } : { path: event.path, commit: event.commit };
       // Automatic deliveries only update the merged notice. Creating/updating a
       // block here would replace the commit being read and fetch its diff.
       var result = event.activate === false ? 'background'
-        : target ? BlockHost.openInWindow('git', { path: event.path, commit: event.commit }, target) : 'unavailable';
-      var short = event.commit.slice(0, 8);
-      var message = result === 'background' ? '有新提交待查看：' + short
-        : result === 'activated' ? '已打开提交预览：' + short
-        : result === 'queued' ? '提交预览已加入所属窗口的侧栏：' + short
-        : result === 'hidden' ? '提交预览已加入侧栏：' + short : '提交预览待查看：' + short;
+        : target ? BlockHost.openInWindow('git', openParams, target) : 'unavailable';
+      var short = String(event.commit || '').slice(0, 8);
+      var message = isWorktree
+        ? '工作区有 ' + (event.dirtyCount ? event.dirtyCount + ' 处' : '') + '待审阅变更'
+        : (result === 'background' ? '有新提交待查看：' + short
+          : result === 'activated' ? '已打开提交预览：' + short
+            : result === 'queued' ? '提交预览已加入所属窗口的侧栏：' + short
+              : result === 'hidden' ? '提交预览已加入侧栏：' + short : '提交预览待查看：' + short);
       // Source lookups may finish out of order. Keep the latest received notice
       // for this exact repository/window, while still honoring explicit opens.
       if (target) {

@@ -178,3 +178,80 @@
   border-bottom-color: var(--ui-border-soft);
   border-left-width: 2px;
 }
+
+.notification-needs-you {
+  padding: 8px 12px 10px;
+  border-bottom: 1px solid var(--workspace-line, var(--border-subtle));
+  background: color-mix(in srgb, var(--accent-yellow, #e0af68) 8%, transparent);
+}
+.notification-needs-you-head {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--accent-yellow, #e0af68);
+  margin-bottom: 6px;
+}
+.notification-needs-you-item {
+  padding: 8px 10px;
+  margin-top: 6px;
+  border: 1px solid color-mix(in srgb, var(--accent-yellow, #e0af68) 32%, transparent);
+  border-radius: 7px;
+  background: var(--workspace-panel, var(--bg-card));
+}
+.notification-needs-you-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.notification-needs-you-target {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 12px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.notification-jump-btn {
+  height: 22px;
+  padding: 0 8px;
+  border: 1px solid var(--workspace-line-strong, var(--border));
+  border-radius: 4px;
+  background: transparent;
+  color: var(--workspace-accent, var(--accent-blue));
+  font-size: 11.5px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.notification-jump-btn:hover { background: var(--workspace-hover, var(--bg-hover)); }
+.notification-needs-you-msg {
+  margin-top: 4px;
+  font-size: 11.5px;
+  color: var(--workspace-muted, var(--text-secondary));
+}
+.notification-reply-form {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+.notification-reply-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--workspace-line-strong, var(--border));
+  border-radius: 5px;
+  background: var(--workspace-bg, var(--bg-primary));
+  color: var(--workspace-text, var(--text-primary));
+  font-size: 12px;
+}
+.notification-reply-btn {
+  height: 26px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 5px;
+  background: var(--workspace-accent, var(--accent-blue));
+  color: var(--workspace-bg, var(--bg-primary));
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+}

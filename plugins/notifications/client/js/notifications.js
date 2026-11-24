@@ -182,6 +182,20 @@ var NotificationPanel = (function () {
     return _notifications.filter(function (n) { return !n.read; }).length;
   }
 
+  function needsYou() {
+    return _notifications.filter(function (n) {
+      if (n.read) return false;
+      return n.state === 'waiting_attention' || n.state === 'failed'
+        || n.event === 'PermissionRequest' || n.event === 'Notification' || n.event === 'StopFailure';
+    });
+  }
+
+  function _notifyChanged() {
+    if (typeof window !== 'undefined' && typeof CustomEvent === 'function') {
+      try { window.dispatchEvent(new CustomEvent('notifications-changed')); } catch (_) {}
+    }
+  }
+
   function _updateBadge() {
     var count = unreadCount();
     var badges = document.querySelectorAll('.notification-bell-count');
@@ -189,6 +203,14 @@ var NotificationPanel = (function () {
       el.textContent = count;
       el.style.display = count > 0 ? '' : 'none';
     });
+    var waiting = needsYou();
+    var pill = document.getElementById('ms-needs-you-pill');
+    if (pill) {
+      pill.hidden = waiting.length === 0;
+      pill.textContent = waiting.length > 0 ? ('◆ 待处理 ' + waiting.length) : '';
+      pill.title = waiting.length > 0 ? (waiting.length + ' 个 Agent 等待处理') : '';
+    }
+    _notifyChanged();
   }
 
   function _relativeTime(ts) {
@@ -347,6 +369,30 @@ var NotificationPanel = (function () {
     if (_notifications.length === 0) {
       html += '<div class="notification-empty">暂无通知</div>';
     } else {
+      var esc = typeof escapeHtml === 'function' ? escapeHtml : function (v) { return String(v == null ? '' : v); };
+      var waitingList = needsYou();
+      if (waitingList.length > 0) {
+        html += '<div class="notification-needs-you" aria-label="待处理 Agent">';
+        html += '<div class="notification-needs-you-head"><span>◆ 待处理 (' + waitingList.length + ')</span></div>';
+        waitingList.forEach(function (n) {
+          var label = (n.windowName || n.session || n.source || 'agent') + (n.paneId ? ' · ' + n.paneId : '');
+          html += '<div class="notification-needs-you-item" data-notif-id="' + esc(n.id) + '">';
+          html += '<div class="notification-needs-you-row">';
+          html += '<span class="notification-needs-you-target">' + esc(label) + '</span>';
+          html += '<span class="notification-item-time">' + _relativeTime(n.timestamp) + '</span>';
+          html += '<button type="button" class="notification-jump-btn" data-jump-id="' + esc(n.id) + '">跳转</button>';
+          html += '</div>';
+          html += '<div class="notification-needs-you-msg">' + esc(_notificationText(n)) + '</div>';
+          if (n.paneId) {
+            html += '<form class="notification-reply-form" data-reply-id="' + esc(n.id) + '">';
+            html += '<input type="text" class="notification-reply-input" placeholder="预填回复（不自动回车）" aria-label="预填回复到 ' + esc(n.paneId) + '">';
+            html += '<button type="submit" class="notification-reply-btn">填入</button>';
+            html += '</form>';
+          }
+          html += '</div>';
+        });
+        html += '</div>';
+      }
       html += '<div class="notification-list">';
       _notifications.forEach(function (n) {
         var readClass = n.read ? ' notification-item-read' : '';
@@ -374,6 +420,33 @@ var NotificationPanel = (function () {
       // from mistaking that detached target for a click outside the panel.
       event.stopPropagation();
       clearAll();
+    });
+
+    container.querySelectorAll('.notification-jump-btn').forEach(function (btn) {
+      btn.addEventListener('click', function (event) {
+        event.stopPropagation();
+        var id = btn.getAttribute('data-jump-id');
+        var notice = _notifications.find(function (n) { return n.id === id; });
+        if (!notice) return;
+        _jumpToNotice(notice);
+        _closePanel();
+      });
+    });
+
+    container.querySelectorAll('.notification-reply-form').forEach(function (form) {
+      form.addEventListener('click', function (event) { event.stopPropagation(); });
+      form.addEventListener('submit', function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        var id = form.getAttribute('data-reply-id');
+        var notice = _notifications.find(function (n) { return n.id === id; });
+        var input = form.querySelector('.notification-reply-input');
+        var text = input ? input.value : '';
+        if (!notice || !text.trim()) return;
+        _prefillReply(notice, text).then(function (ok) {
+          if (ok && input) input.value = '';
+        });
+      });
     });
 
     container.querySelectorAll('.notification-item').forEach(function (el) {
@@ -418,6 +491,39 @@ var NotificationPanel = (function () {
       _saveDocuments();
       if (serverChanged) _serverMarkReadByWindow(session, windowIndex);
     }
+  }
+
+  function _jumpToNotice(notice) {
+    if (!notice) return;
+    markRead(notice.id);
+    if (notice.paneId && window.Workbench && window.Workbench.selectPane) {
+      window.Workbench.selectPane(notice.paneId);
+    }
+    var hasWindowIndex = notice.windowIndex !== '' && notice.windowIndex !== null && notice.windowIndex !== undefined;
+    if (typeof navigate === 'function' && hasWindowIndex) {
+      navigate('terminal', { currentSession: notice.session, currentWindow: notice.windowIndex, currentPane: notice.paneId || null });
+    }
+  }
+
+  function _prefillReply(notice, rawText) {
+    var safeText = String(rawText || '').replace(/[\r\n]+/g, ' ').trim();
+    if (!notice || !notice.paneId || !safeText) return Promise.resolve(false);
+    var serverId = notice.serverId || (window.Api && Api.activeServerId && Api.activeServerId()) || 'local';
+    var url = window.Api && Api.nodeUrl ? Api.nodeUrl(serverId, '/api/agent-docs/reply') : '/api/agent-docs/reply';
+    var headers = Object.assign({ 'Content-Type': 'application/json' }, window.Auth && Auth.headers ? Auth.headers() : {});
+    return fetch(url, {
+      method: 'POST',
+      headers: headers,
+      body: JSON.stringify({ paneId: notice.paneId, text: safeText }),
+    }).then(function (res) {
+      if (!res.ok) throw new Error('填入失败');
+      _jumpToNotice(notice);
+      if (window.AppShell && AppShell.toast) AppShell.toast('已填入窗格 ' + notice.paneId + '，请在终端按回车发送');
+      return true;
+    }).catch(function (err) {
+      if (window.AppShell && AppShell.toast) AppShell.toast('填入失败：' + (err && err.message ? err.message : '未知错误'));
+      return false;
+    });
   }
 
   function _openPreview(notice) {
@@ -480,8 +586,10 @@ var NotificationPanel = (function () {
     card.dataset.count = String(notices.length);
     var label = document.createElement('span');
     label.className = 'preview-window-label';
-    label.textContent = (notice.type === 'git' ? '提交 ' + String(notice.commit || '').slice(0, 8) : notice.path.split('/').pop())
-      + (notices.length > 1 ? ' · +' + (notices.length - 1) : '');
+    var labelText = notice.type === 'git'
+      ? (notice.commit === 'WORKTREE' ? '工作区变更' : '提交 ' + String(notice.commit || '').slice(0, 8))
+      : notice.path.split('/').pop();
+    label.textContent = labelText + (notices.length > 1 ? ' · +' + (notices.length - 1) : '');
     label.title = notice.message || notice.path;
     var view = document.createElement('button');
     view.type = 'button'; view.className = 'preview-window-view'; view.textContent = '查看';
@@ -578,6 +686,8 @@ var NotificationPanel = (function () {
     _markReadByWindow: markReadByWindow,
     clearAll: clearAll,
     unreadCount: unreadCount,
+    needsYou: needsYou,
+    prefillReply: _prefillReply,
     render: render,
     close: _closePanel,
     updateBadge: _updateBadge,

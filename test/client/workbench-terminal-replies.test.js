@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import xterm from '@xterm/headless';
-import { installInputHandler, installClipboardHandler } from '../../plugins/workbench/client/native-window-session.js';
+import { installInputHandler, installClipboardHandler } from '../../plugins/workbench/client/seam-window-session.js';
 
 describe('native tmux client terminal input', () => {
   it('forwards generated terminal answers and identical user bytes to the real native tty', async () => {

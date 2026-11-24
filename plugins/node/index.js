@@ -48,7 +48,6 @@ export async function apply(ctx, config) {
       moshClient: capabilities.get('moshClient') ?? null,
       controlTerminal: capabilities.get('controlTerminal') ?? null,
       windowStream: capabilities.get('windowStream') ?? null,
-      nativeWindow: capabilities.get('nativeWindow') ?? null,
     }),
     plugins: plugins(),
   });
