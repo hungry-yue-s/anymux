@@ -1,4 +1,5 @@
 import { validateTarget, validateWindowTarget, newId } from './model.js';
+import { TileRegistry, parseTilePayload } from './tile-registry.js';
 
 const FONT_FAMILY = "'Anymux Mono', 'Maple Mono NF CN', 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Symbols Nerd Font Mono', monospace";
 const MAX_WEBGL_PANES = 6;
@@ -10,6 +11,10 @@ const PANE_ICONS = {
   claude: SVG_NS + '<path d="M12 3v4M12 17v4M4.9 6.5l3.2 2M15.9 15.5l3.2 2M4.9 17.5l3.2-2M15.9 8.5l3.2-2"/></svg>',
   codex: SVG_NS + '<rect x="4" y="4" width="16" height="16" rx="3"/><path d="m8.5 9.5 2.5 2.5-2.5 2.5M12.5 14.5H16"/></svg>',
   git: SVG_NS + '<circle cx="6" cy="6" r="2.2"/><circle cx="6" cy="18" r="2.2"/><circle cx="18" cy="8" r="2.2"/><path d="M6 8.2v7.6M18 10.2c0 3.6-4.8 3.2-9.8 5.6"/></svg>',
+  browser: SVG_NS + '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>',
+  diff: SVG_NS + '<path d="M14 3H6.5A1.5 1.5 0 0 0 5 4.5v15A1.5 1.5 0 0 0 6.5 21h11a1.5 1.5 0 0 0 1.5-1.5V8z"/><path d="M14 3v5h5M9.5 14h5M12 11.5v5"/></svg>',
+  doc: SVG_NS + '<path d="M14 3H6.5A1.5 1.5 0 0 0 5 4.5v15A1.5 1.5 0 0 0 6.5 21h11a1.5 1.5 0 0 0 1.5-1.5V8z"/><path d="M14 3v5h5M8 13h8M8 17h5"/></svg>',
+  rich: SVG_NS + '<rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="8" rx="1.5"/><rect x="3" y="13" width="18" height="8" rx="1.5"/></svg>',
   shell: SVG_NS + '<path d="m7 8 4 4-4 4M13 16h5"/></svg>',
   splitH: SVG_NS + '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M12 4v16"/></svg>',
   splitV: SVG_NS + '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 12h18"/></svg>',
@@ -201,7 +206,9 @@ export class SeamWindowSession {
     const themeSync = () => {
       if (this.disposed) return;
       const theme = global.Theme?.getTerminalTheme?.();
-      for (const pane of this.panes.values()) pane.term.options.theme = theme;
+      for (const pane of this.panes.values()) {
+        if (pane.term) pane.term.options.theme = theme;
+      }
     };
     this._listen(doc, 'tmux-theme-change', themeSync);
     this._listen(doc, 'tmux-transparency-change', themeSync);
@@ -230,7 +237,7 @@ export class SeamWindowSession {
   get hydrated() {
     if (!this.panes.size) return false;
     const active = (this.activePaneId && this.panes.get(this.activePaneId)) || this.panes.values().next().value;
-    return Boolean(active?.hydrated);
+    return Boolean(active?.isRich || active?.hydrated);
   }
 
   _listen(element, name, handler, options) {
@@ -248,6 +255,7 @@ export class SeamWindowSession {
           if (late && !this.disposed) {
             this.fontReady = true;
             for (const pane of this.panes.values()) {
+              if (!pane.term) continue;
               pane.term.options.fontFamily = FONT_FAMILY;
               pane.term.clearTextureAtlas?.();
             }
@@ -268,6 +276,7 @@ export class SeamWindowSession {
   _syncInputGates() {
     const windowLive = this.status === 'live';
     for (const pane of this.panes.values()) {
+      if (!pane.term) continue;
       const enabled = windowLive && pane.hydrated && !pane.restoring;
       pane.term.options.disableStdin = !enabled;
       pane.term.options.cursorBlink = enabled && pane.paneId === this.activePaneId;
@@ -301,7 +310,7 @@ export class SeamWindowSession {
     this.layoutReceived = false;
     this.lastRequestedSize = null;
     for (const pane of this.panes.values()) {
-      pane.hydrated = false;
+      pane.hydrated = Boolean(pane.isRich);
       pane.restoring = false;
       pane.lastSeq = null;
       pane.pendingWrites = [];
@@ -386,12 +395,8 @@ export class SeamWindowSession {
     for (const meta of panes) {
       const entry = this.panes.get(meta.id);
       if (!entry) continue;
-      if (!entry.opened && entry.body.isConnected) {
-        entry.opened = true;
-        entry.term.open(entry.body);
-        this._setupPaneAddonsAndBindings(entry);
-      }
-      if (!entry.restoring && Number.isInteger(meta.width) && Number.isInteger(meta.height) && meta.width >= 2 && meta.height >= 2) {
+      this._ensurePaneRenderer(entry, meta);
+      if (!entry.isRich && entry.term && !entry.restoring && Number.isInteger(meta.width) && Number.isInteger(meta.height) && meta.width >= 2 && meta.height >= 2) {
         if (entry.term.cols !== meta.width || entry.term.rows !== meta.height) {
           entry.term.resize(meta.width, meta.height);
         }
@@ -410,7 +415,9 @@ export class SeamWindowSession {
     let entry = this.panes.get(frame.paneId);
     if (!entry) {
       entry = this._ensurePane({ id: frame.paneId, index: Number(frame.paneId.slice(1)) || 0, active: this.activePaneId === frame.paneId });
+      this._ensurePaneRenderer(entry, entry.meta);
     }
+    if (entry.isRich || !entry.term) return;
     if (frame.kind === 'output') {
       if (entry.lastSeq !== null && frame.seq <= entry.lastSeq) return;
       entry.lastSeq = frame.seq;
@@ -492,7 +499,7 @@ export class SeamWindowSession {
 
   _becameReady() {
     if (!this.serverReady || !this.layoutReceived || !this.panes.size) return;
-    const allHydrated = [...this.panes.values()].every((pane) => pane.hydrated);
+    const allHydrated = [...this.panes.values()].every((pane) => pane.isRich || pane.hydrated);
     if (!allHydrated && !this.hydrated) return;
     this.global.clearTimeout(this.connectTimer);
     this.attempt = 0;
@@ -502,12 +509,7 @@ export class SeamWindowSession {
     this.fit();
   }
 
-  _ensurePane(meta) {
-    const paneId = meta.id;
-    let entry = this.panes.get(paneId);
-    if (entry) return entry;
-
-    const doc = this.global.document;
+  _createTerminalInstance() {
     const mobile = !!this.global.MobileUI?.isMobile();
     const term = new this.global.Terminal({
       theme: this.global.Theme?.getTerminalTheme?.(),
@@ -526,6 +528,104 @@ export class SeamWindowSession {
     });
     const fitAddon = this.global.FitAddon?.FitAddon ? new this.global.FitAddon.FitAddon() : null;
     if (fitAddon) term.loadAddon(fitAddon);
+    return { term, fitAddon };
+  }
+
+  _teardownPaneRenderer(entry) {
+    for (const cleanup of entry.cleanups) {
+      if (typeof cleanup === 'function') cleanup();
+      else cleanup?.dispose?.();
+    }
+    entry.cleanups = [];
+    entry.linkProvider?.dispose?.();
+    entry.linkProvider = null;
+    entry.webglAddon?.dispose?.();
+    entry.webglAddon = null;
+    entry.term?.dispose?.();
+    entry.term = null;
+    entry.fitAddon = null;
+    entry.tileHandle?.dispose?.();
+    entry.tileHandle = null;
+    entry.opened = false;
+    entry.body.replaceChildren();
+  }
+
+  _ensurePaneRenderer(entry, meta = entry.meta) {
+    const kind = meta.kind && meta.kind !== 'terminal' ? meta.kind : 'terminal';
+    const payload = kind !== 'terminal' ? (meta.payload || '') : '';
+    const isRich = kind !== 'terminal';
+    const registry = this.global.TileRegistry || TileRegistry;
+
+    if (isRich) {
+      if (entry.isRich && entry.renderedKind === kind && entry.tileHandle) {
+        if (entry.renderedPayload !== payload) {
+          entry.renderedPayload = payload;
+          entry.tileHandle.update?.({
+            global: this.global,
+            serverId: this.target.serverId,
+            windowId: this.target.windowId,
+            paneId: entry.paneId,
+            kind,
+            payload,
+            payloadData: parseTilePayload(payload),
+            onUpdatePayload: (next) => this.onAction('set-pane-payload', { paneId: entry.paneId, payload: next }),
+            onConvertToTerminal: () => this.onAction('set-pane-kind', { paneId: entry.paneId, kind: 'terminal' }),
+            onClose: () => (this.panes.size <= 1 ? this.onAction('close-window', { paneId: entry.paneId }) : this.onAction('close-pane', { paneId: entry.paneId })),
+          });
+        }
+        return;
+      }
+      this._teardownPaneRenderer(entry);
+      entry.isRich = true;
+      entry.renderedKind = kind;
+      entry.renderedPayload = payload;
+      entry.hydrated = true;
+      entry.restoring = false;
+      entry.el.classList.add('is-rich');
+      entry.tileHandle = registry.mount(kind, entry.body, {
+        global: this.global,
+        serverId: this.target.serverId,
+        windowId: this.target.windowId,
+        paneId: entry.paneId,
+        payload,
+        payloadData: parseTilePayload(payload),
+        onUpdatePayload: (next) => this.onAction('set-pane-payload', { paneId: entry.paneId, payload: next }),
+        onConvertToTerminal: () => this.onAction('set-pane-kind', { paneId: entry.paneId, kind: 'terminal' }),
+        onClose: () => (this.panes.size <= 1 ? this.onAction('close-window', { paneId: entry.paneId }) : this.onAction('close-pane', { paneId: entry.paneId })),
+      });
+      return;
+    }
+
+    if (entry.isRich) {
+      this._teardownPaneRenderer(entry);
+      entry.hydrated = false;
+    }
+    entry.isRich = false;
+    entry.renderedKind = 'terminal';
+    entry.renderedPayload = '';
+    entry.el.classList.remove('is-rich');
+    if (!entry.term) {
+      const created = this._createTerminalInstance();
+      entry.term = created.term;
+      entry.fitAddon = created.fitAddon;
+    }
+    if (!entry.opened && entry.body.isConnected) {
+      entry.opened = true;
+      entry.term.open(entry.body);
+      this._setupPaneAddonsAndBindings(entry);
+    }
+  }
+
+  _ensurePane(meta) {
+    const paneId = meta.id;
+    let entry = this.panes.get(paneId);
+    if (entry) return entry;
+
+    const doc = this.global.document;
+    const isRich = Boolean(meta.kind && meta.kind !== 'terminal');
+    const created = isRich ? { term: null, fitAddon: null } : this._createTerminalInstance();
+    const term = created.term;
+    const fitAddon = created.fitAddon;
 
     const el = doc.createElement('section');
     el.className = 'seam-pane';
@@ -616,9 +716,13 @@ export class SeamWindowSession {
       fitAddon,
       webglAddon: null,
       linkProvider: null,
+      tileHandle: null,
+      isRich,
+      renderedKind: null,
+      renderedPayload: null,
       cleanups: [],
       opened: false,
-      hydrated: false,
+      hydrated: isRich,
       restoring: false,
       lastSeq: null,
       pendingWrites: [],
@@ -638,7 +742,7 @@ export class SeamWindowSession {
     el.addEventListener('pointerdown', focusThisPane, true);
     rail.addEventListener('click', (event) => {
       const btn = event.target.closest('[data-pane-action]');
-      if (!btn) { focusThisPane(); entry.term.focus(); return; }
+      if (!btn) { focusThisPane(); entry.term?.focus(); return; }
       event.stopPropagation();
       const action = btn.dataset.paneAction;
       if (action === 'split-h') this.onAction('split', { paneId, direction: 'horizontal' });
@@ -754,13 +858,14 @@ export class SeamWindowSession {
     const prevCwd = entry.meta?.cwd;
     entry.meta = { ...entry.meta, ...meta };
     const idx = Number.isInteger(entry.meta.index) ? entry.meta.index : Number(entry.paneId.slice(1)) || 0;
+    const isRich = Boolean(entry.meta.kind && entry.meta.kind !== 'terminal');
+    const kind = isRich ? entry.meta.kind : commandKind(entry.meta.command || entry.meta.label);
     entry.num.textContent = String(idx);
-    const kind = commandKind(entry.meta.command || entry.meta.label);
     entry.ico.className = 'pane-proc-ico is-' + kind;
-    entry.ico.innerHTML = PANE_ICONS[kind] || PANE_ICONS.shell;
-    const primaryTitle = entry.meta.label || entry.meta.title || entry.meta.command || ('窗格 ' + idx);
+    entry.ico.innerHTML = PANE_ICONS[kind] || (isRich ? PANE_ICONS.rich : PANE_ICONS.shell);
+    const primaryTitle = entry.meta.label || (isRich ? '[' + kind + '] ' + (parseTilePayload(entry.meta.payload).url || parseTilePayload(entry.meta.payload).path || kind) : (entry.meta.title || entry.meta.command || ('窗格 ' + idx)));
     entry.titleEl.textContent = primaryTitle;
-    const cmd = basenameOf(entry.meta.command);
+    const cmd = isRich ? '' : basenameOf(entry.meta.command);
     entry.cmdChip.textContent = cmd && cmd !== primaryTitle ? cmd : '';
     entry.cmdChip.hidden = !entry.cmdChip.textContent;
     const cwdShort = basenameOf(entry.meta.cwd);
@@ -769,7 +874,7 @@ export class SeamWindowSession {
     entry.ctxEl.hidden = !cwdShort;
     entry.zoomBtn.classList.toggle('is-zoomed', this.zoomed && entry.paneId === this.activePaneId);
     entry.zoomBtn.innerHTML = this.zoomed && entry.paneId === this.activePaneId ? PANE_ICONS.unzoom : PANE_ICONS.zoom;
-    if (entry.opened && prevCwd !== entry.meta.cwd) {
+    if (!isRich && entry.opened && prevCwd !== entry.meta.cwd) {
       this._attachPaneLinkProvider(entry);
     }
   }
@@ -949,11 +1054,14 @@ export class SeamWindowSession {
           items: [
             { id: 'split-h', label: '左右分窗', action: () => this.onAction('split', { paneId, direction: 'horizontal' }) },
             { id: 'split-v', label: '上下分窗', action: () => this.onAction('split', { paneId, direction: 'vertical' }) },
+            { id: 'split-rich-browser', label: '拆分富窗格: 网页', action: () => this.onAction('split-rich', { paneId, direction: 'horizontal', kind: 'browser' }) },
+            { id: 'split-rich-doc', label: '拆分富窗格: 文档', action: () => this.onAction('split-rich', { paneId, direction: 'horizontal', kind: 'doc' }) },
+            { id: 'split-rich-diff', label: '拆分富窗格: Git 变更', action: () => this.onAction('split-rich', { paneId, direction: 'horizontal', kind: 'diff' }) },
+            ...(entry?.isRich ? [{ id: 'to-terminal', label: '切换回终端', action: () => this.onAction('set-pane-kind', { paneId, kind: 'terminal' }) }] : []),
             { id: 'zoom', label: this.zoomed && this.activePaneId === paneId ? '还原窗格' : '最大化窗格', action: () => this.zoomPane(paneId) },
             { id: 'rename', label: '重命名窗格', action: () => this.startRenamePane(paneId) },
             { id: 'break', label: '拆分为独立窗口', disabled: this.panes.size <= 1, action: () => this.onAction('break-pane', { paneId }) },
-            { id: 'history', label: '滚动历史', action: () => this.onAction('history', { paneId }) },
-            { id: 'clear', label: '清屏', action: () => this.onAction('clear-pane', { paneId }) },
+            ...(!entry?.isRich ? [{ id: 'history', label: '滚动历史', action: () => this.onAction('history', { paneId }) }, { id: 'clear', label: '清屏', action: () => this.onAction('clear-pane', { paneId }) }] : []),
             { separator: true },
             { id: 'close', label: '关闭窗格', danger: true, action: () => (this.panes.size <= 1 ? this.onAction('close-window', { paneId }) : this.onAction('close-pane', { paneId })) },
           ],
@@ -981,6 +1089,7 @@ export class SeamWindowSession {
       if (body) {
         const paneId = body.dataset.paneId;
         const entry = this.panes.get(paneId);
+        if (entry?.isRich) return false;
         const sel = entry?.term?.getSelection?.() || '';
         const cwd = entry?.meta?.cwd || '';
         ContextMenu.open({
@@ -1054,7 +1163,7 @@ export class SeamWindowSession {
         this._updatePaneMeta(entry, entry.meta);
         this.onAction('rename-pane', { paneId, label });
       }
-      entry.term.focus();
+      entry.term?.focus();
     };
     input.addEventListener('keydown', (event) => {
       if (event.key === 'Enter') { event.preventDefault(); finish(true); }
@@ -1140,14 +1249,14 @@ export class SeamWindowSession {
 
   send(data, trackIntent = true, paneId = this.activePaneId) {
     const entry = paneId && this.panes.get(paneId);
-    if (this.status !== 'live' || !entry?.hydrated || entry.restoring || typeof data !== 'string') return false;
+    if (this.status !== 'live' || !entry?.term || !entry?.hydrated || entry.restoring || typeof data !== 'string') return false;
     if (trackIntent) this.inputVersion++;
     return this._sendInput(paneId, data, false);
   }
 
   paste(text, paneId = this.activePaneId) {
     const entry = paneId && this.panes.get(paneId);
-    if (this.status !== 'live' || !entry?.hydrated || entry.restoring) return false;
+    if (this.status !== 'live' || !entry?.term || !entry?.hydrated || entry.restoring) return false;
     if (entry.term.paste) entry.term.paste(text);
     else this.send(text, true, paneId);
     return true;
@@ -1182,6 +1291,7 @@ export class SeamWindowSession {
 
   _cellMetrics() {
     for (const entry of this.panes.values()) {
+      if (!entry.term) continue;
       const dims = entry.term?._core?._renderService?.dimensions?.css?.cell;
       if (dims?.width > 2 && dims?.height > 4) return { width: dims.width, height: dims.height };
       const screen = entry.body?.querySelector?.('.xterm-screen');
@@ -1245,6 +1355,7 @@ export class SeamWindowSession {
     if (this.disposed) return;
     this.fontSize = Math.max(this.global.MobileUI?.isMobile() ? 11 : 8, Math.min(22, size));
     for (const pane of this.panes.values()) {
+      if (!pane.term) continue;
       pane.term.options.fontSize = this.fontSize;
       pane.term.clearTextureAtlas?.();
     }
@@ -1377,14 +1488,7 @@ export class SeamWindowSession {
     const entry = this.panes.get(paneId);
     if (!entry) return;
     this.panes.delete(paneId);
-    for (const cleanup of entry.cleanups) {
-      if (typeof cleanup === 'function') cleanup();
-      else cleanup?.dispose?.();
-    }
-    entry.cleanups = [];
-    entry.linkProvider?.dispose?.();
-    entry.webglAddon?.dispose?.();
-    entry.term.dispose();
+    this._teardownPaneRenderer(entry);
     entry.el.remove();
   }
 
@@ -1416,7 +1520,7 @@ export class SeamWindowSession {
   _pause(reason) {
     this._disconnect();
     for (const pane of this.panes.values()) {
-      pane.term.write('\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?25l');
+      pane.term?.write('\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?25l');
     }
     const detached = !reason || ['detached', 'taken_over', 'tmux_client_exit'].includes(reason);
     this._setStatus(

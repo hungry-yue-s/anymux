@@ -39,6 +39,7 @@ export function apply(ctx) {
   ctx.http.mount('/api/workbench', router);
   ctx.effect(() => ctx.node.setCapability('controlTerminal', () => pool.capability()), 'control-terminal.capability');
   ctx.effect(() => ctx.node.setCapability('windowStream', () => pool.windowStreamCapability()), 'control-terminal.window-capability');
+  ctx.effect(() => ctx.node.setCapability('richPane', () => pool.richPaneCapability()), 'control-terminal.rich-pane-capability');
   ctx.effect(() => () => { service.dispose(); pool.dispose(); }, 'control-terminal.sessions');
   ctx.provide('controlTerminals', Object.freeze({ pool, gateway, windowGateway, service }));
 }

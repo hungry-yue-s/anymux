@@ -31,7 +31,7 @@ const USAGE = `usage:
   anymux worktree list [--repo <dir>] | new <branch> [--repo <dir>] [--base <ref>] [--open] | remove <path> [--repo <dir>] [--force]
   anymux sessions [--provider claude|codex|gemini] [--q <query>] [--limit <n>]
   anymux automation list | run <id>
-  anymux pane new [--window @id] [--dir h|v] | zoom [--pane %N] | break [--pane %N] | clear [--pane %N] | rename <label> [--pane %N]
+  anymux pane new [--window @id] [--dir h|v] | open <kind> [--payload <json>|--url <url>|--path <path>] [--label <label>] [--dir h|v] [--window @id] | set-kind <kind> [--payload <json>|--url <url>|--path <path>] [--pane %N] | zoom [--pane %N] | break [--pane %N] | clear [--pane %N] | rename <label> [--pane %N]
   anymux browser status | open <url> | snapshot
   anymux split [-h] [-c dir] [cmd...]
   anymux run [-t pane] <cmd...>
@@ -332,9 +332,28 @@ export function parsePaneArgs(argv, envPane = currentPane()) {
   const sub = args.shift();
   const pane = takeOption(args, ['--pane', '-t']) || envPane;
   const windowId = takeOption(args, ['--window', '-w']);
-  const dir = takeOption(args, ['--dir', '-d']) || 'horizontal';
-  const label = rest(args).join(' ').trim();
-  return { sub, pane, windowId, dir, label };
+  const dir = takeOption(args, ['--dir', '--direction', '-d']) || 'horizontal';
+  const payloadRaw = takeOption(args, ['--payload']);
+  const url = takeOption(args, ['--url']);
+  const path = takeOption(args, ['--path']);
+  const optLabel = takeOption(args, ['--label']);
+  const positionals = rest(args);
+  let payload = payloadRaw ?? '';
+  if (url || path) {
+    let base = {};
+    if (payload) {
+      try { base = JSON.parse(payload); } catch { base = {}; }
+    }
+    if (url) base.url = url;
+    if (path) base.path = path;
+    payload = JSON.stringify(base);
+  }
+  const kind = (sub === 'open' || sub === 'set-kind') ? (positionals[0] || '') : '';
+  const label = optLabel ?? (sub === 'rename' ? positionals.join(' ').trim() : '');
+  return {
+    sub, pane, windowId, dir, label,
+    ...(sub === 'open' || sub === 'set-kind' ? { kind, payload } : {}),
+  };
 }
 
 export function parseSessionsArgs(argv) {
@@ -433,20 +452,26 @@ async function cmdAutomation(args) {
 
 async function cmdPane(args) {
   const parsed = parsePaneArgs(args);
-  if (parsed.sub === 'new') {
+  if (parsed.sub === 'new' || parsed.sub === 'open') {
     const winId = parsed.windowId || (await requestJson('GET', '/api/workspace'))?.sessions?.[0]?.windows?.[0]?.id;
     if (!winId) die('anymux: window id required (--window @id)');
     const direction = parsed.dir === 'v' || parsed.dir === 'vertical' ? 'vertical' : 'horizontal';
+    if (parsed.sub === 'open' && !parsed.kind) die('anymux: pane kind required (e.g. browser|diff|doc)');
     const data = await requestJson('POST', `/api/workspace/windows/${encodeURIComponent(winId)}/panes`, {
       ...(parsed.pane ? { paneId: parsed.pane } : {}),
       direction,
+      ...(parsed.sub === 'open' ? { kind: parsed.kind, ...(parsed.payload ? { payload: parsed.payload } : {}), ...(parsed.label ? { label: parsed.label } : {}) } : {}),
     });
     process.stdout.write(JSON.stringify(data, null, 2) + '\n');
     return;
   }
   if (!parsed.pane) die('anymux: pane id required (--pane %N)');
   const encodedPane = encodeURIComponent(parsed.pane);
-  if (parsed.sub === 'zoom') {
+  if (parsed.sub === 'set-kind') {
+    if (!parsed.kind) die('anymux: pane kind required (e.g. terminal|browser|diff|doc)');
+    const body = { kind: parsed.kind, ...(parsed.payload !== '' ? { payload: parsed.payload } : {}) };
+    process.stdout.write(JSON.stringify(await requestJson('PATCH', `/api/workspace/panes/${encodedPane}`, body)) + '\n');
+  } else if (parsed.sub === 'zoom') {
     process.stdout.write(JSON.stringify(await requestJson('POST', `/api/workspace/panes/${encodedPane}/zoom`, {})) + '\n');
   } else if (parsed.sub === 'break') {
     process.stdout.write(JSON.stringify(await requestJson('POST', `/api/workspace/panes/${encodedPane}/break`, {})) + '\n');

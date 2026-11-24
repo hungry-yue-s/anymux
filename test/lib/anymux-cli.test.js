@@ -21,6 +21,12 @@ describe('anymux orchestration CLI & agent-browser bridge', () => {
     expect(parsePaneArgs(['rename', 'Worker', '1', '--pane', '%5'], '%1')).toEqual({
       sub: 'rename', pane: '%5', windowId: null, dir: 'horizontal', label: 'Worker 1',
     });
+    expect(parsePaneArgs(['open', 'browser', '--url', 'https://example.com', '--dir', 'v', '--window', '@2'], '%1')).toEqual({
+      sub: 'open', pane: '%1', windowId: '@2', dir: 'v', label: '', kind: 'browser', payload: '{"url":"https://example.com"}',
+    });
+    expect(parsePaneArgs(['set-kind', 'terminal', '--pane', '%9'], '%1')).toEqual({
+      sub: 'set-kind', pane: '%9', windowId: null, dir: 'horizontal', label: '', kind: 'terminal', payload: '',
+    });
   });
 
   it('probes agent-browser availability gracefully and rejects unwhitelisted commands', async () => {

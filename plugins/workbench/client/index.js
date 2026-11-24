@@ -1,8 +1,9 @@
 import { createViewStore, newId, validateWindowTarget } from './model.js';
 import { SeamWindowSession } from './seam-window-session.js';
+import { TileRegistry } from './tile-registry.js';
 import { openHistory } from './history.js';
 import { registerWorkbenchShell } from './shell.js';
-export { registerWorkbenchShell };
+export { registerWorkbenchShell, TileRegistry };
 
 export const name = 'workbench';
 export const inject = ['api'];
@@ -218,6 +219,9 @@ export function createWorkbench(global, options = {}) {
         if (mounted !== owner) return;
         const run = async () => {
           if (action === 'split') return api.split(detail.direction || 'horizontal', detail.paneId);
+          if (action === 'split-rich') return api.splitRich(detail);
+          if (action === 'set-pane-kind') return api.setPaneKind(detail);
+          if (action === 'set-pane-payload') return api.setPaneKind({ paneId: detail.paneId, payload: detail.payload });
           if (action === 'close-pane') return api.closePane(detail.paneId);
           if (action === 'break-pane') return api.breakPane(detail.paneId);
           if (action === 'clear-pane') return api.clearPane(detail.paneId);
@@ -308,6 +312,9 @@ export function createWorkbench(global, options = {}) {
       const menu = element('div', 'wb-command-menu');
       const command = (label, run) => button(label, label, () => { more.open = false; return run(); }, 'wb-menu-item');
       menu.append(command('左右分割', () => api.split('horizontal')), command('上下分割', () => api.split('vertical')),
+        command('拆分富窗格: 网页', () => api.splitRich({ kind: 'browser' })),
+        command('拆分富窗格: 文档', () => api.splitRich({ kind: 'doc' })),
+        command('拆分富窗格: Git 变更', () => api.splitRich({ kind: 'diff' })),
         command('重新连接', () => owner.session?.refresh()), command('粘贴', async () => {
           const selected = context(); const text = await global.navigator.clipboard.readText();
           if (context().key !== selected.key) throw new Error('原生焦点已变化，请重新粘贴');
@@ -356,6 +363,28 @@ export function createWorkbench(global, options = {}) {
       if (context().key !== selected.key) throw new Error('工作台焦点已变化，请重新分窗');
       const path = '/windows/' + encodeURIComponent(selected.windowId) + '/panes';
       return global.Api.post(workspaceApiUrl(selected.serverId, path), { paneId: targetPaneId || selected.paneId, direction });
+    },
+    async splitRich({ direction = 'horizontal', paneId = null, kind = 'browser', payload = '', label = '' } = {}) {
+      if (!['horizontal', 'vertical'].includes(direction)) throw new Error('无效分割方向');
+      const selected = await api.focusedContext();
+      if (context().key !== selected.key) throw new Error('工作台焦点已变化，请重新分窗');
+      const path = '/windows/' + encodeURIComponent(selected.windowId) + '/panes';
+      return global.Api.post(workspaceApiUrl(selected.serverId, path), {
+        paneId: paneId || selected.paneId,
+        direction,
+        kind,
+        ...(payload ? { payload } : {}),
+        ...(label ? { label } : {}),
+      });
+    },
+    async setPaneKind({ paneId = null, kind, payload } = {}) {
+      const current = context();
+      const targetPane = paneId || current.paneId;
+      if (!current.serverId || !targetPane) return;
+      return global.Api.patch(workspaceApiUrl(current.serverId, '/panes/' + encodeURIComponent(targetPane)), {
+        ...(kind !== undefined ? { kind } : {}),
+        ...(payload !== undefined ? { payload } : {}),
+      });
     },
     selectPane(paneId) {
       if (!paneId) return false;
@@ -423,8 +452,14 @@ export function createWorkbench(global, options = {}) {
 export function apply(ctx, config = {}) {
   const api = createWorkbench(globalThis, config); ctx.provide('workbench', api);
   ctx.effect(() => {
-    const previous = globalThis.Workbench; globalThis.Workbench = api; globalThis.dispatchEvent(new CustomEvent('workbench-ready'));
+    const previous = globalThis.Workbench; globalThis.Workbench = api;
+    const previousRegistry = globalThis.TileRegistry; globalThis.TileRegistry = TileRegistry;
+    globalThis.dispatchEvent(new CustomEvent('workbench-ready'));
     const unregister = registerWorkbenchShell(globalThis, api);
-    return () => { unregister(); if (globalThis.Workbench === api) globalThis.Workbench = previous; };
+    return () => {
+      unregister();
+      if (globalThis.Workbench === api) globalThis.Workbench = previous;
+      if (globalThis.TileRegistry === TileRegistry) globalThis.TileRegistry = previousRegistry;
+    };
   });
 }

@@ -1085,6 +1085,46 @@ function renderTerminal(container, known) {
   }
   var termContainer = view.querySelector('.terminal-container');
   terminalState.termContainer = termContainer;
+  if (!window.__anymuxLegacyBannerDismissed
+    && window.AppShell?.health?.(window.TerminalTarget?.serverId?.())?.capabilities?.windowStream?.available === true
+    && window.Workbench?.create) {
+    var notice = document.createElement('div');
+    notice.className = 'legacy-terminal-notice';
+    notice.setAttribute('role', 'status');
+    var msg = document.createElement('span');
+    msg.textContent = '当前为兼容终端回退视图，推荐切换到低延迟多窗格工作台';
+    var switchBtn = document.createElement('button');
+    switchBtn.type = 'button';
+    switchBtn.className = 'btn btn-sm legacy-terminal-switch';
+    switchBtn.textContent = '切换到工作台';
+    switchBtn.addEventListener('click', function () {
+      var sid = window.TerminalTarget?.serverId?.() || 'local';
+      var ws = window.AppShell?.workspace?.(sid);
+      var session = window.AppShell?._findSession?.(ws, state.currentSession);
+      var win = session?.windows?.find(function (w) { return String(w.index) === String(state.currentWindow) || w.id === state.currentWindow; });
+      if (!session || !ws?.instanceId || !win) return;
+      Promise.resolve(window.Workbench.create({
+        serverId: sid,
+        sessionId: session.id,
+        instanceId: ws.instanceId,
+        windowId: win.id,
+        title: win.name || session.name,
+      })).then(function (created) {
+        if (created?.id) window.Workbench.open(created.id);
+      }).catch(function () {});
+    });
+    var closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.className = 'btn btn-sm legacy-terminal-dismiss';
+    closeBtn.setAttribute('aria-label', '关闭提示');
+    closeBtn.textContent = '×';
+    closeBtn.addEventListener('click', function () {
+      window.__anymuxLegacyBannerDismissed = true;
+      notice.remove();
+    });
+    notice.append(msg, switchBtn, closeBtn);
+    termContainer.parentNode.insertBefore(notice, termContainer);
+  }
   var exitFsBtn = view.querySelector('.terminal-exit-fullscreen-btn');
 
   // Set title

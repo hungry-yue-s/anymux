@@ -1,0 +1,330 @@
+diff --git a/Makefile.am b/Makefile.am
+index 35851e3..5fc9c11 100644
+--- a/Makefile.am
++++ b/Makefile.am
+@@ -193,6 +193,7 @@ dist_tmux_SOURCES = \
+ 	prompt-history.c \
+ 	prompt.c \
+ 	regsub.c \
++	render-card.c \
+ 	resize.c \
+ 	screen-redraw.c \
+ 	screen-write.c \
+diff --git a/format.c b/format.c
+index eccd3a5..19043d1 100644
+--- a/format.c
++++ b/format.c
+@@ -2500,6 +2500,24 @@ format_cb_pane_mode(struct format_tree *ft)
+ 	return (NULL);
+ }
+ 
++/* Callback for pane_kind. */
++static void *
++format_cb_pane_kind(struct format_tree *ft)
++{
++	if (ft->wp == NULL)
++		return (NULL);
++	return (xstrdup(ft->wp->rich_kind != NULL ? ft->wp->rich_kind : "terminal"));
++}
++
++/* Callback for pane_payload. */
++static void *
++format_cb_pane_payload(struct format_tree *ft)
++{
++	if (ft->wp == NULL)
++		return (NULL);
++	return (xstrdup(ft->wp->rich_payload != NULL ? ft->wp->rich_payload : ""));
++}
++
+ /* Callback for pane_path. */
+ static void *
+ format_cb_pane_path(struct format_tree *ft)
+@@ -3825,6 +3843,9 @@ static const struct format_table_entry format_table[] = {
+ 	{ "pane_key_mode", FORMAT_TABLE_STRING,
+ 	  format_cb_pane_key_mode
+ 	},
++	{ "pane_kind", FORMAT_TABLE_STRING,
++	  format_cb_pane_kind
++	},
+ 	{ "pane_last", FORMAT_TABLE_STRING,
+ 	  format_cb_pane_last
+ 	},
+@@ -3852,6 +3873,9 @@ static const struct format_table_entry format_table[] = {
+ 	{ "pane_path", FORMAT_TABLE_STRING,
+ 	  format_cb_pane_path
+ 	},
++	{ "pane_payload", FORMAT_TABLE_STRING,
++	  format_cb_pane_payload
++	},
+ 	{ "pane_pb_progress", FORMAT_TABLE_STRING,
+ 	  format_cb_pane_pb_progress
+ 	},
+@@ -6893,6 +6917,7 @@ format_defaults(struct format_tree *ft, struct client *c, struct session *s,
+ 
+ 	format_add(ft, "pane_snapshot_version", "%d", 1);
+ 	format_add(ft, "native_client_protocol", "%d", 1);
++	format_add(ft, "rich_pane_version", "%d", 1);
+ 
+ 	if (c != NULL && c->name != NULL)
+ 		log_debug("%s: c=%s", __func__, c->name);
+diff --git a/options.c b/options.c
+index fa10d8a..aa466cf 100644
+--- a/options.c
++++ b/options.c
+@@ -1429,6 +1429,9 @@ options_push_changes(const char *name)
+ 	if (*name == '@') {
+ 		RB_FOREACH(wp, window_pane_tree, &all_window_panes)
+ 			wp->flags |= PANE_STYLECHANGED;
++		if (strcmp(name, "@pane_kind") == 0 ||
++		    strcmp(name, "@pane_payload") == 0)
++			render_card_sync_all();
+ 	}
+ 	if (strcmp(name, "pane-colours") == 0) {
+ 		RB_FOREACH(wp, window_pane_tree, &all_window_panes)
+diff --git a/render-card.c b/render-card.c
+new file mode 100644
+index 0000000..805200a
+--- /dev/null
++++ b/render-card.c
+@@ -0,0 +1,195 @@
++/* $OpenBSD$ */
++
++/*
++ * Server-side fallback card renderer for AnyMux rich panes.
++ */
++
++#include <sys/types.h>
++
++#include <stdlib.h>
++#include <string.h>
++
++#include "tmux.h"
++
++static void
++render_card_sanitize(char *dst, size_t dstlen, const char *src)
++{
++	size_t		i = 0;
++	unsigned char	ch;
++
++	if (dstlen == 0)
++		return;
++	if (src == NULL) {
++		dst[0] = '\0';
++		return;
++	}
++	while (*src != '\0' && i + 1 < dstlen) {
++		ch = (unsigned char)*src++;
++		if (ch < 0x20 || ch == 0x7f)
++			dst[i++] = ' ';
++		else
++			dst[i++] = (char)ch;
++	}
++	dst[i] = '\0';
++}
++
++static size_t
++render_card_utf8_advance(const char *s, u_int max_cells)
++{
++	struct utf8_data	 ud;
++	enum utf8_state		 more = UTF8_ERROR;
++	const u_char		*p = (const u_char *)s;
++	const u_char		*start = p;
++	u_int			 cells = 0;
++
++	while (*p != '\0') {
++		if (*p > 0x7f && utf8_open(&ud, *p) == UTF8_MORE) {
++			const u_char *q = p + 1;
++			while (*q != '\0' && (more = utf8_append(&ud, *q)) == UTF8_MORE)
++				q++;
++			if (more != UTF8_DONE) {
++				if (cells + 1 > max_cells)
++					break;
++				cells++;
++				p++;
++				continue;
++			}
++			if (cells + ud.width > max_cells)
++				break;
++			cells += ud.width;
++			p = q + 1;
++		} else {
++			if (cells + 1 > max_cells)
++				break;
++			cells++;
++			p++;
++		}
++	}
++	return (size_t)(p - start);
++}
++
++void
++render_card_pane(struct window_pane *wp)
++{
++	struct screen_write_ctx	 ctx;
++	struct grid_cell	 gc, title_gc, dim_gc;
++	char			 kind_buf[128];
++	char			 payload_buf[1024];
++	char			 rule[256];
++	u_int			 rule_w, hint_row = 0;
++	size_t			 first_len = 0;
++
++	if (wp == NULL || wp->rich_kind == NULL || wp->sx < 4 || wp->sy < 2)
++		return;
++
++	render_card_sanitize(kind_buf, sizeof kind_buf, wp->rich_kind);
++	render_card_sanitize(payload_buf, sizeof payload_buf, wp->rich_payload);
++
++	memcpy(&gc, &grid_default_cell, sizeof gc);
++	title_gc = gc;
++	title_gc.attr |= GRID_ATTR_BRIGHT;
++	dim_gc = gc;
++	dim_gc.attr |= GRID_ATTR_DIM;
++
++	screen_write_start_pane(&ctx, wp, &wp->base);
++	screen_write_clearscreen(&ctx, 8);
++	wp->base.mode &= ~MODE_CURSOR;
++
++	screen_write_cursormove(&ctx, 0, 0, 0);
++	screen_write_nputs(&ctx, wp->sx, &title_gc, "[ANYMUX] %s", kind_buf);
++
++	if (wp->sy >= 3) {
++		rule_w = wp->sx < sizeof rule - 1 ? wp->sx : sizeof rule - 1;
++		memset(rule, '-', rule_w);
++		rule[rule_w] = '\0';
++		screen_write_cursormove(&ctx, 0, 1, 0);
++		screen_write_nputs(&ctx, wp->sx, &dim_gc, "%s", rule);
++	}
++
++	if (wp->sy >= 4 && payload_buf[0] != '\0') {
++		first_len = render_card_utf8_advance(payload_buf, wp->sx);
++		screen_write_cursormove(&ctx, 0, 2, 0);
++		if (payload_buf[first_len] != '\0' && wp->sy >= 6) {
++			screen_write_nputs(&ctx, wp->sx, &gc, "%.*s",
++			    (int)first_len, payload_buf);
++			screen_write_cursormove(&ctx, 0, 3, 0);
++			screen_write_nputs(&ctx, wp->sx, &gc, "%s",
++			    payload_buf + first_len);
++		} else {
++			screen_write_nputs(&ctx, wp->sx, &gc, "%s", payload_buf);
++		}
++	}
++
++	if (wp->sy >= 6 && payload_buf[0] != '\0' && payload_buf[first_len] != '\0')
++		hint_row = 4;
++	else if (wp->sy >= 4 && payload_buf[0] != '\0')
++		hint_row = 3;
++	else if (wp->sy >= 3)
++		hint_row = 2;
++
++	if (hint_row > 0) {
++		screen_write_cursormove(&ctx, 0, hint_row, 0);
++		screen_write_nputs(&ctx, wp->sx, &dim_gc,
++		    "Open in AnyMux Web UI for interactive view");
++	}
++
++	screen_write_stop(&ctx);
++	wp->flags |= PANE_REDRAW;
++}
++
++static void
++render_card_sync_pane(struct window_pane *wp)
++{
++	const char	*kind = NULL, *payload = NULL;
++	const char	*new_kind = NULL, *new_payload = NULL;
++	int		 kind_changed, payload_changed;
++	int		 cleared = 0;
++
++	if (wp == NULL || wp->options == NULL)
++		return;
++
++	if (options_get_only(wp->options, "@pane_kind") != NULL)
++		kind = options_get_string(wp->options, "@pane_kind");
++	if (options_get_only(wp->options, "@pane_payload") != NULL)
++		payload = options_get_string(wp->options, "@pane_payload");
++
++	if (kind != NULL && *kind != '\0' && strcmp(kind, "terminal") != 0)
++		new_kind = kind;
++	if (new_kind != NULL && payload != NULL && *payload != '\0')
++		new_payload = payload;
++
++	kind_changed = (wp->rich_kind == NULL) != (new_kind == NULL) ||
++	    (new_kind != NULL && strcmp(wp->rich_kind, new_kind) != 0);
++	payload_changed = (wp->rich_payload == NULL) != (new_payload == NULL) ||
++	    (new_payload != NULL && strcmp(wp->rich_payload, new_payload) != 0);
++
++	if (!kind_changed && !payload_changed)
++		return;
++
++	cleared = (wp->rich_kind != NULL && new_kind == NULL);
++	free(wp->rich_kind);
++	free(wp->rich_payload);
++	wp->rich_kind = new_kind != NULL ? xstrdup(new_kind) : NULL;
++	wp->rich_payload = new_payload != NULL ? xstrdup(new_payload) : NULL;
++
++	if (wp->rich_kind != NULL)
++		render_card_pane(wp);
++	else if (cleared) {
++		wp->base.mode |= MODE_CURSOR;
++		wp->flags |= PANE_REDRAW;
++	}
++
++	if (wp->window != NULL) {
++		server_redraw_window(wp->window);
++		events_fire_window("window-layout-changed", wp->window);
++	}
++}
++
++void
++render_card_sync_all(void)
++{
++	struct window_pane	*wp;
++
++	RB_FOREACH(wp, window_pane_tree, &all_window_panes)
++		render_card_sync_pane(wp);
++}
+diff --git a/tmux.h b/tmux.h
+index 2693ee4..c30a3d8 100644
+--- a/tmux.h
++++ b/tmux.h
+@@ -1349,6 +1349,8 @@ struct window_pane {
+ 	char	       **argv;
+ 	char		*shell;
+ 	char		*cwd;
++	char		*rich_kind;
++	char		*rich_payload;
+ 
+ 	pid_t		 pid;
+ 	char		 tty[TTY_NAME_MAX];
+@@ -4269,6 +4271,10 @@ struct hyperlinks	*hyperlinks_copy(struct hyperlinks *);
+ void			 hyperlinks_reset(struct hyperlinks *);
+ void			 hyperlinks_free(struct hyperlinks *);
+ 
++/* render-card.c */
++void		 render_card_pane(struct window_pane *);
++void		 render_card_sync_all(void);
++
+ #endif /* TMUX_H */
+ 
+ /* panel-pty.c */
+diff --git a/window.c b/window.c
+index 3680ad8..4d6344c 100644
+--- a/window.c
++++ b/window.c
+@@ -1481,6 +1481,8 @@ window_pane_free(struct window_pane *wp)
+ 
+ 	options_free(wp->options);
+ 	free((void *)wp->cwd);
++	free(wp->rich_kind);
++	free(wp->rich_payload);
+ 	free(wp->shell);
+ 	cmd_free_argv(wp->argc, wp->argv);
+ 	colour_palette_free(&wp->palette);
+@@ -1582,6 +1584,8 @@ window_pane_resize(struct window_pane *wp, u_int sx, u_int sy)
+ 
+ 	log_debug("%s: %%%u resize %ux%u", __func__, wp->id, sx, sy);
+ 	screen_resize(&wp->base, sx, sy, wp->base.saved_grid == NULL);
++	if (wp->rich_kind != NULL)
++		render_card_pane(wp);
+ 
+ 	wme = TAILQ_FIRST(&wp->modes);
+ 	if (wme != NULL && wme->mode->resize != NULL)

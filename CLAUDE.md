@@ -93,10 +93,10 @@ Linux 使用用户级 `tmux-server.service`，macOS 使用 `com.anymux.tmux-serv
 
 ## 原生工作台契约
 
-完整设计见 [docs/local-workbench-design.md](docs/local-workbench-design.md)。工作台使用单控制通道复用的 `/ws/window-stream/:windowId` 二进制协议与「轨线 · Seam」多窗格渲染引擎；布局结构、prefix、快捷键、copy-mode 仍以 tmux 为唯一权威，前端通过 `ControlPool` + `WindowStreamGateway` 增量同步并在各窗格内独立渲染。
+完整设计见 [docs/local-workbench-design.md](docs/local-workbench-design.md)。工作台为主数据面，使用单控制通道复用的 `/ws/window-stream/:windowId` 二进制协议与「轨线 · Seam」多窗格渲染引擎（含 `scripts/tmux-patches/rich-pane.patch` 服务端 `@pane_kind`/`@pane_payload` 与 `TileRegistry` 富窗格混合排版）；布局结构、prefix、快捷键、copy-mode 仍以 tmux 为唯一权威，前端通过 `ControlPool` + `WindowStreamGateway` 增量同步并在各窗格内独立渲染。旧 `/ws/terminal/:paneId`（ConPTY / `attach-session` 路径）已冻结为仅限基础 SSH 与链接窗口的兼容回退通道，节点可通过 `ANYMUX_DISABLE_LEGACY_TERMINAL=1` 彻底关停。
 
 - `ControlPool` 以单条持久化 control-mode 管道管理窗口内所有窗格的实时输出（二进制 `0x01`/`0x02`）与布局树变更，避免额外 attach-session 客户端重绘卡顿；普通 focus 切换不触发无关 reset，关闭页面标签不终止 tmux 窗格。
-- `--panel-pty`（仅保留用于独立测试与运维工具）不作为网页工作台实时数据通道；前述 ConPTY 禁令及 Windows 客户端替换队列仍适用于旧路径，不能因此放宽。
+- `--panel-pty`（仅保留用于独立测试与运维工具）不作为网页工作台实时数据通道；前述 ConPTY 禁令及 Windows 客户端替换队列仍适用于冻结的旧 `/ws/terminal` 兼容回退路径，不能因此放宽。
 - 原生握手应答通过 response 回到同一 PTY；用户 input 等恢复完成。快照验证实例和 pid，按完整 begin/end 边界与直播串行解析，不能以 capture-pane 文本或分块 reset 代替。
 - Git 等焦点相关操作必须 context-request 即时查询真实 pid/tty；轮询缓存不能作为点击当刻的答案。viewId 只标识本地工具归属，不冒充 tmux windowId。
 - `native_client_protocol` 检查运行中的 server。只更新二进制不代表旧 server 已升级；不得为了开启工作台结束现有任务。
