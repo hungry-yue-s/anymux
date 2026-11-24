@@ -45,7 +45,10 @@ describe('control terminal plugin HTTP boundary', () => {
     const nativeDispose = vi.spyOn(ctx.controlTerminals.nativePool, 'dispose');
     const rawDispose = vi.spyOn(ctx.controlTerminals.pool, 'dispose');
     try {
-      expect([...sockets.keys()]).toEqual(['/ws/pane-stream/*', '/ws/native-window/*']);
+      expect([...sockets.keys()]).toEqual(['/ws/pane-stream/*', '/ws/window-stream/*', '/ws/native-window/*']);
+      const winCap = await request(app).get('/api/workbench/window-capability').expect(200);
+      expect(winCap.body.data).toMatchObject({ available: false, protocol: 1, binary: true });
+      expect(capabilities.has('windowStream')).toBe(true);
       const capability = await request(app).get('/api/workbench/native-capability').expect(200);
       expect(capability.body.data).toMatchObject({ available: false, protocol: 1, mode: 'native-window', reason: 'native_client_required' });
       expect(capabilities.has('nativeWindow')).toBe(true);

@@ -8,6 +8,10 @@ function provider(overrides = {}) {
     selectLayoutById: vi.fn(async () => {}),
     capturePane: vi.fn(async () => 'hello\n'),
     resizePane: vi.fn(async () => {}),
+    resizePaneTo: vi.fn(async () => {}),
+    zoomPane: vi.fn(async () => true),
+    breakPane: vi.fn(async () => ({ windowId: '@9', paneId: '%3' })),
+    clearPane: vi.fn(async () => {}),
     swapPane: vi.fn(async () => {}),
     ...overrides,
   };
@@ -53,5 +57,16 @@ describe('the layout picker through the workspace, by id', () => {
     const { workspace } = provider({ windowSizeById: missing, capturePane: missing });
     await expect(workspace.getWindowLayout('@9')).rejects.toMatchObject({ code: ErrorCode.WINDOW_NOT_FOUND });
     await expect(workspace.capturePane('%9')).rejects.toMatchObject({ code: ErrorCode.PANE_NOT_FOUND });
+  });
+
+  it('supports absolute pane resize, zoom, break, and clear operations', async () => {
+    const { tmux, workspace } = provider();
+    await expect(workspace.resizePane('%3', { cols: 90, rows: 30 })).resolves.toEqual({ id: '%3', cols: 90, rows: 30 });
+    expect(tmux.resizePaneTo).toHaveBeenCalledWith('%3', { cols: 90, rows: 30 });
+    await expect(workspace.zoomPane('%3', { zoomed: true })).resolves.toEqual({ id: '%3', zoomed: true });
+    expect(tmux.zoomPane).toHaveBeenCalledWith('%3', true);
+    await expect(workspace.breakPane('%3')).resolves.toEqual({ windowId: '@9', paneId: '%3' });
+    await expect(workspace.clearPane('%3', { scope: 'history' })).resolves.toEqual({ id: '%3', scope: 'history' });
+    expect(tmux.clearPane).toHaveBeenCalledWith('%3', { scope: 'history' });
   });
 });

@@ -26,10 +26,17 @@ describe('workbench capability across a Hub', () => {
     expect(statusFromNodeInfo('remote', info, { transport: 'ssh', latencyMs: 5, now: 0 }).capabilities.nativeWindow).toEqual(nativeWindow);
     expect(info.capabilities).not.toHaveProperty('controlTerminal');
   });
-  it('relays authenticated pane streams through the machine boundary', () => {
+  it('relays authenticated pane and window streams through the machine boundary', () => {
     expect(isRelayable('/ws/pane-stream/%251', { upgrade: true })).toBe(true);
     expect(isRelayable('/ws/pane-stream-unsafe/%251', { upgrade: true })).toBe(false);
+    expect(isRelayable('/ws/window-stream/%402', { upgrade: true })).toBe(true);
+    expect(isRelayable('/ws/window-stream-unsafe/@2', { upgrade: true })).toBe(false);
     expect(isRelayable('/ws/native-window/@1', { upgrade: true })).toBe(true);
     expect(isRelayable('/ws/native-window-unsafe/@1', { upgrade: true })).toBe(false);
+  });
+  it('forwards windowStream capability alongside controlTerminal', async () => {
+    const windowStream = { available: true, protocol: 1, binary: true, reason: null };
+    const info = await collectNodeInfo({ tmuxVersion: async () => 'next', windowStream: async () => windowStream });
+    expect(statusFromNodeInfo('remote', info, { transport: 'ssh', latencyMs: 5, now: 0 }).capabilities.windowStream).toEqual(windowStream);
   });
 });

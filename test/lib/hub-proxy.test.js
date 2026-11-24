@@ -36,6 +36,7 @@ describe('isRelayable', () => {
   it('relays only the status and terminal sockets', () => {
     expect(isRelayable('/ws/status', { upgrade: true })).toBe(true);
     expect(isRelayable('/ws/terminal/%251', { upgrade: true })).toBe(true);
+    expect(isRelayable('/ws/window-stream/%402', { upgrade: true })).toBe(true);
     expect(isRelayable('/ws/other', { upgrade: true })).toBe(false);
   });
 });

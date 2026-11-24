@@ -81,11 +81,11 @@ describe('independent node SSH terminal lane', () => {
     const [answer] = await once(download, 'response');
     cleanups.push(() => { download.destroy(); answer.destroy(); });
     answer.resume();
-    const [legacy, panes] = await Promise.all([f.ws('/ws/terminal/%251'), f.ws('/ws/pane-stream/%252')]);
+    const [legacy, panes, win] = await Promise.all([f.ws('/ws/terminal/%251'), f.ws('/ws/pane-stream/%252'), f.ws('/ws/window-stream/%401')]);
     expect(f.forwards).toHaveLength(2);
     expect(f.forwards[0].port).not.toBe(f.forwards[1].port);
     expect(f.bulk[0].writableEnded).toBe(false);
-    await echo(legacy); await echo(panes);
+    await echo(legacy); await echo(panes); await echo(win);
   });
 
   it('closes only the sockets owned by a failed lane', async () => {

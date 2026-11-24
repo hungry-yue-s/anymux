@@ -67,4 +67,28 @@ describe('tmux control process', () => {
     proc.stdout.write('x'.repeat(33));
     expect(ended.code).toBe('CONNECTION_LIMIT');
   });
+
+  it('decodes extended-output, pause events, fragmented multi-chunk lines, and backslash-free payloads', () => {
+    const proc = child();
+    const control = new ControlProcess({ sessionId: '$1', spawn: () => proc });
+    const outputs = [];
+    const pauses = [];
+    const notifications = [];
+    control.on('output', (paneId, bytes) => outputs.push([paneId, bytes.toString()]));
+    control.on('pause', paneId => pauses.push(paneId));
+    control.on('notification', text => notifications.push(text));
+
+    proc.stdout.write('%output %12 plain text\n');
+    proc.stdout.write('%extended-output %12 45 ');
+    proc.stdout.write(': hello\\012%output\n');
+    proc.stdout.write('%pause %12\n');
+
+    expect(outputs).toEqual([
+      ['%12', 'plain text'],
+      ['%12', 'hello\n%output'],
+    ]);
+    expect(pauses).toEqual(['%12']);
+    expect(notifications).toContain('%pause %12');
+    control.dispose();
+  });
 });

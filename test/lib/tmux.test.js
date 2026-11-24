@@ -240,6 +240,13 @@ describe('parseWindows', () => {
     expect(parsed[0].name).toBe('docs|notes');
   });
 
+  it('parses 10-field windows carrying zoomed flag and layout without breaking legacy 8-field callers', () => {
+    const line = ['@5', '0', 'main', '1', '160', '48', '0', '1700000000', '1', 'bb62,160x48,0,0,5'].join(SEP);
+    expect(parseWindows(line)).toEqual([
+      { id: '@5', index: 0, name: 'main', active: true, width: 160, height: 48, bell: false, activity: 1700000000, zoomed: true, layout: 'bb62,160x48,0,0,5' },
+    ]);
+  });
+
   it('returns empty array on empty input', () => {
     expect(parseWindows('')).toEqual([]);
     expect(parseWindows('   ')).toEqual([]);
