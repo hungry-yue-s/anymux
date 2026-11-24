@@ -123,6 +123,7 @@ describe('agent commit previews', () => {
     await settled();
     const card = frame().querySelector('.git-commit-card');
     const draft = frame().querySelector('textarea'); draft.value = 'unfinished';
+    await new Promise((resolve) => setTimeout(resolve, 40));
     const input = doc.createElement('input'); doc.body.appendChild(input); input.focus();
     const before = get.mock.calls.length;
     const arrive = hash => win.PanelSlots.openers.get('open-git').run({ serverId: 'local', path: '/repo', paneId: '%1',

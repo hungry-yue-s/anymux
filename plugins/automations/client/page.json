@@ -1,0 +1,4 @@
+{
+  "serve": ["."],
+  "body": [{ "order": 414, "script": "/js/automations-ui.js" }]
+}

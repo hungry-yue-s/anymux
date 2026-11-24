@@ -27,6 +27,12 @@ const USAGE = `usage:
   anymux open [--dock | --background] [--pane %N] [--replaces <old path>] <file[#heading] | url>
   anymux doc path <name> [--html]
   anymux git show [commit] [--background] [--repo <directory>] [--pane %N]
+  anymux workspace list | new [--name <name>] [--cwd <dir>] [--session <id>]
+  anymux worktree list [--repo <dir>] | new <branch> [--repo <dir>] [--base <ref>] [--open] | remove <path> [--repo <dir>] [--force]
+  anymux sessions [--provider claude|codex|gemini] [--q <query>] [--limit <n>]
+  anymux automation list | run <id>
+  anymux pane new [--window @id] [--dir h|v] | zoom [--pane %N] | break [--pane %N] | clear [--pane %N] | rename <label> [--pane %N]
+  anymux browser status | open <url> | snapshot
   anymux split [-h] [-c dir] [cmd...]
   anymux run [-t pane] <cmd...>
   anymux capture [-t pane] [-n lines]
@@ -88,20 +94,21 @@ function pinnedSocket(pairing) {
   });
 }
 
-async function postJson(path, body) {
+async function requestJson(method, path, body = null) {
   const pairing = readPairing();
-  const payload = JSON.stringify(body);
+  const payload = body == null ? null : JSON.stringify(body);
   const socket = pairing.tls ? await pinnedSocket(pairing) : null;
+  const headers = { Authorization: `Bearer ${pairing.token}` };
+  if (payload != null) {
+    headers['Content-Type'] = 'application/json';
+    headers['Content-Length'] = Buffer.byteLength(payload);
+  }
   const options = {
     host: pairing.host,
     port: pairing.port,
     path,
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Content-Length': Buffer.byteLength(payload),
-      Authorization: `Bearer ${pairing.token}`,
-    },
+    method,
+    headers,
   };
   if (socket) options.createConnection = () => socket;
   return new Promise((resolveResponse, reject) => {
@@ -111,13 +118,18 @@ async function postJson(path, body) {
       res.on('end', () => {
         let data = null;
         try { data = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { /* not json */ }
-        if (res.statusCode >= 200 && res.statusCode < 300 && data && data.success !== false) resolveResponse(data.data);
+        if (res.statusCode >= 200 && res.statusCode < 300 && (!data || data.success !== false)) resolveResponse(data?.data ?? data);
         else reject(new Error((data && (data.error && data.error.message || data.error)) || `HTTP ${res.statusCode}`));
       });
     });
     req.on('error', reject);
-    req.end(payload);
+    if (payload != null) req.end(payload);
+    else req.end();
   });
+}
+
+function postJson(path, body) {
+  return requestJson('POST', path, body);
 }
 
 /** A path as the panel takes it: absolute, `~/...`, or relative to this shell's directory. */
@@ -295,12 +307,194 @@ function cmdEvents(args) {
   process.on('SIGINT', () => { child.stdin.end(); child.kill(); });
 }
 
+export function parseWorkspaceArgs(argv) {
+  const args = [...argv];
+  const sub = args.shift() || 'list';
+  const name = takeOption(args, ['--name', '-n']);
+  const cwd = takeOption(args, ['--cwd', '-c']);
+  const session = takeOption(args, ['--session', '-s']);
+  return { sub, name, cwd, session };
+}
+
+export function parseWorktreeArgs(argv, cwdDefault = process.cwd()) {
+  const args = [...argv];
+  const sub = args.shift() || 'list';
+  const repo = takeOption(args, ['--repo', '-C']) || cwdDefault;
+  const baseRef = takeOption(args, ['--base', '-b']);
+  const openWindow = takeOption(args, ['--open'], { flag: true });
+  const force = takeOption(args, ['--force', '-f'], { flag: true });
+  const target = rest(args)[0] || null;
+  return { sub, repo, baseRef, openWindow, force, target };
+}
+
+export function parsePaneArgs(argv, envPane = currentPane()) {
+  const args = [...argv];
+  const sub = args.shift();
+  const pane = takeOption(args, ['--pane', '-t']) || envPane;
+  const windowId = takeOption(args, ['--window', '-w']);
+  const dir = takeOption(args, ['--dir', '-d']) || 'horizontal';
+  const label = rest(args).join(' ').trim();
+  return { sub, pane, windowId, dir, label };
+}
+
+export function parseSessionsArgs(argv) {
+  const args = [...argv];
+  const provider = takeOption(args, ['--provider', '-p']) || '';
+  const q = takeOption(args, ['--q', '-q']) || '';
+  const limit = Number(takeOption(args, ['--limit', '-l']) || '50') || 50;
+  return { provider, q, limit };
+}
+
+async function cmdWorkspace(args) {
+  const parsed = parseWorkspaceArgs(args);
+  if (parsed.sub === 'list') {
+    const ws = await requestJson('GET', '/api/workspace');
+    process.stdout.write(JSON.stringify(ws, null, 2) + '\n');
+    return;
+  }
+  if (parsed.sub === 'new') {
+    let sessionId = parsed.session;
+    if (!sessionId) {
+      const ws = await requestJson('GET', '/api/workspace');
+      sessionId = ws?.sessions?.[0]?.id;
+    }
+    if (!sessionId) {
+      const created = await requestJson('POST', '/api/workspace/sessions', {
+        name: parsed.name || 'work',
+        ...(parsed.cwd ? { cwd: absolutePath(parsed.cwd) } : {}),
+      });
+      process.stdout.write(JSON.stringify(created, null, 2) + '\n');
+      return;
+    }
+    const created = await requestJson('POST', `/api/workspace/sessions/${encodeURIComponent(sessionId)}/windows`, {
+      ...(parsed.name ? { name: parsed.name } : {}),
+      ...(parsed.cwd ? { cwd: absolutePath(parsed.cwd) } : {}),
+    });
+    process.stdout.write(JSON.stringify(created, null, 2) + '\n');
+    return;
+  }
+  die(USAGE);
+}
+
+async function cmdWorktree(args) {
+  const parsed = parseWorktreeArgs(args);
+  const repo = absolutePath(parsed.repo);
+  if (parsed.sub === 'list') {
+    const data = await requestJson('GET', `/api/worktrees?path=${encodeURIComponent(repo)}`);
+    process.stdout.write(JSON.stringify(data, null, 2) + '\n');
+    return;
+  }
+  if (parsed.sub === 'new' && parsed.target) {
+    const data = await requestJson('POST', '/api/worktrees', {
+      path: repo,
+      branch: parsed.target,
+      ...(parsed.baseRef ? { baseRef: parsed.baseRef } : {}),
+      openWindow: parsed.openWindow,
+    });
+    process.stdout.write(JSON.stringify(data, null, 2) + '\n');
+    return;
+  }
+  if (parsed.sub === 'remove' && parsed.target) {
+    const data = await requestJson('DELETE', '/api/worktrees', {
+      path: repo,
+      worktreePath: absolutePath(parsed.target),
+      force: parsed.force,
+    });
+    process.stdout.write(JSON.stringify(data, null, 2) + '\n');
+    return;
+  }
+  die(USAGE);
+}
+
+async function cmdSessions(args) {
+  const { provider, q, limit } = parseSessionsArgs(args);
+  const query = new URLSearchParams();
+  if (provider) query.set('provider', provider);
+  if (q) query.set('q', q);
+  if (limit) query.set('limit', String(limit));
+  const data = await requestJson('GET', `/api/session-vault/sessions?${query}`);
+  process.stdout.write(JSON.stringify(data, null, 2) + '\n');
+}
+
+async function cmdAutomation(args) {
+  const sub = args.shift() || 'list';
+  if (sub === 'list') {
+    const data = await requestJson('GET', '/api/automations');
+    process.stdout.write(JSON.stringify(data, null, 2) + '\n');
+    return;
+  }
+  if (sub === 'run' && args[0]) {
+    const data = await requestJson('POST', `/api/automations/${encodeURIComponent(args[0])}/run`, {});
+    process.stdout.write(JSON.stringify(data, null, 2) + '\n');
+    return;
+  }
+  die(USAGE);
+}
+
+async function cmdPane(args) {
+  const parsed = parsePaneArgs(args);
+  if (parsed.sub === 'new') {
+    const winId = parsed.windowId || (await requestJson('GET', '/api/workspace'))?.sessions?.[0]?.windows?.[0]?.id;
+    if (!winId) die('anymux: window id required (--window @id)');
+    const direction = parsed.dir === 'v' || parsed.dir === 'vertical' ? 'vertical' : 'horizontal';
+    const data = await requestJson('POST', `/api/workspace/windows/${encodeURIComponent(winId)}/panes`, {
+      ...(parsed.pane ? { paneId: parsed.pane } : {}),
+      direction,
+    });
+    process.stdout.write(JSON.stringify(data, null, 2) + '\n');
+    return;
+  }
+  if (!parsed.pane) die('anymux: pane id required (--pane %N)');
+  const encodedPane = encodeURIComponent(parsed.pane);
+  if (parsed.sub === 'zoom') {
+    process.stdout.write(JSON.stringify(await requestJson('POST', `/api/workspace/panes/${encodedPane}/zoom`, {})) + '\n');
+  } else if (parsed.sub === 'break') {
+    process.stdout.write(JSON.stringify(await requestJson('POST', `/api/workspace/panes/${encodedPane}/break`, {})) + '\n');
+  } else if (parsed.sub === 'clear') {
+    process.stdout.write(JSON.stringify(await requestJson('POST', `/api/workspace/panes/${encodedPane}/clear`, {})) + '\n');
+  } else if (parsed.sub === 'rename' && parsed.label) {
+    process.stdout.write(JSON.stringify(await requestJson('PATCH', `/api/workspace/panes/${encodedPane}`, { label: parsed.label })) + '\n');
+  } else {
+    die(USAGE);
+  }
+}
+
+async function cmdBrowser(args) {
+  const sub = args.shift() || 'status';
+  if (sub === 'status') {
+    const status = await requestJson('GET', '/api/browser/agent-browser');
+    process.stdout.write(JSON.stringify(status, null, 2) + '\n');
+    return;
+  }
+  if (sub === 'open' || sub === 'snapshot' || sub === 'screenshot' || sub === 'get-url' || sub === 'close') {
+    try {
+      const result = await requestJson('POST', '/api/browser/agent-browser', { command: sub, args });
+      process.stdout.write(JSON.stringify(result, null, 2) + '\n');
+      return;
+    } catch (err) {
+      if (sub === 'open' && args[0] && /^https?:\/\//i.test(args[0])) {
+        const opened = await postJson('/api/open', { url: args[0], ...(currentPane() ? { paneId: currentPane() } : {}) });
+        process.stdout.write(JSON.stringify(opened, null, 2) + '\n');
+        return;
+      }
+      throw err;
+    }
+  }
+  die(USAGE);
+}
+
 async function main() {
   const [command, ...args] = process.argv.slice(2);
   switch (command) {
     case 'open': return cmdOpen(args);
     case 'doc': return cmdDoc(args);
     case 'git': return cmdGit(args);
+    case 'workspace': return cmdWorkspace(args);
+    case 'worktree': return cmdWorktree(args);
+    case 'sessions': return cmdSessions(args);
+    case 'automation': return cmdAutomation(args);
+    case 'pane': return cmdPane(args);
+    case 'browser': return cmdBrowser(args);
     case 'split': return cmdSplit(args);
     case 'run': return cmdRun(args);
     case 'capture': return cmdCapture(args);

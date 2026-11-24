@@ -46,6 +46,12 @@ plugins:
     use: upload
   - id: git
     use: git
+  - id: worktrees
+    use: worktrees
+  - id: session-vault
+    use: session-vault
+  - id: automations
+    use: automations
   - id: sqlite
     use: sqlite
   - id: notebook

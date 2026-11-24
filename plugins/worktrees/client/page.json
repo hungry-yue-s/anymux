@@ -1,0 +1,5 @@
+{
+  "serve": ["."],
+  "head": [{ "order": 61, "style": "/css/worktrees.css" }],
+  "body": [{ "order": 412, "script": "/js/worktrees-ui.js" }]
+}

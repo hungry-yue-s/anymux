@@ -1,0 +1,5 @@
+{
+  "serve": ["."],
+  "head": [{ "order": 62, "style": "/css/session-vault.css" }],
+  "body": [{ "order": 413, "script": "/js/session-vault-ui.js" }]
+}
