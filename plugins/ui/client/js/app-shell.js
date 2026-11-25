@@ -934,7 +934,7 @@
         pendingTitlebar = false;
         var rect = chrome.getBoundingClientRect();
         var controls = Array.from(chrome.querySelectorAll('button,a,input,select,textarea,summary,[role="button"],[contenteditable="true"]'));
-        var covered = global.document.querySelector('.fp-overlay:not(.fp-side),.fp-side-maximized,.fp-mermaid-dialog,.fp-share-overlay,.cmd-palette-overlay,.modal-overlay,.ms-modal-backdrop:not([hidden]),.notification-panel,#ms-server-popover:not([hidden])');
+        var covered = global.document.querySelector('.fp-overlay:not(.fp-side),.fp-side-maximized,.fp-mermaid-dialog,.fp-share-overlay,.cmd-palette-overlay,.modal-overlay,.ms-modal-backdrop:not([hidden]),.notification-panel,#ms-server-popover:not([hidden]),dialog[open]');
         var height = covered ? 0 : rect.height;
         var payload = {
           action: 'titlebarDragRegions', height: height, viewportWidth: global.innerWidth,
@@ -952,7 +952,7 @@
     };
     new global.MutationObserver(syncTitlebar).observe(chrome, { childList: true, subtree: true, attributes: true });
     new global.MutationObserver(syncTitlebar).observe(global.document.body, {
-      childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'hidden'],
+      childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'hidden', 'open'],
     });
     if (global.ResizeObserver) new global.ResizeObserver(syncTitlebar).observe(chrome);
     global.addEventListener('resize', syncTitlebar);

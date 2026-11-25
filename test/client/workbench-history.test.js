@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { JSDOM } from 'jsdom';
 import { openHistory } from '../../plugins/workbench/client/history.js';
 
@@ -42,5 +43,45 @@ describe('independent retained history reader', () => {
     f.win.Api.get.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
     const request = reader.refresh(); reader.close(); finish(f.reply()); await request;
     expect(reader.dialog.isConnected).toBe(false); f.close();
+  });
+
+  it('closes via header close button, footer close button, backdrop click, and Escape key while centering the dialog', async () => {
+    const css = readFileSync('plugins/workbench/client/css/workbench.css', 'utf8');
+    expect(css).toMatch(/\.wb-history\s*\{[^}]*margin:\s*auto;/);
+
+    // 1. Header close button & ignoring inside clicks
+    let f = fixture();
+    let reader = openHistory(f.win, target, { title: 'Build' });
+    await reader.ready;
+    reader.dialog.querySelector('.wb-history-content').dispatchEvent(new f.win.MouseEvent('click', { bubbles: true }));
+    expect(reader.dialog.isConnected).toBe(true);
+    reader.dialog.querySelector('[aria-label="关闭历史"]').click();
+    expect(reader.dialog.isConnected).toBe(false);
+    f.close();
+
+    // 2. Footer close button
+    f = fixture();
+    reader = openHistory(f.win, target);
+    await reader.ready;
+    const footerButtons = [...reader.dialog.querySelectorAll('.wb-history-footer button')];
+    footerButtons.find((btn) => btn.textContent === '关闭').click();
+    expect(reader.dialog.isConnected).toBe(false);
+    f.close();
+
+    // 3. Backdrop click (event.target === dialog)
+    f = fixture();
+    reader = openHistory(f.win, target);
+    await reader.ready;
+    reader.dialog.dispatchEvent(new f.win.MouseEvent('click', { bubbles: true }));
+    expect(reader.dialog.isConnected).toBe(false);
+    f.close();
+
+    // 4. Escape key fallback
+    f = fixture();
+    reader = openHistory(f.win, target);
+    await reader.ready;
+    reader.dialog.dispatchEvent(new f.win.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    expect(reader.dialog.isConnected).toBe(false);
+    f.close();
   });
 });

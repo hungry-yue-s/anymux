@@ -1470,6 +1470,12 @@ describe('native titlebar drag regions', () => {
     expect(messages.at(-1).height).toBe(0);
     picker.hidden = true; await Promise.resolve();
     expect(messages.at(-1).height).toBe(44);
+    const dialog = win.document.createElement('dialog'); dialog.className = 'wb-history'; dialog.setAttribute('open', '');
+    win.document.body.append(dialog); await Promise.resolve();
+    expect(messages.at(-1).height).toBe(0);
+    dialog.removeAttribute('open'); await Promise.resolve();
+    expect(messages.at(-1).height).toBe(44);
+    dialog.remove();
     header.getBoundingClientRect = () => ({ height: 0, top: 0 });
     header.hidden = true; await Promise.resolve();
     expect(messages.at(-1)).toMatchObject({ height: 0, exclusions: [] });

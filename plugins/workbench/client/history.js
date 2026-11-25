@@ -7,17 +7,24 @@ export function openHistory(global, input, { title = '终端', returnFocus = glo
   const doc = global.document;
   const dialog = doc.createElement('dialog'); dialog.className = 'wb-history';
   dialog.setAttribute('aria-label', title + '的滚动历史');
+  const shell = doc.createElement('div'); shell.className = 'wb-history-shell';
   const header = doc.createElement('header'); header.className = 'wb-history-header';
   const heading = doc.createElement('strong'); heading.textContent = title + ' · 滚动历史';
-  const closeButton = doc.createElement('button'); closeButton.type = 'button'; closeButton.className = 'wb-button'; closeButton.textContent = '关闭'; closeButton.setAttribute('aria-label', '关闭历史');
+  const closeButton = doc.createElement('button'); closeButton.type = 'button'; closeButton.className = 'wb-history-close';
+  closeButton.textContent = '×'; closeButton.setAttribute('aria-label', '关闭历史'); closeButton.title = '关闭 (Esc)';
   header.append(heading, closeButton);
-  const hint = doc.createElement('p'); hint.className = 'wb-history-hint'; hint.textContent = '历史随终端输出滚动，刷新读取最新记录。';
+  const meta = doc.createElement('div'); meta.className = 'wb-history-meta';
   const status = doc.createElement('p'); status.className = 'wb-history-status'; status.setAttribute('role', 'status');
+  const hint = doc.createElement('p'); hint.className = 'wb-history-hint'; hint.textContent = '历史随终端输出滚动，刷新读取最新记录。';
+  meta.append(status, hint);
   const content = doc.createElement('pre'); content.className = 'wb-history-content'; content.tabIndex = 0; content.setAttribute('aria-label', '当前历史页');
   const footer = doc.createElement('footer'); footer.className = 'wb-history-footer';
-  const earlier = doc.createElement('button'); earlier.type = 'button'; earlier.className = 'wb-button'; earlier.textContent = '更早 500 行';
-  const refresh = doc.createElement('button'); refresh.type = 'button'; refresh.className = 'wb-button'; refresh.textContent = '刷新最新';
-  footer.append(earlier, refresh); dialog.append(header, hint, status, content, footer); doc.body.append(dialog);
+  const footerActions = doc.createElement('div'); footerActions.className = 'wb-history-footer-actions';
+  const earlier = doc.createElement('button'); earlier.type = 'button'; earlier.className = 'wb-button wb-history-btn'; earlier.textContent = '更早 500 行';
+  const refresh = doc.createElement('button'); refresh.type = 'button'; refresh.className = 'wb-button wb-history-btn'; refresh.textContent = '刷新最新';
+  const footerClose = doc.createElement('button'); footerClose.type = 'button'; footerClose.className = 'wb-button wb-history-btn'; footerClose.textContent = '关闭';
+  footerActions.append(earlier, refresh); footer.append(footerActions, footerClose);
+  shell.append(header, meta, content, footer); dialog.append(shell); doc.body.append(dialog);
   let disposed = false, controller, request, nextBefore = null;
   function close() {
     if (disposed) return;
@@ -51,7 +58,10 @@ export function openHistory(global, input, { title = '终端', returnFocus = glo
     return request;
   }
   const api = { dialog, target, close, refresh: () => load(), loadEarlier: () => nextBefore == null ? Promise.resolve() : load(nextBefore) };
-  closeButton.addEventListener('click', close); earlier.addEventListener('click', api.loadEarlier); refresh.addEventListener('click', api.refresh);
+  closeButton.addEventListener('click', close); footerClose.addEventListener('click', close);
+  earlier.addEventListener('click', api.loadEarlier); refresh.addEventListener('click', api.refresh);
+  dialog.addEventListener('click', (event) => { if (event.target === dialog) close(); });
+  dialog.addEventListener('keydown', (event) => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close(); } });
   dialog.addEventListener('cancel', (event) => { event.preventDefault(); close(); }); dialog.addEventListener('close', close);
   dialog.showModal();
   api.ready = load();
