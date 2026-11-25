@@ -110,22 +110,6 @@ export function registerWorkbenchShell(global, api) {
     openTarget,
     title: route => api.get?.(route.params.viewId)?.title || '工作台',
     actions: { 'new-workbench': openWindow, 'open-workbench': openWindow },
-    renderSessionActions(serverId, session) {
-      return available(serverId) ? '<button type="button" class="tree-add-button" data-action="new-workbench" data-session="'
-        + escape(session.id) + '" title="打开原生工作台" aria-label="在 ' + escape(session.name) + ' 中打开原生工作台">▦</button>' : '';
-    },
-    renderNavigation(serverId, route, workspace) {
-      const views = api.list?.(serverId) || [];
-      if (!views.length) return '';
-      return '<div class="tree-section-head"><span>工作台</span></div><div class="tree">' + views.map(view => {
-        const stale = workspace.complete === true && workspace.instanceId && view.instanceId && workspace.instanceId !== view.instanceId;
-        return '<button class="tree-item ' + (stale ? 'wb-view-stale ' : '') + (route?.params?.viewId === view.id ? 'active' : '') + '"'
-          + (stale ? ' title="此工作台绑定旧会话，目标已保留，不会自动替换或结束原任务"' : '') + ' data-route="'
-          + escape(global.Router.serialize({ name: 'workbench', params: { serverId, viewId: view.id } })) + '">'
-          + global.AppShell.icon('overview') + '<span>' + escape(view.title || '工作台') + '</span>'
-          + (stale ? '<small class="wb-view-state">旧会话</small>' : '') + '</button>';
-      }).join('') + '</div>';
-    },
   };
   const unregister = slots.terminalViews.register(entry);
   const focus = event => sync(event.detail), changed = () => global.AppShell?.render();

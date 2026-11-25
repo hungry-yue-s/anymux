@@ -229,14 +229,19 @@ export function createWorkbench(global, options = {}) {
           if (action === 'equalize') return api.equalizeLayout(detail.layout || 'tiled');
           if (action === 'history') return api.openHistory(detail.paneId);
           if (action === 'close-window') {
-            await global.Api.del(workspaceApiUrl(owner.serverId, '/windows/' + encodeURIComponent(view.windowId)));
-            api.closeView(view.id);
-            global.Router.go({ name: 'terminal', params: { serverId: owner.serverId } });
+            const closingView = viewNow() || view;
+            await global.Api.del(workspaceApiUrl(owner.serverId, '/windows/' + encodeURIComponent(closingView.windowId)));
+            global.FilePreview?.forgetWindow?.(owner.serverId, closingView.windowId, closingView.instanceId);
+            api.closeView(closingView.id);
+            await global.MsApp?.refreshWorkspace?.(owner.serverId);
+            const target = global.AppShell?.resolveDefaultTarget?.(owner.serverId)
+              || { name: 'terminal', params: { serverId: owner.serverId } };
+            global.Router.go(target, { replace: true });
           }
         };
         return run().catch(notify);
       },
-      onState: ({ status, message }) => {
+      onState: ({ status, message, reason }) => {
         if (mounted !== owner) return;
         owner.root.dataset.status = status; owner.message.hidden = status === 'live';
         owner.message.textContent = message || ({ connecting: '正在连接工作台…', disconnected: '连接已断开，正在重连…', invalid: '无法连接此窗口', exited: '终端会话已结束' }[status] || '');
@@ -259,6 +264,21 @@ export function createWorkbench(global, options = {}) {
           card.append(copy, actions); owner.message.replaceChildren(card);
         }
         announceFocus();
+        if (status === 'exited' && reason === 'window_closed' && global.MsApp && global.Router) {
+          const closedView = viewNow() || view;
+          const routeBefore = global.Router.current();
+          if (closedView) {
+            global.FilePreview?.forgetWindow?.(owner.serverId, closedView.windowId, closedView.instanceId);
+            api.closeView(closedView.id);
+          }
+          Promise.resolve(global.MsApp.refreshWorkspace?.(owner.serverId)).finally(() => {
+            if (routeBefore && !global.Router.isSame?.(global.Router.current(), routeBefore)) return;
+            const target = global.AppShell?.resolveDefaultTarget?.(owner.serverId)
+              || { name: 'terminal', params: { serverId: owner.serverId } };
+            if (global.Router.isSame?.(global.Router.current(), target)) return;
+            global.Router.go(target, { replace: true });
+          });
+        }
       },
     });
     // A pasted image (or a dropped file) goes to this window's machine; its path is pasted.

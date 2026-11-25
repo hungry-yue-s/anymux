@@ -402,11 +402,12 @@ export class SeamWindowSession {
     } catch { /* fallback monospace */ }
   }
 
-  _setStatus(status, message = '') {
+  _setStatus(status, message = '', reason = null) {
     this.status = status;
     this.message = message;
+    this.reason = reason;
     this._syncInputGates();
-    if (!this.disposed) this.onState({ status, message, target: this.target });
+    if (!this.disposed) this.onState({ status, message, reason, target: this.target });
   }
 
   _syncInputGates() {
@@ -475,8 +476,8 @@ export class SeamWindowSession {
           this._disposePane(message.paneId);
         } else if (message.type === 'clipboard' && typeof message.data === 'string') {
           this.copy(message.data);
-        } else if (message.type === 'exit') {
-          this._pause(message.reason);
+        } else if (message.type === 'exit' || message.type === 'window-exit') {
+          this._pause(message.reason || (message.type === 'window-exit' ? 'window_closed' : undefined));
         } else if (message.type === 'error') {
           this._drop(message.retryable === true, message.message || '无法连接窗口');
         }
@@ -486,7 +487,7 @@ export class SeamWindowSession {
     };
     ws.onclose = (event) => {
       if (!current()) return;
-      if (event.code === 1000) this._pause();
+      if (event.code === 1000) this._pause(event.reason === 'window closed' ? 'window_closed' : undefined);
       else this._drop(![1008, 1013].includes(event.code), '连接已断开');
     };
     ws.onerror = () => {};
@@ -1937,7 +1938,10 @@ export class SeamWindowSession {
         ? '会话已被其他端接管，画面已暂停更新，终端任务继续运行。'
         : detached
           ? '终端连接已结束，画面已暂停更新，可手动重新连接。'
-          : '会话已结束，已保留最后画面。',
+          : reason === 'window_closed'
+            ? '窗口已关闭'
+            : '会话已结束，已保留最后画面。',
+      reason || null,
     );
   }
 

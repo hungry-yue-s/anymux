@@ -339,12 +339,7 @@
       var localViews = terminalViews().map(function (entry) {
         return entry.renderNavigation ? entry.renderNavigation(serverId, route, workspace) : '';
       }).join('');
-      var groupMode = (global.Store && global.Store.getState && global.Store.getState().ui && global.Store.getState().ui.sidebarGroupMode) || 'session';
-      var head = localViews + '<div class="tree-section-head">'
-        + '<span class="sidebar-group-switch" role="group" aria-label="侧栏分组方式">'
-        + '<button type="button" class="sidebar-group-btn' + (groupMode === 'session' ? ' active' : '') + '" data-action="sidebar-group-mode" data-group-mode="session" aria-pressed="' + (groupMode === 'session' ? 'true' : 'false') + '">会话</button>'
-        + '<button type="button" class="sidebar-group-btn' + (groupMode === 'project' ? ' active' : '') + '" data-action="sidebar-group-mode" data-group-mode="project" aria-pressed="' + (groupMode === 'project' ? 'true' : 'false') + '">目录</button>'
-        + '</span>'
+      var head = localViews + '<div class="tree-section-head"><span>会话</span>'
         + providerBadge(workspace)
         + (actions.createSession
           ? '<button class="tree-add-button" data-action="new-session" title="在当前服务器新建会话"'
@@ -359,9 +354,6 @@
 
       var self = this;
       var params = (route && route.params) || {};
-      if (groupMode === 'project') {
-        return head + this._renderProjectGroups(serverId, workspace, params);
-      }
       var tree = sessions.map(function (session) {
         var expanded = global.Store.isSessionExpanded(serverId, session.id) || params.sessionId === session.id;
         var isActive = params.sessionId === session.id;
@@ -396,7 +388,7 @@
       return head + '<div class="tree">' + tree + '</div>';
     },
 
-    _renderWindowRow: function (serverId, session, win, params, extraMeta) {
+    _renderWindowRow: function (serverId, session, win, params) {
       var workspace = this.workspace(serverId);
       var actions = (workspace && workspace.actions) || {};
       var windowAction = terminalViews().map(function (entry) { return entry.windowAction && entry.windowAction(serverId); }).find(Boolean);
@@ -416,7 +408,6 @@
       var command = displayPane ? String(displayPane.command || displayPane.name || '').split(/[\\/]+/).filter(Boolean).pop() || '' : '';
       command = command.replace(/\.exe$/i, '');
       if (command === win.name) command = '';
-      var suffix = extraMeta ? (extraMeta + (command ? ' · ' + command : '')) : command;
       return '<div class="tree-window-row" data-sidebar-entity="window"'
         + ' data-server-id="' + esc(serverId) + '" data-provider="' + esc(workspace.provider) + '"'
         + ' data-session="' + esc(session.id) + '" data-window="' + esc(win.id) + '"'
@@ -427,7 +418,7 @@
         + ' title="' + esc(win.name) + '"'
         + (active ? ' aria-current="page"' : '')
         + '><span class="tree-item-name">' + esc(win.name) + '</span>'
-        + (suffix ? '<span class="cmd">' + esc(suffix) + '</span>' : '') + '</button>'
+        + (command ? '<span class="cmd">' + esc(command) + '</span>' : '') + '</button>'
         + ((windowAction || actions.renameWindow || actions.closeWindow)
           ? '<button type="button" class="tree-add-button tree-menu-button" data-action="workspace-entity-menu"'
             + ' aria-label="' + esc(win.name) + ' 的窗口操作" aria-haspopup="menu" aria-expanded="false"'
@@ -441,39 +432,7 @@
       if (windows.length === 0) return '';
       var self = this;
       return '<div class="tree-window-list">' + windows.map(function (win) {
-        return self._renderWindowRow(serverId, session, win, params, null);
-      }).join('') + '</div>';
-    },
-
-    _renderProjectGroups: function (serverId, workspace, params) {
-      var self = this;
-      var groups = [];
-      var byKey = Object.create(null);
-      (workspace.sessions || []).forEach(function (session) {
-        (session.windows || []).forEach(function (win) {
-          var pane = (win.panes || []).find(function (item) { return item.active; }) || (win.panes || [])[0];
-          var cwd = pane && pane.cwd ? String(pane.cwd).replace(/[\\/]+$/, '') : '';
-          var folder = cwd ? (cwd.split(/[\\/]/).filter(Boolean).pop() || cwd) : '其他目录';
-          var key = cwd || '__other__';
-          if (!byKey[key]) {
-            byKey[key] = { label: folder, title: cwd || '未知工作目录', items: [] };
-            groups.push(byKey[key]);
-          }
-          byKey[key].items.push({ session: session, win: win });
-        });
-      });
-      if (!groups.length) return '<div class="workspace-missing"><strong>还没有窗口</strong></div>';
-      return '<div class="tree">' + groups.map(function (group) {
-        return '<div class="tree-project-group">'
-          + '<div class="tree-project-head" title="' + esc(group.title) + '">'
-          + '<span>' + esc(group.label) + '</span>'
-          + '<small>' + group.items.length + '</small>'
-          + '</div>'
-          + '<div class="tree-window-list">'
-          + group.items.map(function (entry) {
-            return self._renderWindowRow(serverId, entry.session, entry.win, params, entry.session.name);
-          }).join('')
-          + '</div></div>';
+        return self._renderWindowRow(serverId, session, win, params);
       }).join('') + '</div>';
     },
 

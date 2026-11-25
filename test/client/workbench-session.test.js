@@ -704,4 +704,29 @@ describe('SeamWindowSession multi-pane workbench session', () => {
     session.dispose();
     f.close();
   });
+
+  it('marks the session exited with window_closed instead of detached when window-exit arrives', async () => {
+    const f = fixture();
+    const states = [];
+    const session = new SeamWindowSession(f.win, {
+      container: f.host,
+      target,
+      onState: (state) => states.push(state),
+    });
+    await session.ready;
+    const socket = f.sockets[0];
+    hydrateWindow(socket);
+
+    socket.onmessage({ data: JSON.stringify({ type: 'window-exit', windowId: '@1', reason: 'window_closed' }) });
+    expect(session.status).toBe('exited');
+    expect(session.reason).toBe('window_closed');
+    expect(states.at(-1)).toMatchObject({
+      status: 'exited',
+      reason: 'window_closed',
+      message: '窗口已关闭',
+    });
+
+    session.dispose();
+    f.close();
+  });
 });

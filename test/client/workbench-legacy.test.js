@@ -143,7 +143,7 @@ describe('local workbench bridges', () => {
     expect(w.TerminalTarget.viewId).toBe('v1');
   });
 
-  it('offers local views and new layout actions beside the supported server session', () => {
+  it('renders only the tmux session tree without duplicating saved workbench views in the sidebar', () => {
     const w = setup();
     w.eval(source('plugins/ui/client/js/router.js'));
     w.eval(source('plugins/ui/client/js/store.js'));
@@ -152,8 +152,9 @@ describe('local workbench bridges', () => {
     w.Workbench = { list: () => [{ id: 'v1', serverId: 'remote', title: '我的布局' }] };
     w.eval(source('plugins/ui/client/js/app-shell.js'));
     w.document.body.insertAdjacentHTML('beforeend', w.AppShell._renderTree('remote', { name: 'workbench', params: { serverId: 'remote', viewId: 'v1' } }));
-    expect(w.document.querySelector('[data-route="#/workbench/remote/v1"]').textContent).toContain('我的布局');
-    expect(w.document.querySelector('[data-action="new-workbench"]').dataset.session).toBe('$2');
+    expect(w.document.querySelector('[data-route^="#/workbench/"]')).toBeNull();
+    expect(w.document.querySelector('[data-action="new-workbench"]')).toBeNull();
+    expect(w.document.querySelector('[data-sidebar-entity="session"]').dataset.session).toBe('$2');
   });
 
   it('opens an existing multi-pane window through the default native workbench entry', async () => {
@@ -170,14 +171,14 @@ describe('local workbench bridges', () => {
     expect(w.Workbench.open).toHaveBeenCalledWith('native-view');
   });
 
-  it('distinguishes a saved view from a previous tmux lifetime without deleting it', () => {
+  it('retains a saved view from a previous tmux lifetime in Workbench without cluttering the sidebar', () => {
     const w = setup(); w.eval(source('plugins/ui/client/js/router.js')); w.eval(source('plugins/ui/client/js/store.js'));
     w.Store.setWorkspace('remote', { provider: 'tmux', instanceId: '3:4', complete: true, actions: {}, sessions: [] });
     const views = [{ id: 'old', title: '开发', instanceId: '1:2' }, { id: 'current', title: '开发', instanceId: '3:4' }];
     w.Workbench = { list: () => views }; w.eval(source('plugins/ui/client/js/app-shell.js'));
     w.document.body.insertAdjacentHTML('beforeend', w.AppShell._renderTree('remote', { name: 'workbench', params: { serverId: 'remote', viewId: 'current' } }));
-    expect(w.document.querySelector('.wb-view-stale').textContent).toContain('旧会话');
-    expect(w.document.querySelectorAll('[data-route^="#/workbench/"]')).toHaveLength(2);
+    expect(w.document.querySelector('.wb-view-stale')).toBeNull();
+    expect(w.document.querySelectorAll('[data-route^="#/workbench/"]')).toHaveLength(0);
     expect(views).toHaveLength(2);
   });
 

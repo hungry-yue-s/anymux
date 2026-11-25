@@ -1101,11 +1101,6 @@
         global.AppShell.setSidebarCollapsed(!app.classList.contains('sidebar-collapsed'));
         return;
       }
-      if (action === 'sidebar-group-mode') {
-        const mode = node.dataset.groupMode === 'project' ? 'project' : 'session';
-        global.Store.setUi({ sidebarGroupMode: mode });
-        return;
-      }
       if (action === 'notifications') {
         global.AppShell.closeMobileWorkspaceSheet({ restoreFocus: false });
         global.AppShell.hideServerPicker();
@@ -1624,9 +1619,16 @@
         danger: true,
       })) return;
 
+      const routeBefore = global.Router.current();
+      const affected = this._matchesClosedTarget(serverId, routeBefore, { sessionId });
       await global.Api.del(global.Api.workspaceUrl(serverId, '/sessions/' + encodeURIComponent(sessionId)));
+      if (session && Array.isArray(session.windows) && global.FilePreview && typeof global.FilePreview.forgetWindow === 'function') {
+        session.windows.forEach((win) => global.FilePreview.forgetWindow(serverId, win.id, workspace && workspace.instanceId));
+      }
+      this._forgetWorkbenchViews(serverId, { sessionId }, workspace && workspace.instanceId);
       await this.refreshWorkspace(serverId);
-      this._correctRouteAfterClose(serverId, { sessionId });
+      if (affected && !global.Router.isSame(global.Router.current(), routeBefore)) return;
+      this._correctRouteAfterClose(serverId, { sessionId, affected });
     },
 
     async _renameWindow(serverId, windowId, context = {}) {
@@ -1657,12 +1659,41 @@
         confirmText: '关闭',
         danger: true,
       })) return;
+      const routeBefore = global.Router.current();
+      const affected = this._matchesClosedTarget(serverId, routeBefore, { windowId });
       await global.Api.del(global.Api.workspaceUrl(serverId, '/windows/' + encodeURIComponent(windowId)));
       if (global.FilePreview && typeof global.FilePreview.forgetWindow === 'function') {
         global.FilePreview.forgetWindow(serverId, windowId, workspace && workspace.instanceId);
       }
+      this._forgetWorkbenchViews(serverId, { windowId }, workspace && workspace.instanceId);
       await this.refreshWorkspace(serverId);
-      this._correctRouteAfterClose(serverId, { windowId });
+      if (affected && !global.Router.isSame(global.Router.current(), routeBefore)) return;
+      this._correctRouteAfterClose(serverId, { windowId, affected });
+    },
+
+    _matchesClosedTarget(serverId, route, closed) {
+      const params = (route && route.params) || {};
+      const viewCtx = this._mountedTerminalView?.currentContext?.() || null;
+      const savedView = route?.name === 'workbench' && params.viewId
+        ? global.Workbench?.get?.(params.viewId) : null;
+      const currentServerId = params.serverId || viewCtx?.serverId || savedView?.serverId;
+      if (currentServerId && currentServerId !== serverId) return false;
+      const currentSessionId = params.sessionId || viewCtx?.sessionId || savedView?.sessionId;
+      const currentWindowId = params.windowId || viewCtx?.windowId || savedView?.windowId;
+      return Boolean(
+        (closed.sessionId && currentSessionId === closed.sessionId)
+        || (closed.windowId && currentWindowId === closed.windowId),
+      );
+    },
+
+    _forgetWorkbenchViews(serverId, closed, instanceId) {
+      if (!global.Workbench || typeof global.Workbench.list !== 'function' || typeof global.Workbench.closeView !== 'function') return;
+      (global.Workbench.list(serverId) || []).forEach((view) => {
+        if (instanceId && view.instanceId && view.instanceId !== instanceId) return;
+        const matches = (closed.sessionId && view.sessionId === closed.sessionId)
+          || (closed.windowId && view.windowId === closed.windowId);
+        if (matches) global.Workbench.closeView(view.id);
+      });
     },
 
     /**
@@ -1671,9 +1702,7 @@
      */
     _correctRouteAfterClose(serverId, closed) {
       const route = global.Router.current();
-      const params = route.params || {};
-      const affected = (closed.sessionId && params.sessionId === closed.sessionId)
-        || (closed.windowId && params.windowId === closed.windowId);
+      const affected = Boolean(closed.affected) || this._matchesClosedTarget(serverId, route, closed);
       if (!affected) {
         this._onRoute(route).catch((err) => this._reportRouteFailure(err));
         return;

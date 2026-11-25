@@ -2091,3 +2091,124 @@ describe('MsApp settings interactions', () => {
     expect(text).toContain('不安装、不升级、不启动远端 tmux');
   });
 });
+
+describe('MsApp closing active Seam workbench windows and sessions', () => {
+  function setupWorkbenchClose({ route, views, sessionsAfter }) {
+    const ctx = loadStatusShell();
+    const goes = [];
+    const closedViews = [];
+    const refreshed = [];
+    ctx.win.showConfirm = async () => true;
+    ctx.win.Api.del = vi.fn(async () => {});
+    ctx.win.FilePreview = { forgetWindow: vi.fn() };
+    ctx.win.Workbench = {
+      list: () => views,
+      get: (id) => views.find((v) => v.id === id) || null,
+      closeView: vi.fn((id) => closedViews.push(id)),
+    };
+    ctx.win.Router.current = () => route;
+    ctx.win.Router.go = (target, opts) => goes.push({ target, opts });
+    ctx.Store.setWorkspace('local', {
+      provider: 'tmux',
+      instanceId: 'inst-1',
+      sessions: [
+        { id: '$1', name: 'main', windows: [{ id: '@5', name: 'w5', panes: [{ id: '%5' }] }, { id: '@6', name: 'w6', panes: [{ id: '%6' }] }] },
+        { id: '$2', name: 'other', windows: [{ id: '@9', name: 'w9', panes: [{ id: '%9' }] }] },
+      ],
+    });
+    ctx.MsApp.refreshWorkspace = vi.fn(async (serverId) => {
+      refreshed.push(serverId);
+      ctx.Store.setWorkspace(serverId, { provider: 'tmux', instanceId: 'inst-1', sessions: sessionsAfter });
+    });
+    ctx.MsApp._onRoute = vi.fn(async () => {});
+    return { ctx, goes, closedViews, refreshed };
+  }
+
+  it('closes the active Seam workbench view and navigates to a surviving window when deleting the current window', async () => {
+    const views = [
+      { id: 'v1', serverId: 'local', instanceId: 'inst-1', sessionId: '$1', windowId: '@5' },
+      { id: 'v2', serverId: 'local', instanceId: 'inst-1', sessionId: '$1', windowId: '@6' },
+    ];
+    const { ctx, goes, closedViews } = setupWorkbenchClose({
+      route: { name: 'workbench', params: { serverId: 'local', viewId: 'v1' } },
+      views,
+      sessionsAfter: [
+        { id: '$1', name: 'main', windows: [{ id: '@6', name: 'w6', panes: [{ id: '%6' }] }] },
+      ],
+    });
+
+    await ctx.MsApp._closeWindow('local', '@5');
+
+    expect(closedViews).toEqual(['v1']);
+    expect(ctx.win.FilePreview.forgetWindow).toHaveBeenCalledWith('local', '@5', 'inst-1');
+    expect(goes).toEqual([{
+      target: { name: 'terminal', params: { serverId: 'local', sessionId: '$1', windowId: '@6', paneId: '%6' } },
+      opts: { replace: true },
+    }]);
+    ctx.win.close();
+  });
+
+  it('falls back to the bare terminal route when deleting the last window in Seam workbench', async () => {
+    const views = [{ id: 'v1', serverId: 'local', instanceId: 'inst-1', sessionId: '$1', windowId: '@5' }];
+    const { ctx, goes, closedViews } = setupWorkbenchClose({
+      route: { name: 'workbench', params: { serverId: 'local', viewId: 'v1' } },
+      views,
+      sessionsAfter: [],
+    });
+
+    await ctx.MsApp._closeWindow('local', '@5');
+
+    expect(closedViews).toEqual(['v1']);
+    expect(goes).toEqual([{
+      target: { name: 'terminal', params: { serverId: 'local' } },
+      opts: { replace: true },
+    }]);
+    ctx.win.close();
+  });
+
+  it('cleans up an inactive window view without leaving the active workbench route', async () => {
+    const views = [
+      { id: 'v1', serverId: 'local', instanceId: 'inst-1', sessionId: '$1', windowId: '@5' },
+      { id: 'v2', serverId: 'local', instanceId: 'inst-1', sessionId: '$1', windowId: '@6' },
+    ];
+    const route = { name: 'workbench', params: { serverId: 'local', viewId: 'v1' } };
+    const { ctx, goes, closedViews } = setupWorkbenchClose({
+      route,
+      views,
+      sessionsAfter: [
+        { id: '$1', name: 'main', windows: [{ id: '@5', name: 'w5', panes: [{ id: '%5' }] }] },
+      ],
+    });
+
+    await ctx.MsApp._closeWindow('local', '@6');
+
+    expect(closedViews).toEqual(['v2']);
+    expect(goes).toEqual([]);
+    expect(ctx.MsApp._onRoute).toHaveBeenCalledWith(route);
+    ctx.win.close();
+  });
+
+  it('closes all views belonging to a closed session and jumps out of the deleted workbench view', async () => {
+    const views = [
+      { id: 'v1', serverId: 'local', instanceId: 'inst-1', sessionId: '$1', windowId: '@5' },
+      { id: 'v2', serverId: 'local', instanceId: 'inst-1', sessionId: '$1', windowId: '@6' },
+      { id: 'v3', serverId: 'local', instanceId: 'inst-1', sessionId: '$2', windowId: '@9' },
+    ];
+    const { ctx, goes, closedViews } = setupWorkbenchClose({
+      route: { name: 'workbench', params: { serverId: 'local', viewId: 'v1' } },
+      views,
+      sessionsAfter: [
+        { id: '$2', name: 'other', windows: [{ id: '@9', name: 'w9', panes: [{ id: '%9' }] }] },
+      ],
+    });
+
+    await ctx.MsApp._closeSession('local', '$1');
+
+    expect(closedViews).toEqual(['v1', 'v2']);
+    expect(goes).toEqual([{
+      target: { name: 'terminal', params: { serverId: 'local', sessionId: '$2', windowId: '@9', paneId: '%9' } },
+      opts: { replace: true },
+    }]);
+    ctx.win.close();
+  });
+});

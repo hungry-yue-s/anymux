@@ -92,14 +92,16 @@ describe('Orca zero-wheel quick wins', () => {
     });
   });
 
-  it('Quick Win 3: groups sidebar windows by project cwd basename and toggles session/project view', () => {
+  it('Quick Win 3: renders a single session tree without redundant directory grouping toggles', () => {
     const w = setupAppDom();
+    w.localStorage.setItem('tmux_ui_prefs', JSON.stringify({ sidebarGroupMode: 'project' }));
     w.eval(source('plugins/ui/client/js/slots.js'));
     w.eval(source('plugins/ui/client/js/router.js'));
     w.eval(source('plugins/ui/client/js/store.js'));
     w.eval(source('plugins/ui/client/js/app-shell.js'));
     w.eval(source('plugins/ui/client/js/ms-app.js'));
 
+    w.Store.loadUiPrefs();
     w.Store.setWorkspace('local', {
       provider: 'tmux',
       instanceId: '1:1',
@@ -112,14 +114,9 @@ describe('Orca zero-wheel quick wins', () => {
 
     const tree = w.document.getElementById('tree');
     tree.innerHTML = w.AppShell._renderTree('local', { name: 'terminal', params: { serverId: 'local' } });
+    expect(tree.querySelector('.tree-section-head > span').textContent).toBe('会话');
+    expect(tree.querySelector('.sidebar-group-switch')).toBeNull();
+    expect(tree.querySelector('.tree-project-group')).toBeNull();
     expect(tree.querySelectorAll('.tree-session-group')).toHaveLength(2);
-
-    // Switch to project directory grouping mode
-    w.Store.setUi({ sidebarGroupMode: 'project' });
-    tree.innerHTML = w.AppShell._renderTree('local', { name: 'terminal', params: { serverId: 'local' } });
-    const projectGroups = tree.querySelectorAll('.tree-project-group');
-    expect(projectGroups).toHaveLength(1);
-    expect(projectGroups[0].querySelector('.tree-project-head').textContent).toContain('anymux');
-    expect(projectGroups[0].querySelectorAll('.tree-window-row')).toHaveLength(2);
   });
 });
