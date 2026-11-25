@@ -2211,4 +2211,73 @@ describe('MsApp closing active Seam workbench windows and sessions', () => {
     }]);
     ctx.win.close();
   });
+
+  it('navigates directly to a newly created window and expands its session', async () => {
+    const ctx = loadStatusShell();
+    const goes = [];
+    ctx.win.showPrompt = async () => 'logs';
+    ctx.win.Api.post = vi.fn(async () => ({ id: '@12', name: 'logs' }));
+    ctx.win.Router.go = (target, opts) => goes.push({ target, opts });
+    ctx.MsApp._onRoute = vi.fn(async () => {});
+    ctx.Store.setWorkspace('local', {
+      provider: 'tmux',
+      instanceId: 'inst-1',
+      sessions: [{ id: '$1', name: 'main', windows: [{ id: '@5', name: 'w5', panes: [{ id: '%5' }] }] }],
+    });
+    ctx.MsApp.refreshWorkspace = vi.fn(async (serverId) => {
+      ctx.Store.setWorkspace(serverId, {
+        provider: 'tmux',
+        instanceId: 'inst-1',
+        sessions: [{
+          id: '$1',
+          name: 'main',
+          windows: [
+            { id: '@5', name: 'w5', panes: [{ id: '%5' }] },
+            { id: '@12', name: 'logs', panes: [{ id: '%12' }] },
+          ],
+        }],
+      });
+    });
+
+    await ctx.MsApp._createWindow('local', '$1');
+
+    expect(ctx.Store.isSessionExpanded('local', '$1')).toBe(true);
+    expect(goes).toEqual([{
+      target: { name: 'terminal', params: { serverId: 'local', sessionId: '$1', windowId: '@12', paneId: '%12' } },
+      opts: undefined,
+    }]);
+    expect(ctx.MsApp._onRoute).not.toHaveBeenCalled();
+    ctx.win.close();
+  });
+
+  it('navigates directly to the initial window of a newly created session', async () => {
+    const ctx = loadStatusShell();
+    const goes = [];
+    ctx.win.showPrompt = async () => 'demo';
+    ctx.win.Api.post = vi.fn(async () => ({ id: '$9', name: 'demo' }));
+    ctx.win.Router.go = (target, opts) => goes.push({ target, opts });
+    ctx.MsApp._onRoute = vi.fn(async () => {});
+    ctx.Store.setWorkspace('local', {
+      provider: 'tmux',
+      instanceId: 'inst-1',
+      sessions: [],
+    });
+    ctx.MsApp.refreshWorkspace = vi.fn(async (serverId) => {
+      ctx.Store.setWorkspace(serverId, {
+        provider: 'tmux',
+        instanceId: 'inst-1',
+        sessions: [{ id: '$9', name: 'demo', windows: [{ id: '@20', name: 'fish', panes: [{ id: '%20' }] }] }],
+      });
+    });
+
+    await ctx.MsApp._createSession('local');
+
+    expect(ctx.Store.isSessionExpanded('local', '$9')).toBe(true);
+    expect(goes).toEqual([{
+      target: { name: 'terminal', params: { serverId: 'local', sessionId: '$9', windowId: '@20', paneId: '%20' } },
+      opts: undefined,
+    }]);
+    expect(ctx.MsApp._onRoute).not.toHaveBeenCalled();
+    ctx.win.close();
+  });
 });

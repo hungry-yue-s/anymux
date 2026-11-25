@@ -373,7 +373,20 @@
     if (!ctx.sessionId) { toast('先打开一个会话', { error: true }); return; }
     Api.post(Api.workspaceUrl(ctx.serverId, '/sessions/' + encodeURIComponent(ctx.sessionId) + '/windows'), {})
       .then(function (created) {
-        if (created && created.id) Router.go({ name: 'terminal', params: { serverId: ctx.serverId, sessionId: ctx.sessionId, windowId: created.id } });
+        if (!created || !created.id) return;
+        if (typeof Store !== 'undefined' && Store.setSessionExpanded) Store.setSessionExpanded(ctx.serverId, ctx.sessionId, true);
+        var refreshed = typeof MsApp !== 'undefined' && MsApp.refreshWorkspace
+          ? Promise.resolve(MsApp.refreshWorkspace(ctx.serverId)).catch(function () {})
+          : Promise.resolve();
+        return refreshed.then(function () {
+          Router.go({
+            name: 'terminal',
+            params: Object.assign(
+              { serverId: ctx.serverId, sessionId: ctx.sessionId, windowId: created.id },
+              created.paneId ? { paneId: created.paneId } : {},
+            ),
+          });
+        });
       })
       .catch(function (err) { toast(errorText(err), { error: true }); });
   }

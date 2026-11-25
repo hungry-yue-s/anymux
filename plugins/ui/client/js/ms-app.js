@@ -1207,8 +1207,24 @@
         confirmText: '创建',
       });
       if (!name) return;
-      await global.Api.post(global.Api.workspaceUrl(serverId, '/sessions'), { name });
+      const created = await global.Api.post(global.Api.workspaceUrl(serverId, '/sessions'), { name });
       await this.refreshWorkspace(serverId);
+      if (created && created.id) {
+        const workspace = global.AppShell.workspace(serverId);
+        const session = global.AppShell._findSession(workspace, created.id);
+        const win = session && ((created.windowId && global.AppShell._findWindow(session, created.windowId)) || (session.windows || [])[0]);
+        const windowId = created.windowId || (win && win.id);
+        const paneId = created.paneId || (win && win.panes && win.panes[0] && win.panes[0].id);
+        global.Store.setSessionExpanded(serverId, created.id, true);
+        if (windowId) {
+          global.AppShell.closeMobileWorkspaceSheet({ restoreFocus: false });
+          global.Router.go({
+            name: 'terminal',
+            params: { serverId, sessionId: created.id, windowId, ...(paneId ? { paneId } : {}) },
+          });
+          return;
+        }
+      }
       await this._onRoute(global.Router.current());
     },
 
@@ -1221,8 +1237,21 @@
       });
       if (name === null) return;
       const path = global.Api.workspaceUrl(serverId, '/sessions/' + encodeURIComponent(sessionId) + '/windows');
-      await global.Api.post(path, name ? { name } : {});
+      const created = await global.Api.post(path, name ? { name } : {});
       await this.refreshWorkspace(serverId);
+      if (created && created.id) {
+        const workspace = global.AppShell.workspace(serverId);
+        const session = global.AppShell._findSession(workspace, sessionId);
+        const win = global.AppShell._findWindow(session, created.id);
+        const paneId = created.paneId || (win && win.panes && win.panes[0] && win.panes[0].id);
+        global.Store.setSessionExpanded(serverId, sessionId, true);
+        global.AppShell.closeMobileWorkspaceSheet({ restoreFocus: false });
+        global.Router.go({
+          name: 'terminal',
+          params: { serverId, sessionId, windowId: created.id, ...(paneId ? { paneId } : {}) },
+        });
+        return;
+      }
       await this._onRoute(global.Router.current());
     },
 
