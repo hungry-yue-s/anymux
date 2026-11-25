@@ -28,6 +28,8 @@ describe('independent retained history reader', () => {
     await reader.loadEarlier();
     expect(f.win.Api.get.mock.calls[1][0]).toContain('before=998');
     expect(reader.target.paneId).toBe('%8');
+    expect(reader.dialog.getAttribute('aria-label')).toBe('Build的更多历史');
+    expect(reader.dialog.querySelector('.wb-history-header strong').textContent).toBe('Build · 更多历史');
     expect(reader.dialog.textContent).toContain('历史随终端输出滚动');
     reader.close(); expect(reader.dialog.isConnected).toBe(false); f.close();
   });

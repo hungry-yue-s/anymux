@@ -6,10 +6,10 @@ export function openHistory(global, input, { title = '终端', returnFocus = glo
   if (!target) throw new Error('缺少有效的远端窗格');
   const doc = global.document;
   const dialog = doc.createElement('dialog'); dialog.className = 'wb-history';
-  dialog.setAttribute('aria-label', title + '的滚动历史');
+  dialog.setAttribute('aria-label', title + '的更多历史');
   const shell = doc.createElement('div'); shell.className = 'wb-history-shell';
   const header = doc.createElement('header'); header.className = 'wb-history-header';
-  const heading = doc.createElement('strong'); heading.textContent = title + ' · 滚动历史';
+  const heading = doc.createElement('strong'); heading.textContent = title + ' · 更多历史';
   const closeButton = doc.createElement('button'); closeButton.type = 'button'; closeButton.className = 'wb-history-close';
   closeButton.textContent = '×'; closeButton.setAttribute('aria-label', '关闭历史'); closeButton.title = '关闭 (Esc)';
   header.append(heading, closeButton);
@@ -50,7 +50,7 @@ export function openHistory(global, input, { title = '终端', returnFocus = glo
         || !(result.nextBefore === null || Number.isSafeInteger(result.nextBefore) && result.nextBefore >= 0 && result.nextBefore < result.before)) throw new Error('历史记录的来源或分页信息无效');
       nextBefore = result.nextBefore;
       content.textContent = result.lines.join('\n'); content.scrollTop = 0;
-      status.textContent = result.lines.length ? (result.before - result.lines.length + 1) + '–' + result.before + ' / ' + result.total + ' 行' : '暂无滚动历史，当前屏幕仍显示在终端中。';
+      status.textContent = result.lines.length ? (result.before - result.lines.length + 1) + '–' + result.before + ' / ' + result.total + ' 行' : '暂无更多历史，当前屏幕仍显示在终端中。';
     }).catch((error) => { if (!disposed) status.textContent = '读取失败：' + error.message; }).finally(() => {
       request = null;
       if (!disposed) { dialog.setAttribute('aria-busy', 'false'); earlier.disabled = nextBefore == null; refresh.disabled = false; }

@@ -434,6 +434,8 @@
 .seam-tile-btn:disabled { opacity: 0.45; cursor: default; }
 .seam-tile-actions { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; }
 .seam-tile-body { flex: 1 1 0; min-width: 0; min-height: 0; overflow: auto; }
+.seam-tile-diff.blk-frame { background: var(--workspace-bg, var(--bg-primary)); }
+.seam-tile-diff.blk-frame > .git-block { flex: 1 1 0; width: 100%; height: 100%; min-width: 0; min-height: 0; }
 .seam-tile-frame { width: 100%; height: 100%; border: 0; background: #fff; }
 .seam-tile-list { display: flex; flex-direction: column; padding: 4px 0; }
 .seam-tile-row {
@@ -479,6 +481,8 @@ html[data-native-transparency] .wb-stage.terminal-view,
 html[data-native-transparency] .wb-window-terminal,
 html[data-native-transparency] .seam-pane,
 html[data-native-transparency] .seam-pane.is-active,
+html[data-native-transparency] .seam-tile,
+html[data-native-transparency] .seam-tile-diff.blk-frame,
 html[data-native-transparency] .pane-body .xterm-viewport { background: transparent !important; }
 .wb-mobile .wb-toolbar { flex-basis: 44px; }
 .wb-mobile .wb-icon-button, .wb-actions-mobile .wb-icon-button { width: 44px; height: 44px; }

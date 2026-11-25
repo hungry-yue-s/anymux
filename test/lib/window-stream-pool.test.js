@@ -254,6 +254,11 @@ describe('ControlPool multi-pane window-stream', () => {
     controls[0].emit('output', '%3', Buffer.from('d'));
     expect(frames.filter(f => f.kind === 'output' && f.paneId === '%3').at(-1)).toMatchObject({ seq: 6 });
 
+    // Explicit resync with forceSnapshot refreshes VT snapshot even without dimension changes (e.g. respawn-pane).
+    const snapsBeforeResync = frames.filter(f => f.kind === 'snapshot' && f.paneId === '%3').length;
+    expect(await lease.resync({ paneId: '%3', forceSnapshot: true })).toBe(true);
+    expect(frames.filter(f => f.kind === 'snapshot' && f.paneId === '%3')).toHaveLength(snapsBeforeResync + 1);
+
     lease.close();
     pool.dispose();
   });

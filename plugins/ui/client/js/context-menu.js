@@ -2,27 +2,51 @@
   'use strict';
 
   var MENU_ID = 'seam-context-menu';
+  var SUBMENU_ID = 'seam-context-submenu';
   var activeMenu = null;
+  var activeSubmenu = null;
+  var activeSubTrigger = null;
   var returnFocusEl = null;
   var activeOnClose = null;
   var cleanupListeners = null;
 
-  function ensureMenuElement() {
+  function ensureMenuElement(id, baseClass) {
     var doc = global.document;
-    var el = doc.getElementById(MENU_ID);
+    var el = doc.getElementById(id || MENU_ID);
     if (el) return el;
     el = doc.createElement('div');
-    el.id = MENU_ID;
-    el.className = 'seam-context-menu';
+    el.id = id || MENU_ID;
+    el.className = baseClass || 'seam-context-menu';
     el.setAttribute('role', 'menu');
     el.hidden = true;
     doc.body.appendChild(el);
     return el;
   }
 
+  function closeSubmenu(options) {
+    var doc = global.document;
+    var restoreFocus = options && options.restoreFocus === true;
+    var trigger = activeSubTrigger;
+    var submenu = activeSubmenu || doc.getElementById(SUBMENU_ID);
+    if (trigger) {
+      trigger.setAttribute('aria-expanded', 'false');
+      trigger.classList.remove('is-submenu-open');
+    }
+    if (submenu) {
+      submenu.hidden = true;
+      submenu.replaceChildren();
+    }
+    activeSubmenu = null;
+    activeSubTrigger = null;
+    if (restoreFocus && trigger && trigger.isConnected && typeof trigger.focus === 'function') {
+      try { trigger.focus({ preventScroll: true }); } catch (_) {}
+    }
+  }
+
   function close(options) {
     var doc = global.document;
     var restoreFocus = !options || options.restoreFocus !== false;
+    closeSubmenu({ restoreFocus: false });
     var menu = activeMenu || doc.getElementById(MENU_ID);
     if (cleanupListeners) {
       cleanupListeners();
@@ -47,6 +71,22 @@
 
   function enabledItems(menu) {
     return Array.from(menu.querySelectorAll('[role="menuitem"]:not(:disabled)'));
+  }
+
+  function normalizeItems(items) {
+    var normalized = [];
+    (Array.isArray(items) ? items : []).forEach(function (entry) {
+      if (!entry) return;
+      if (entry.separator) {
+        if (normalized.length > 0 && !normalized[normalized.length - 1].separator) {
+          normalized.push({ separator: true });
+        }
+      } else {
+        normalized.push(entry);
+      }
+    });
+    while (normalized.length && normalized[normalized.length - 1].separator) normalized.pop();
+    return normalized;
   }
 
   function positionMenu(menu, opts) {
@@ -82,33 +122,37 @@
     menu.style.visibility = '';
   }
 
-  function open(options) {
-    var opts = options || {};
-    var items = Array.isArray(opts.items) ? opts.items.filter(Boolean) : [];
-    if (!items.length) return null;
+  function positionSubmenu(submenu, trigger) {
+    var gutter = 8;
+    var vw = global.innerWidth || 1280;
+    var vh = global.innerHeight || 800;
+    submenu.style.left = '0px';
+    submenu.style.top = '0px';
+    submenu.style.visibility = 'hidden';
+    submenu.hidden = false;
 
+    var tr = trigger && typeof trigger.getBoundingClientRect === 'function'
+      ? trigger.getBoundingClientRect()
+      : { left: 16, right: 200, top: 16 };
+    var sr = submenu.getBoundingClientRect();
+    var w = sr.width || 180;
+    var h = sr.height || 160;
+    var left = (tr.right || 200) - 2;
+    if (left + w > vw - gutter) {
+      left = (tr.left || 200) - w + 2;
+    }
+    var top = (tr.top || 16) - 4;
+    if (top + h > vh - gutter) top = vh - h - gutter;
+    left = Math.max(gutter, Math.min(left, vw - w - gutter));
+    top = Math.max(gutter, top);
+    submenu.style.left = Math.round(left) + 'px';
+    submenu.style.top = Math.round(top) + 'px';
+    submenu.style.visibility = '';
+  }
+
+  function populateMenu(menu, normalized, menuOpts) {
     var doc = global.document;
-    var prevFocus = opts.returnFocus !== undefined ? opts.returnFocus : doc.activeElement;
-    close({ restoreFocus: false });
-
-    var menu = ensureMenuElement();
-    menu.className = 'seam-context-menu' + (opts.className ? ' ' + opts.className : '');
-    menu.setAttribute('aria-label', opts.label || '上下文菜单');
-
-    // Trim leading, trailing, or consecutive separators cleanly.
-    var normalized = [];
-    items.forEach(function (entry) {
-      if (entry.separator) {
-        if (normalized.length > 0 && !normalized[normalized.length - 1].separator) {
-          normalized.push({ separator: true });
-        }
-      } else {
-        normalized.push(entry);
-      }
-    });
-    while (normalized.length && normalized[normalized.length - 1].separator) normalized.pop();
-    if (!normalized.length) return null;
-
+    var isSubmenu = Boolean(menuOpts && menuOpts.isSubmenu);
     normalized.forEach(function (entry) {
       if (entry.separator) {
         var sep = doc.createElement('div');
@@ -117,10 +161,12 @@
         menu.appendChild(sep);
         return;
       }
+      var childItems = !isSubmenu && Array.isArray(entry.children) ? normalizeItems(entry.children) : [];
+      var hasSubmenu = childItems.length > 0;
       var btn = doc.createElement('button');
       btn.type = 'button';
       btn.setAttribute('role', 'menuitem');
-      btn.className = 'seam-ctx-item' + (entry.danger ? ' is-danger' : '');
+      btn.className = 'seam-ctx-item' + (entry.danger ? ' is-danger' : '') + (hasSubmenu ? ' has-submenu' : '');
       if (entry.id) btn.dataset.ctxAction = entry.id;
       if (entry.disabled) btn.disabled = true;
 
@@ -138,23 +184,86 @@
       labelSpan.textContent = entry.label || '';
       btn.appendChild(labelSpan);
 
-      if (entry.shortcut) {
-        var shortcut = doc.createElement('span');
-        shortcut.className = 'seam-ctx-shortcut';
-        shortcut.textContent = entry.shortcut;
-        btn.appendChild(shortcut);
-      }
+      if (hasSubmenu) {
+        btn.setAttribute('aria-haspopup', 'menu');
+        btn.setAttribute('aria-expanded', 'false');
+        var arrow = doc.createElement('span');
+        arrow.className = 'seam-ctx-arrow';
+        arrow.setAttribute('aria-hidden', 'true');
+        arrow.textContent = '▸';
+        btn.appendChild(arrow);
 
-      btn.addEventListener('click', function (event) {
-        event.stopPropagation();
-        if (btn.disabled) return;
-        close({ restoreFocus: false });
-        if (typeof entry.action === 'function') {
-          Promise.resolve(entry.action(entry)).catch(function () {});
+        var openSub = function (focusFirst) {
+          if (btn.disabled) return null;
+          if (activeSubTrigger === btn && activeSubmenu && !activeSubmenu.hidden) {
+            if (focusFirst) {
+              var firstChild = enabledItems(activeSubmenu)[0];
+              if (firstChild) firstChild.focus({ preventScroll: true });
+            }
+            return activeSubmenu;
+          }
+          closeSubmenu({ restoreFocus: false });
+          var submenu = ensureMenuElement(SUBMENU_ID, 'seam-context-menu seam-ctx-submenu');
+          submenu.className = 'seam-context-menu seam-ctx-submenu';
+          submenu.setAttribute('aria-label', entry.label || '子菜单');
+          submenu.replaceChildren();
+          populateMenu(submenu, childItems, { isSubmenu: true });
+          activeSubmenu = submenu;
+          activeSubTrigger = btn;
+          btn.setAttribute('aria-expanded', 'true');
+          btn.classList.add('is-submenu-open');
+          positionSubmenu(submenu, btn);
+          if (focusFirst) {
+            var firstItem = enabledItems(submenu)[0];
+            if (firstItem) firstItem.focus({ preventScroll: true });
+          }
+          return submenu;
+        };
+        btn._openSubmenu = openSub;
+        btn.addEventListener('mouseenter', function () { openSub(false); });
+        btn.addEventListener('click', function (event) {
+          event.stopPropagation();
+          openSub(true);
+        });
+      } else {
+        if (!isSubmenu) {
+          btn.addEventListener('mouseenter', function () {
+            if (activeSubmenu) closeSubmenu({ restoreFocus: false });
+          });
         }
-      });
+        if (entry.shortcut) {
+          var shortcut = doc.createElement('span');
+          shortcut.className = 'seam-ctx-shortcut';
+          shortcut.textContent = entry.shortcut;
+          btn.appendChild(shortcut);
+        }
+        btn.addEventListener('click', function (event) {
+          event.stopPropagation();
+          if (btn.disabled) return;
+          close({ restoreFocus: false });
+          if (typeof entry.action === 'function') {
+            Promise.resolve(entry.action(entry)).catch(function () {});
+          }
+        });
+      }
       menu.appendChild(btn);
     });
+  }
+
+  function open(options) {
+    var opts = options || {};
+    var normalized = normalizeItems(opts.items);
+    if (!normalized.length) return null;
+
+    var doc = global.document;
+    var prevFocus = opts.returnFocus !== undefined ? opts.returnFocus : doc.activeElement;
+    close({ restoreFocus: false });
+
+    var menu = ensureMenuElement(MENU_ID, 'seam-context-menu');
+    menu.className = 'seam-context-menu' + (opts.className ? ' ' + opts.className : '');
+    menu.setAttribute('aria-label', opts.label || '上下文菜单');
+    menu.replaceChildren();
+    populateMenu(menu, normalized, { isSubmenu: false });
 
     activeMenu = menu;
     returnFocusEl = prevFocus;
@@ -162,7 +271,9 @@
     positionMenu(menu, opts);
 
     var onPointerDown = function (event) {
-      if (!menu.contains(event.target)) close({ restoreFocus: false });
+      if (!menu.contains(event.target) && !(activeSubmenu && activeSubmenu.contains(event.target))) {
+        close({ restoreFocus: false });
+      }
     };
     var onKeyDown = function (event) {
       if (event.key === 'Escape') {
@@ -171,19 +282,31 @@
         close({ restoreFocus: true });
         return;
       }
+      var active = doc.activeElement;
+      if (event.key === 'ArrowRight' && menu.contains(active) && typeof active._openSubmenu === 'function') {
+        event.preventDefault();
+        active._openSubmenu(true);
+        return;
+      }
+      if (event.key === 'ArrowLeft' && activeSubmenu && !activeSubmenu.hidden
+        && (activeSubmenu.contains(active) || active === activeSubTrigger)) {
+        event.preventDefault();
+        closeSubmenu({ restoreFocus: true });
+        return;
+      }
       if (!['ArrowDown', 'ArrowUp', 'Home', 'End', 'Enter'].includes(event.key)) return;
-      var list = enabledItems(menu);
+      var targetMenu = (activeSubmenu && !activeSubmenu.hidden && activeSubmenu.contains(active)) ? activeSubmenu : menu;
+      var list = enabledItems(targetMenu);
       if (!list.length) return;
       if (event.key === 'Enter') {
-        var active = doc.activeElement;
-        if (menu.contains(active) && !active.disabled) {
+        if (targetMenu.contains(active) && !active.disabled) {
           event.preventDefault();
           active.click();
         }
         return;
       }
       event.preventDefault();
-      var at = list.indexOf(doc.activeElement);
+      var at = list.indexOf(active);
       var next = 0;
       if (event.key === 'Home') next = 0;
       else if (event.key === 'End') next = list.length - 1;

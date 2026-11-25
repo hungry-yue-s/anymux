@@ -100,8 +100,26 @@ describe.skipIf(!binary || !existsSync(binary))('tmux rich-pane integration', ()
       expect(snapFramesForRich).toEqual([]);
 
       await fx.workspace.updatePane(created.id, { kind: 'terminal' });
-      const resolvedAfter = await fx.pool.resolveWindow({ instanceId: fx.instanceId, sessionId: fx.sessionId, windowId: fx.windowId });
-      expect(resolvedAfter.panes.find((p) => p.id === created.id)).toMatchObject({ kind: 'terminal', payload: '' });
+      expect(await lease.resync({ paneId: created.id, forceSnapshot: true })).toBe(true);
+      const latestLayout = frames.filter((f) => !Buffer.isBuffer(f) && f.type === 'layout').at(-1);
+      expect(latestLayout.panes.find((p) => p.id === created.id)?.kind).toBe('terminal');
+      const snapFramesAfterRevert = frames.filter((f) => Buffer.isBuffer(f) && f.readUInt8(0) === 0x02 && f.readUInt32BE(1) === richPaneNum);
+      expect(snapFramesAfterRevert.length).toBeGreaterThanOrEqual(1);
+
+      const oldPid = (await fx.run(['display-message', '-p', '-t', fx.paneId, '#{pane_pid}'])).trim();
+      await fx.workspace.updatePane(fx.paneId, { kind: 'diff', payload: { path: fx.dir } });
+      expect(await lease.resync({ paneId: fx.paneId })).toBe(true);
+      expect(frames.filter((f) => !Buffer.isBuffer(f) && f.type === 'layout').at(-1).panes.find((p) => p.id === fx.paneId)).toMatchObject({
+        kind: 'diff',
+        payload: JSON.stringify({ path: fx.dir }),
+      });
+
+      const respawned = await fx.workspace.respawnPane(fx.paneId);
+      expect(respawned).toMatchObject({ id: fx.paneId, ok: true });
+      const newPid = (await fx.run(['display-message', '-p', '-t', fx.paneId, '#{pane_pid}'])).trim();
+      expect(newPid).not.toBe(oldPid);
+      expect(await lease.resync({ paneId: fx.paneId, forceSnapshot: true })).toBe(true);
+      expect(frames.filter((f) => !Buffer.isBuffer(f) && f.type === 'layout').at(-1).panes.find((p) => p.id === fx.paneId)?.kind).toBe('terminal');
       lease.close();
     } catch (err) {
       error = err;

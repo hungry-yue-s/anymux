@@ -40,10 +40,27 @@
 }
 
 .seam-ctx-item:hover:not(:disabled),
-.seam-ctx-item:focus-visible:not(:disabled) {
+.seam-ctx-item:focus-visible:not(:disabled),
+.seam-ctx-item.is-submenu-open:not(:disabled) {
   background: var(--workspace-hover, var(--bg-hover));
   color: var(--workspace-text, var(--text-primary));
   outline: none;
+}
+
+.seam-ctx-item.has-submenu {
+  justify-content: space-between;
+}
+
+.seam-ctx-arrow {
+  flex: none;
+  margin-left: 12px;
+  font-size: 11px;
+  color: var(--workspace-muted, var(--text-secondary));
+}
+
+.seam-ctx-submenu {
+  z-index: 15001;
+  min-width: 164px;
 }
 
 .seam-ctx-item:disabled {

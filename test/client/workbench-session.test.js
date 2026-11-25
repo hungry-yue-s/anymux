@@ -729,4 +729,52 @@ describe('SeamWindowSession multi-pane workbench session', () => {
     session.dispose();
     f.close();
   });
+
+  it('exposes 更多历史, 重置窗格, and 4-mode 打开 Git 预览 submenu in rail and body context menus plus requestResync', async () => {
+    const f = fixture();
+    const actions = [];
+    const menus = [];
+    f.win.ContextMenu = { open: (spec) => menus.push(spec), installLongPress: () => () => {} };
+    const session = new SeamWindowSession(f.win, {
+      container: f.host,
+      target,
+      onAction: (action, detail) => actions.push({ action, detail }),
+    });
+    await session.ready;
+    const socket = f.sockets[0];
+    hydrateWindow(socket);
+
+    const rail = f.host.querySelector('.seam-pane[data-pane-id="%1"] .seam-rail');
+    rail.dispatchEvent(new f.win.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 20, clientY: 20 }));
+    const railMenu = menus.at(-1);
+    expect(railMenu.items.find((i) => i.id === 'history')?.label).toBe('更多历史');
+    expect(railMenu.items.find((i) => i.id === 'respawn')).toMatchObject({ label: '重置窗格', danger: true });
+    const railGit = railMenu.items.find((i) => i.id === 'open-git-preview');
+    expect(railGit.children.map((c) => c.label)).toEqual(['侧边栏', '覆盖当前窗格', '向下分窗展示', '向右分窗展示']);
+    railGit.children[2].action();
+    railMenu.items.find((i) => i.id === 'respawn').action();
+    expect(actions).toEqual([
+      { action: 'open-git-preview', detail: { paneId: '%1', mode: 'split-down' } },
+      { action: 'respawn-pane', detail: { paneId: '%1' } },
+    ]);
+
+    const body = f.host.querySelector('.seam-pane[data-pane-id="%1"] .pane-body');
+    body.dispatchEvent(new f.win.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 50, clientY: 50 }));
+    const bodyMenu = menus.at(-1);
+    expect(bodyMenu.items.find((i) => i.id === 'history')?.label).toBe('更多历史');
+    expect(bodyMenu.items.find((i) => i.id === 'respawn')).toMatchObject({ label: '重置窗格', danger: true });
+    expect(bodyMenu.items.find((i) => i.id === 'open-git-preview')?.children?.map((c) => c.id)).toEqual([
+      'git-preview-sidebar',
+      'git-preview-replace',
+      'git-preview-down',
+      'git-preview-right',
+    ]);
+
+    socket.sent.length = 0;
+    expect(session.requestResync('%1', true)).toBe(true);
+    expect(socket.sent).toEqual([{ type: 'resync', paneId: '%1', forceSnapshot: true }]);
+
+    session.dispose();
+    f.close();
+  });
 });

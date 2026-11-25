@@ -12,6 +12,8 @@ function provider(overrides = {}) {
     zoomPane: vi.fn(async () => true),
     breakPane: vi.fn(async () => ({ windowId: '@9', paneId: '%3' })),
     clearPane: vi.fn(async () => {}),
+    respawnPane: vi.fn(async (paneId) => ({ ok: true, paneId })),
+    getPaneAddress: vi.fn(async (paneId) => ({ instanceId: '1:1', sessionId: '$1', windowId: '@4', paneId })),
     swapPane: vi.fn(async () => {}),
     ...overrides,
   };
@@ -68,5 +70,7 @@ describe('the layout picker through the workspace, by id', () => {
     await expect(workspace.breakPane('%3')).resolves.toEqual({ windowId: '@9', paneId: '%3' });
     await expect(workspace.clearPane('%3', { scope: 'history' })).resolves.toEqual({ id: '%3', scope: 'history' });
     expect(tmux.clearPane).toHaveBeenCalledWith('%3', { scope: 'history' });
+    await expect(workspace.respawnPane('%3')).resolves.toEqual({ id: '%3', ok: true, windowId: '@4', sessionId: '$1' });
+    expect(tmux.respawnPane).toHaveBeenCalledWith('%3');
   });
 });

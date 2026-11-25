@@ -225,6 +225,8 @@ export function createWorkbench(global, options = {}) {
           if (action === 'close-pane') return api.closePane(detail.paneId);
           if (action === 'break-pane') return api.breakPane(detail.paneId);
           if (action === 'clear-pane') return api.clearPane(detail.paneId);
+          if (action === 'respawn-pane') return api.respawnPane(detail.paneId);
+          if (action === 'open-git-preview') return api.openGitPreview(detail);
           if (action === 'rename-pane') return api.renamePane(detail.paneId, detail.label);
           if (action === 'equalize') return api.equalizeLayout(detail.layout || 'tiled');
           if (action === 'history') return api.openHistory(detail.paneId);
@@ -339,7 +341,8 @@ export function createWorkbench(global, options = {}) {
           const selected = context(); const text = await global.navigator.clipboard.readText();
           if (context().key !== selected.key) throw new Error('原生焦点已变化，请重新粘贴');
           if (!owner.session?.paste(text)) throw new Error('终端尚未连接，内容未发送');
-        }), command('滚动历史', () => api.openHistory()),
+        }), command('更多历史', () => api.openHistory()),
+        command('重置窗格', () => api.respawnPane()),
         command('减小字号', () => owner.session?.setFontSize(owner.session.term.options.fontSize - 1)),
         command('增大字号', () => owner.session?.setFontSize(owner.session.term.options.fontSize + 1)),
         command('重命名工作台', () => api.renameView(viewId)),
@@ -409,10 +412,12 @@ export function createWorkbench(global, options = {}) {
       const current = context();
       const targetPane = paneId || current.paneId;
       if (!current.serverId || !targetPane) return;
-      return global.Api.patch(workspaceApiUrl(current.serverId, '/panes/' + encodeURIComponent(targetPane)), {
+      const result = await global.Api.patch(workspaceApiUrl(current.serverId, '/panes/' + encodeURIComponent(targetPane)), {
         ...(kind !== undefined ? { kind } : {}),
         ...(payload !== undefined ? { payload } : {}),
       });
+      mounted?.session?.requestResync?.(targetPane, kind === 'terminal');
+      return result;
     },
     selectPane(paneId) {
       if (!paneId) return false;
@@ -440,6 +445,41 @@ export function createWorkbench(global, options = {}) {
       const targetPane = paneId || current.paneId;
       if (!current.serverId || !targetPane) return;
       await global.Api.post(workspaceApiUrl(current.serverId, '/panes/' + encodeURIComponent(targetPane) + '/clear'), {});
+    },
+    async respawnPane(paneId) {
+      const current = context();
+      const targetPane = paneId || current.paneId;
+      if (!current.serverId || !targetPane) return;
+      const result = await global.Api.post(workspaceApiUrl(current.serverId, '/panes/' + encodeURIComponent(targetPane) + '/respawn'), {});
+      mounted?.session?.requestResync?.(targetPane, true);
+      return result;
+    },
+    async openGitPreview({ paneId = null, mode = 'sidebar' } = {}) {
+      const current = context();
+      const targetPane = paneId || current.paneId;
+      const serverId = current.serverId;
+      if (!serverId || !targetPane) return;
+      let status = null;
+      try {
+        status = await global.Api.get(nodeUrl(serverId, '/api/git/status?path=.&paneId=' + encodeURIComponent(targetPane)));
+      } catch { /* fall back to pane cwd */ }
+      const hasRepo = Boolean(status?.root);
+      const paneCwd = mounted?.session?.getPaneMeta?.(targetPane)?.cwd || '';
+      const tilePayload = hasRepo ? { path: status.root } : { path: paneCwd || '.', paneId: targetPane };
+      if (mode === 'sidebar') {
+        if (!global.BlockHost?.open) throw new Error('当前环境未加载 Git 侧边栏');
+        return global.BlockHost.open('git', hasRepo ? { path: status.root } : { path: '.', paneId: targetPane });
+      }
+      if (mode === 'replace') {
+        return api.setPaneKind({ paneId: targetPane, kind: 'diff', payload: tilePayload });
+      }
+      if (mode === 'split-down') {
+        return api.splitRich({ direction: 'vertical', paneId: targetPane, kind: 'diff', payload: tilePayload });
+      }
+      if (mode === 'split-right') {
+        return api.splitRich({ direction: 'horizontal', paneId: targetPane, kind: 'diff', payload: tilePayload });
+      }
+      throw new Error('无效的 Git 预览位置: ' + mode);
     },
     async renamePane(paneId, label) {
       const current = context();

@@ -835,10 +835,60 @@ var BlockHost = (function () {
     }
   }
 
+  function mountEmbedded(kind, container, options) {
+    options = options || {};
+    var definition = kinds[kind];
+    if (!definition || !container) return null;
+    var serverId = options.serverId || currentServer();
+    var params = Object.assign({}, options.params || {});
+    var id = 'emb-' + kind + '-' + (nextId++);
+    var api = {
+      id: id,
+      serverId: serverId,
+      params: params,
+      restored: false,
+      url: function (path) { return window.Api ? Api.nodeUrl(serverId, path) : path; },
+      setTitle: function (title) { if (typeof options.onTitle === 'function') options.onTitle(title || definition.title); },
+      setSubtitle: function (subtitle) { if (typeof options.onSubtitle === 'function') options.onSubtitle(subtitle || ''); },
+      setParams: function (next) {
+        api.params = Object.assign({}, api.params, next || {});
+        if (typeof options.onParams === 'function') options.onParams(api.params);
+      },
+      yieldToTwin: function () { return false; },
+      setBusy: function () {},
+      close: function () { if (typeof options.onClose === 'function') options.onClose(); },
+      isVisible: function () { return Boolean(container && container.isConnected); },
+      focus: function () { if (impl && typeof impl.focus === 'function') impl.focus(); },
+    };
+    var impl = null;
+    try {
+      impl = definition.create(api) || {};
+    } catch (err) {
+      impl = { el: el('div', 'blk-error', '无法打开：' + (err && err.message ? err.message : err)) };
+    }
+    if (impl.el) container.replaceChildren(impl.el);
+    return {
+      el: impl.el || null,
+      update: function (nextParams) {
+        api.params = Object.assign({}, api.params, nextParams || {});
+        if (impl && typeof impl.update === 'function') impl.update(api.params);
+      },
+      refresh: function () { if (impl && typeof impl.refresh === 'function') impl.refresh(); },
+      focus: function () { if (impl && typeof impl.focus === 'function') impl.focus(); },
+      dispose: function () {
+        if (impl && typeof impl.dispose === 'function') {
+          try { impl.dispose(); } catch (_) {}
+        }
+        if (impl && impl.el && impl.el.remove) impl.el.remove();
+      },
+    };
+  }
+
   return {
     register: register,
     open: open,
     openInWindow: openInWindow,
+    mountEmbedded: mountEmbedded,
     close: close,
     activate: activate,
     setMode: setMode,

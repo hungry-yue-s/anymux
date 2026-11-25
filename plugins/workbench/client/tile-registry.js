@@ -131,9 +131,41 @@ function createBrowserTile(host, ctx) {
   };
 }
 
+function diffTileParams(ctx) {
+  const data = ctx.payloadData || {};
+  return {
+    path: data.path || '.',
+    ...(data.paneId ? { paneId: data.paneId } : {}),
+    ...(data.commit ? { commit: data.commit } : {}),
+  };
+}
+
 function createDiffTile(host, ctx) {
   const doc = ctx.global.document;
   let disposed = false;
+  const mountEmbedded = ctx.global.BlockHost?.mountEmbedded;
+  if (typeof mountEmbedded === 'function') {
+    const embeddedHost = el(doc, 'div', 'seam-tile seam-tile-diff blk-frame blk-mode-tile');
+    const embedded = mountEmbedded('git', embeddedHost, {
+      serverId: ctx.serverId,
+      params: diffTileParams(ctx),
+      onClose: () => ctx.onClose?.(),
+    });
+    if (embedded) {
+      host.replaceChildren(embeddedHost);
+      return {
+        update(next) {
+          ctx = next;
+          embedded.update(diffTileParams(next));
+        },
+        dispose() {
+          disposed = true;
+          embedded.dispose();
+          embeddedHost.remove();
+        },
+      };
+    }
+  }
   const wrap = el(doc, 'div', 'seam-tile seam-tile-diff');
   const bar = el(doc, 'div', 'seam-tile-bar');
   const title = el(doc, 'span', 'seam-tile-title', 'Git 工作区变更');

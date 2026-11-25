@@ -1003,7 +1003,13 @@ export class SeamWindowSession {
     entry.num.textContent = String(idx);
     entry.ico.className = 'pane-proc-ico is-' + kind;
     entry.ico.innerHTML = PANE_ICONS[kind] || (isRich ? PANE_ICONS.rich : PANE_ICONS.shell);
-    const primaryTitle = entry.meta.label || (isRich ? '[' + kind + '] ' + (parseTilePayload(entry.meta.payload).url || parseTilePayload(entry.meta.payload).path || kind) : (entry.meta.title || entry.meta.command || ('窗格 ' + idx)));
+    const parsedPayload = isRich ? parseTilePayload(entry.meta.payload) : null;
+    const richFallbackTitle = isRich
+      ? (kind === 'diff'
+        ? (parsedPayload?.path && parsedPayload.path !== '.' ? 'Git · ' + basenameOf(parsedPayload.path) : 'Git 预览')
+        : '[' + kind + '] ' + (parsedPayload?.url || parsedPayload?.path || kind))
+      : '';
+    const primaryTitle = entry.meta.label || (isRich ? richFallbackTitle : (entry.meta.title || entry.meta.command || ('窗格 ' + idx)));
     entry.titleEl.textContent = primaryTitle;
     const cmd = isRich ? '' : basenameOf(entry.meta.command);
     entry.cmdChip.textContent = cmd && cmd !== primaryTitle ? cmd : '';
@@ -1435,6 +1441,16 @@ export class SeamWindowSession {
 
   _bindStageMenus() {
     const doc = this.global.document;
+    const gitPreviewItem = (paneId) => ({
+      id: 'open-git-preview',
+      label: '打开 Git 预览',
+      children: [
+        { id: 'git-preview-sidebar', label: '侧边栏', action: () => this.onAction('open-git-preview', { paneId, mode: 'sidebar' }) },
+        { id: 'git-preview-replace', label: '覆盖当前窗格', action: () => this.onAction('open-git-preview', { paneId, mode: 'replace' }) },
+        { id: 'git-preview-down', label: '向下分窗展示', action: () => this.onAction('open-git-preview', { paneId, mode: 'split-down' }) },
+        { id: 'git-preview-right', label: '向右分窗展示', action: () => this.onAction('open-git-preview', { paneId, mode: 'split-right' }) },
+      ],
+    });
     const openMenuForTarget = (targetEl, clientX, clientY) => {
       const ContextMenu = this.global.ContextMenu;
       if (!ContextMenu) return false;
@@ -1451,13 +1467,14 @@ export class SeamWindowSession {
             { id: 'split-v', label: '上下分窗', action: () => this.onAction('split', { paneId, direction: 'vertical' }) },
             { id: 'split-rich-browser', label: '拆分富窗格: 网页', action: () => this.onAction('split-rich', { paneId, direction: 'horizontal', kind: 'browser' }) },
             { id: 'split-rich-doc', label: '拆分富窗格: 文档', action: () => this.onAction('split-rich', { paneId, direction: 'horizontal', kind: 'doc' }) },
-            { id: 'split-rich-diff', label: '拆分富窗格: Git 变更', action: () => this.onAction('split-rich', { paneId, direction: 'horizontal', kind: 'diff' }) },
+            gitPreviewItem(paneId),
             ...(entry?.isRich ? [{ id: 'to-terminal', label: '切换回终端', action: () => this.onAction('set-pane-kind', { paneId, kind: 'terminal' }) }] : []),
             { id: 'zoom', label: this.zoomed && this.activePaneId === paneId ? '还原窗格' : '最大化窗格', action: () => this.zoomPane(paneId) },
             { id: 'rename', label: '重命名窗格', action: () => this.startRenamePane(paneId) },
             { id: 'break', label: '拆分为独立窗口', disabled: this.panes.size <= 1, action: () => this.onAction('break-pane', { paneId }) },
-            ...(!entry?.isRich ? [{ id: 'history', label: '滚动历史', action: () => this.onAction('history', { paneId }) }, { id: 'clear', label: '清屏', action: () => this.onAction('clear-pane', { paneId }) }] : []),
+            ...(!entry?.isRich ? [{ id: 'history', label: '更多历史', action: () => this.onAction('history', { paneId }) }, { id: 'clear', label: '清屏', action: () => this.onAction('clear-pane', { paneId }) }] : []),
             { separator: true },
+            { id: 'respawn', label: '重置窗格', danger: true, action: () => this.onAction('respawn-pane', { paneId }) },
             { id: 'close', label: '关闭窗格', danger: true, action: () => (this.panes.size <= 1 ? this.onAction('close-window', { paneId }) : this.onAction('close-pane', { paneId })) },
           ],
           onClose: () => entry?.term?.focus(),
@@ -1501,8 +1518,11 @@ export class SeamWindowSession {
             { separator: true },
             { id: 'split-h', label: '左右分窗', action: () => this.onAction('split', { paneId, direction: 'horizontal' }) },
             { id: 'split-v', label: '上下分窗', action: () => this.onAction('split', { paneId, direction: 'vertical' }) },
-            { id: 'history', label: '滚动历史', action: () => this.onAction('history', { paneId }) },
+            gitPreviewItem(paneId),
+            { id: 'history', label: '更多历史', action: () => this.onAction('history', { paneId }) },
             ...(cwd ? [{ id: 'copy-cwd', label: '复制工作目录', action: () => this.copy(cwd) }] : []),
+            { separator: true },
+            { id: 'respawn', label: '重置窗格', danger: true, action: () => this.onAction('respawn-pane', { paneId }) },
           ],
           onClose: () => entry?.term?.focus(),
         });
@@ -1682,6 +1702,18 @@ export class SeamWindowSession {
 
   releaseTakeover() {
     return this._send({ type: 'release-takeover' });
+  }
+
+  getPaneMeta(paneId) {
+    return this.panes.get(paneId)?.meta || null;
+  }
+
+  requestResync(paneId = null, forceSnapshot = false) {
+    return this._send({
+      type: 'resync',
+      ...(paneId ? { paneId } : {}),
+      ...(forceSnapshot ? { forceSnapshot: true } : {}),
+    });
   }
 
   _cellMetrics() {

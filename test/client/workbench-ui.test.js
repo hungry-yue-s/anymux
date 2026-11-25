@@ -20,6 +20,8 @@ function fixture({ copiedTab, legacyTab, locks } = {}) {
       this.ready = Promise.resolve(); sessions.push(this);
     }
     requestContext() { return Promise.resolve(this.context); }
+    requestResync = vi.fn(() => true);
+    getPaneMeta = vi.fn(() => ({ cwd: '/srv/repo' }));
     fit() {} setVisible() {} send = vi.fn(() => true); paste = vi.fn(() => true);
     focus() { this.term.textarea.focus(); } dispose() { this.disposed = true; } refresh() {} setFontSize() {} copy() {}
     invalidate() { this.status = 'invalid'; this.options.onState({ status: 'invalid' }); }
@@ -227,6 +229,44 @@ describe('native workbench UI', () => {
     f.win.MobileUI.isMobile = () => true; f.win.dispatchEvent(new f.win.Event('resize'));
     expect(actions.parentNode.id).toBe('ms-native-mobile-header'); expect(f.host.querySelector('.wb-toolbar').hidden).toBe(true);
     expect(f.sessions).toHaveLength(1); f.api.unmount(); expect(actions.isConnected).toBe(false); f.close();
+  });
+
+  it('respawns panes with resync and opens Git preview in sidebar, replace, split-down, and split-right modes', async () => {
+    const f = fixture();
+    f.win.Api.patch = vi.fn(async () => ({ ok: true }));
+    f.win.Api.get = vi.fn(async (url) => {
+      if (url.includes('/api/workbench/window-capability')) return { available: true, protocol: 1 };
+      if (url.includes('/api/git/status')) return { root: '/srv/my-repo', files: [] };
+      return {};
+    });
+    f.win.BlockHost = { open: vi.fn() };
+
+    const view = await f.api.create({ serverId: 'dev', ...remote });
+    await f.api.render('dev', view.id, { container: f.host });
+    const session = f.sessions[0];
+
+    await f.api.respawnPane('%1');
+    expect(f.win.Api.post).toHaveBeenCalledWith('/n/dev/api/workspace/panes/%251/respawn', {});
+    expect(session.requestResync).toHaveBeenCalledWith('%1', true);
+
+    await f.api.openGitPreview({ paneId: '%1', mode: 'sidebar' });
+    expect(f.win.BlockHost.open).toHaveBeenCalledWith('git', { path: '/srv/my-repo' });
+
+    await f.api.openGitPreview({ paneId: '%1', mode: 'replace' });
+    expect(f.win.Api.patch).toHaveBeenCalledWith('/n/dev/api/workspace/panes/%251', { kind: 'diff', payload: { path: '/srv/my-repo' } });
+    expect(session.requestResync).toHaveBeenCalledWith('%1', false);
+
+    await f.api.openGitPreview({ paneId: '%1', mode: 'split-down' });
+    expect(f.win.Api.post).toHaveBeenLastCalledWith('/n/dev/api/workspace/windows/%401/panes', {
+      paneId: '%1', direction: 'vertical', kind: 'diff', payload: { path: '/srv/my-repo' },
+    });
+
+    await f.api.openGitPreview({ paneId: '%1', mode: 'split-right' });
+    expect(f.win.Api.post).toHaveBeenLastCalledWith('/n/dev/api/workspace/windows/%401/panes', {
+      paneId: '%1', direction: 'horizontal', kind: 'diff', payload: { path: '/srv/my-repo' },
+    });
+
+    f.close();
   });
 
 });

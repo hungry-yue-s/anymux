@@ -38,6 +38,7 @@ describe('window stream gateway', () => {
       zoomPane: (paneId, zoomed) => calls.push(['zoom-pane', paneId, zoomed]),
       takeover: () => calls.push(['takeover']),
       releaseTakeover: () => calls.push(['release-takeover']),
+      resync: (opts) => calls.push(['resync', opts]),
       visibility: v => calls.push(['visibility', v]),
     };
     const pool = {
@@ -62,6 +63,7 @@ describe('window stream gateway', () => {
     ws.emit('message', JSON.stringify({ type: 'zoom-pane', paneId: '%5', zoomed: true }));
     ws.emit('message', JSON.stringify({ type: 'takeover' }));
     ws.emit('message', JSON.stringify({ type: 'release-takeover' }));
+    ws.emit('message', JSON.stringify({ type: 'resync', paneId: '%5', forceSnapshot: true }));
     ws.emit('message', JSON.stringify({ type: 'visibility', visible: false }));
     await new Promise(r => setTimeout(r, 10));
 
@@ -74,6 +76,7 @@ describe('window stream gateway', () => {
       ['zoom-pane', '%5', true],
       ['takeover'],
       ['release-takeover'],
+      ['resync', { paneId: '%5', forceSnapshot: true }],
       ['visibility', false],
     ]);
 

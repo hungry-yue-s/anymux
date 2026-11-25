@@ -110,4 +110,56 @@ describe('Unified 5-zone ContextMenu', () => {
     closeRight.click();
     expect(w.document.querySelectorAll('.fp-dock-tab-item')).toHaveLength(1);
   });
+
+  it('supports cascading submenus via hover, click, ArrowRight, ArrowLeft, and Escape', () => {
+    const w = setupDom();
+    const ran = vi.fn();
+    const menu = w.ContextMenu.open({
+      x: 100,
+      y: 100,
+      label: '窗格操作',
+      items: [
+        { id: 'split-h', label: '左右分窗', action: () => ran('split-h') },
+        {
+          id: 'open-git-preview',
+          label: '打开 Git 预览',
+          children: [
+            { id: 'git-sidebar', label: '侧边栏', action: () => ran('sidebar') },
+            { id: 'git-replace', label: '覆盖当前窗格', action: () => ran('replace') },
+          ],
+        },
+        { id: 'respawn', label: '重置窗格', danger: true, action: () => ran('respawn') },
+      ],
+    });
+    const trigger = menu.querySelector('[data-ctx-action="open-git-preview"]');
+    expect(trigger.classList.contains('has-submenu')).toBe(true);
+    expect(trigger.getAttribute('aria-haspopup')).toBe('menu');
+
+    // ArrowRight on focused trigger opens submenu and focuses first child
+    trigger.focus();
+    w.document.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+    const sub = w.document.getElementById('seam-context-submenu');
+    expect(sub.hidden).toBe(false);
+    expect(w.document.activeElement.dataset.ctxAction).toBe('git-sidebar');
+
+    // ArrowDown moves within submenu; ArrowLeft closes only submenu back to trigger
+    w.document.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+    expect(w.document.activeElement.dataset.ctxAction).toBe('git-replace');
+    w.document.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }));
+    expect(sub.hidden).toBe(true);
+    expect(w.document.activeElement).toBe(trigger);
+
+    // Hover opens submenu, hovering sibling closes it, clicking child executes action & closes both
+    trigger.dispatchEvent(new w.MouseEvent('mouseenter', { bubbles: true }));
+    expect(sub.hidden).toBe(false);
+    menu.querySelector('[data-ctx-action="respawn"]').dispatchEvent(new w.MouseEvent('mouseenter', { bubbles: true }));
+    expect(sub.hidden).toBe(true);
+
+    trigger.click();
+    expect(sub.hidden).toBe(false);
+    sub.querySelector('[data-ctx-action="git-replace"]').click();
+    expect(ran).toHaveBeenCalledWith('replace');
+    expect(sub.hidden).toBe(true);
+    expect(w.ContextMenu.isOpen()).toBe(false);
+  });
 });

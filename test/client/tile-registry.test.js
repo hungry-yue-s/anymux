@@ -150,4 +150,47 @@ describe('TileRegistry & mixed rich Seam panes', () => {
     expect(fx.host.querySelector('[data-pane-id="%2"] iframe.seam-tile-frame')).toBeNull();
     session.dispose();
   });
+
+  it('mounts the full embedded git block via BlockHost.mountEmbedded when available and falls back cleanly without it', () => {
+    const dom = new JSDOM('<div id="host"></div>', { url: 'https://panel.test' });
+    cleanups.push(() => dom.window.close());
+    const win = dom.window;
+    const host = win.document.getElementById('host');
+    const registry = createTileRegistry();
+    const updates = [];
+    let disposedCount = 0;
+
+    win.BlockHost = {
+      mountEmbedded: vi.fn((kind, container, options) => {
+        expect(kind).toBe('git');
+        const el = win.document.createElement('div');
+        el.className = 'git-block';
+        el.textContent = 'embedded:' + options.params.path;
+        container.replaceChildren(el);
+        return {
+          el,
+          update(nextParams) {
+            updates.push(nextParams);
+            el.textContent = 'embedded:' + nextParams.path;
+          },
+          dispose() { disposedCount += 1; el.remove(); },
+        };
+      }),
+    };
+
+    const handle = registry.mount('diff', host, {
+      global: win,
+      serverId: 'dev',
+      payload: JSON.stringify({ path: '/repo/a' }),
+    });
+    expect(host.querySelector('.seam-tile-diff.blk-frame.blk-mode-tile .git-block')?.textContent).toBe('embedded:/repo/a');
+
+    handle.update({ global: win, serverId: 'dev', payloadData: { path: '/repo/b', commit: 'abc123' } });
+    expect(updates).toEqual([{ path: '/repo/b', commit: 'abc123' }]);
+    expect(host.querySelector('.git-block')?.textContent).toBe('embedded:/repo/b');
+
+    handle.dispose();
+    expect(disposedCount).toBe(1);
+    expect(host.querySelector('.seam-tile-diff')).toBeNull();
+  });
 });
