@@ -172,6 +172,9 @@ export class SeamWindowSession {
     this.panes = new Map();
     this.context = null;
     this.contextRequest = null;
+    this._treeTopologyKey = null;
+    this._draggingDivider = false;
+    this._activeDragCleanup = null;
 
     const doc = global.document;
     const mobile = !!global.MobileUI?.isMobile();
@@ -433,8 +436,7 @@ export class SeamWindowSession {
       return;
     }
 
-    // Snapshot fence (`0x02`)
-    if (entry.lastSeq !== null && frame.seq <= entry.lastSeq) return;
+    // Snapshot fence (`0x02`): always authoritative over an ordered WebSocket.
     entry.lastSeq = frame.seq;
     entry.historyTotal = frame.historyTotal;
     entry.historyLines = frame.historyLines;
@@ -444,14 +446,11 @@ export class SeamWindowSession {
     entry.pendingBytes = 0;
     entry.liveChunks = [];
     entry.liveBytes = 0;
+    const snapEpoch = (entry.snapshotEpoch = (entry.snapshotEpoch || 0) + 1);
     this._syncInputGates();
 
-    entry.term.reset();
-    if (frame.cols >= 2 && frame.rows >= 2) {
-      entry.term.resize(frame.cols, frame.rows);
-    }
-    entry.term.write(frame.data, () => {
-      if (this.disposed || epoch !== this.epoch || !this.panes.has(entry.paneId)) return;
+    const finishRestore = () => {
+      if (this.disposed || epoch !== this.epoch || snapEpoch !== entry.snapshotEpoch || !this.panes.has(entry.paneId)) return;
       entry.hydrated = true;
       entry.restoring = false;
       const queued = entry.pendingWrites.splice(0);
@@ -459,7 +458,14 @@ export class SeamWindowSession {
       for (const chunk of queued) this._queueLiveWrite(entry, chunk, epoch);
       this._syncInputGates();
       this._becameReady();
-    });
+    };
+
+    entry.term.reset();
+    if (frame.cols >= 2 && frame.rows >= 2) {
+      entry.term.resize(frame.cols, frame.rows);
+    }
+    if (frame.data.byteLength === 0) finishRestore();
+    else entry.term.write(frame.data, finishRestore);
   }
 
   _queueLiveWrite(entry, bytes, epoch) {
@@ -916,9 +922,76 @@ export class SeamWindowSession {
     }
   }
 
+  _layoutTopologyKey() {
+    if (this.zoomed && this.activePaneId && this.panes.has(this.activePaneId)) {
+      return 'zoom:' + this.activePaneId;
+    }
+    if (!this.layoutTree) {
+      const firstId = this.panes.values().next().value?.paneId || '';
+      return 'single:' + firstId;
+    }
+    const sig = (node) => {
+      if (!node) return '';
+      if (node.type === 'pane') return this.panes.has(node.paneId) ? ('P:' + node.paneId) : '';
+      const children = (node.children || []).map(sig).filter(Boolean);
+      if (!children.length) return '';
+      return (node.dir === 'col' ? 'C' : 'R') + '(' + children.join(',') + ')';
+    };
+    return sig(this.layoutTree);
+  }
+
+  _syncTreeInPlace(node, domNode) {
+    if (!node || !domNode) return false;
+    if (node.type === 'pane') return domNode.dataset?.paneId === node.paneId;
+    if (!domNode.classList?.contains('seam-split')) return false;
+    if (!domNode.classList.contains(node.dir === 'col' ? 'is-col' : 'is-row')) return false;
+    const activeChildren = (node.children || []).filter((child) => {
+      if (!child) return false;
+      if (child.type === 'pane') return this.panes.has(child.paneId);
+      return true;
+    });
+    const branches = [];
+    const dividers = [];
+    for (const el of domNode.children) {
+      if (el.classList?.contains('seam-branch')) branches.push(el);
+      else if (el.classList?.contains('seam-divider')) dividers.push(el);
+    }
+    if (branches.length !== activeChildren.length || dividers.length !== Math.max(0, activeChildren.length - 1)) {
+      return false;
+    }
+    for (let idx = 0; idx < activeChildren.length; idx++) {
+      const child = activeChildren[idx];
+      const branch = branches[idx];
+      if (!this._draggingDivider) {
+        const weight = node.dir === 'col' ? (child.height || 1) : (child.width || 1);
+        branch.style.flex = weight + ' 1 0%';
+      }
+      if (!this._syncTreeInPlace(child, branch.firstElementChild)) return false;
+      if (idx < dividers.length) {
+        const divider = dividers[idx];
+        divider._seamNodes = { leftNode: child, rightNode: activeChildren[idx + 1] };
+        const leftPane = firstLeafPaneId(child, 'end');
+        const rightPane = firstLeafPaneId(activeChildren[idx + 1], 'start');
+        if (leftPane) divider.dataset.leftPane = leftPane;
+        else delete divider.dataset.leftPane;
+        if (rightPane) divider.dataset.rightPane = rightPane;
+        else delete divider.dataset.rightPane;
+      }
+    }
+    return true;
+  }
+
   _renderTree() {
     const doc = this.global.document;
     const host = this.treeHost;
+    const nextKey = this._layoutTopologyKey();
+    if (nextKey && nextKey === this._treeTopologyKey && host.childElementCount > 0) {
+      if (this.zoomed || !this.layoutTree || this._syncTreeInPlace(this.layoutTree, host.firstElementChild)) {
+        return;
+      }
+    }
+
+    const hadFocus = Boolean(doc.activeElement && host.contains(doc.activeElement));
     host.replaceChildren();
 
     if (this.zoomed && this.activePaneId && this.panes.has(this.activePaneId)) {
@@ -927,6 +1000,8 @@ export class SeamWindowSession {
       wrap.className = 'seam-split is-row';
       wrap.append(entry.el);
       host.append(wrap);
+      this._treeTopologyKey = nextKey;
+      if (hadFocus && !entry.isRich) entry.term?.focus();
       return;
     }
 
@@ -945,7 +1020,7 @@ export class SeamWindowSession {
         const branch = doc.createElement('div');
         branch.className = 'seam-branch';
         const weight = node.dir === 'col' ? (child.height || 1) : (child.width || 1);
-        branch.style.flex = weight + ' 1 0';
+        branch.style.flex = weight + ' 1 0%';
         branch.append(branchEl);
         split.append(branch);
 
@@ -972,69 +1047,108 @@ export class SeamWindowSession {
       ? buildNode(this.layoutTree)
       : (this.panes.values().next().value?.el || null);
     if (rootNode) host.append(rootNode);
+    this._treeTopologyKey = nextKey;
+    if (hadFocus && this.activePaneId) {
+      const activeEntry = this.panes.get(this.activePaneId);
+      if (activeEntry && !activeEntry.isRich) activeEntry.term?.focus();
+    }
   }
 
   _bindDivider(divider, dir, leftNode, rightNode, leftBranch) {
-    const leftPaneId = firstLeafPaneId(leftNode, 'end');
+    divider._seamNodes = { leftNode, rightNode };
     divider.addEventListener('dblclick', (event) => {
       event.preventDefault();
       this.onAction('equalize', { layout: dir === 'col' ? 'even-vertical' : 'even-horizontal' });
     });
     divider.addEventListener('pointerdown', (event) => {
-      if (event.button !== 0 || !leftPaneId) return;
+      if (event.button !== 0) return;
+      const { leftNode: curLeft, rightNode: curRight } = divider._seamNodes || { leftNode, rightNode };
+      const leftPaneId = firstLeafPaneId(curLeft, 'end');
+      if (!leftPaneId) return;
       event.preventDefault();
+      this._activeDragCleanup?.(false);
+
       const startPos = dir === 'row' ? event.clientX : event.clientY;
-      const startLeftUnits = dir === 'row' ? (leftNode.width || 10) : (leftNode.height || 10);
-      const startRightUnits = dir === 'row' ? (rightNode.width || 10) : (rightNode.height || 10);
+      const startLeftUnits = dir === 'row' ? (curLeft.width || 10) : (curLeft.height || 10);
+      const startRightUnits = dir === 'row' ? (curRight.width || 10) : (curRight.height || 10);
+      const leafMeta = this.panes.get(leftPaneId)?.meta;
+      const leafRawUnits = dir === 'row' ? leafMeta?.width : leafMeta?.height;
+      const leafStartUnits = Number.isInteger(leafRawUnits) && leafRawUnits >= 2 ? leafRawUnits : startLeftUnits;
       const cell = this._cellMetrics();
       const stepPx = dir === 'row' ? cell.width : cell.height;
-      let lastSent = startLeftUnits;
-      let timer = null;
+      const nextSiblingBranch = divider.nextElementSibling?.classList?.contains('seam-branch') ? divider.nextElementSibling : null;
+      const minDelta = Math.max(2 - startLeftUnits, 2 - leafStartUnits);
+      const maxDelta = Math.max(minDelta, startRightUnits - 2);
+      let pendingTargetUnits = leafStartUnits;
+      let ended = false;
+
+      if (typeof event.pointerId === 'number') {
+        try { divider.setPointerCapture?.(event.pointerId); } catch { /* noop */ }
+      }
+      this._draggingDivider = true;
       divider.classList.add('is-dragging');
+      this.stage.classList.add('is-dragging-divider', dir === 'col' ? 'is-dragging-h' : 'is-dragging-v');
 
-      const computeTarget = (clientPos) => {
-        const deltaUnits = Math.round((clientPos - startPos) / Math.max(4, stepPx));
-        return Math.max(2, Math.min(startLeftUnits + startRightUnits - 2, startLeftUnits + deltaUnits));
-      };
-
-      const sendResize = (units) => {
-        if (units === lastSent) return;
-        lastSent = units;
-        this._send({
-          type: 'resize-pane-size',
-          paneId: leftPaneId,
-          ...(dir === 'row' ? { cols: units } : { rows: units }),
-        });
+      const computeDrag = (clientPos) => {
+        const rawDelta = Number.isFinite(clientPos) ? Math.round((clientPos - startPos) / Math.max(4, stepPx)) : 0;
+        const clamped = Math.max(minDelta, Math.min(maxDelta, rawDelta));
+        return {
+          nextLeftBranch: startLeftUnits + clamped,
+          nextRightBranch: startRightUnits - clamped,
+          targetPaneUnits: leafStartUnits + clamped,
+        };
       };
 
       const onMove = (moveEvent) => {
-        const nextLeft = computeTarget(dir === 'row' ? moveEvent.clientX : moveEvent.clientY);
-        const nextRight = Math.max(2, startLeftUnits + startRightUnits - nextLeft);
-        leftBranch.style.flex = nextLeft + ' 1 0';
-        const nextSiblingBranch = divider.nextElementSibling;
-        if (nextSiblingBranch?.classList?.contains('seam-branch')) {
-          nextSiblingBranch.style.flex = nextRight + ' 1 0';
-        }
-        if (!timer) {
-          timer = this.global.setTimeout(() => {
-            timer = null;
-            sendResize(nextLeft);
-          }, 50);
-        }
+        if (ended) return;
+        const drag = computeDrag(dir === 'row' ? moveEvent.clientX : moveEvent.clientY);
+        pendingTargetUnits = drag.targetPaneUnits;
+        leftBranch.style.flex = drag.nextLeftBranch + ' 1 0%';
+        if (nextSiblingBranch) nextSiblingBranch.style.flex = drag.nextRightBranch + ' 1 0%';
       };
 
-      const onUp = (upEvent) => {
+      const finish = (commit, upEvent = null) => {
+        if (ended) return;
+        ended = true;
+        if (this._activeDragCleanup === finish) this._activeDragCleanup = null;
         this.global.removeEventListener('pointermove', onMove);
         this.global.removeEventListener('pointerup', onUp);
-        this.global.removeEventListener('pointercancel', onUp);
+        this.global.removeEventListener('pointercancel', onCancel);
+        this.global.removeEventListener('blur', onCancel);
+        divider.removeEventListener('lostpointercapture', onCancel);
+        if (typeof event.pointerId === 'number') {
+          try {
+            if (divider.hasPointerCapture?.(event.pointerId)) divider.releasePointerCapture?.(event.pointerId);
+          } catch { /* noop */ }
+        }
+        this._draggingDivider = false;
         divider.classList.remove('is-dragging');
-        if (timer) { this.global.clearTimeout(timer); timer = null; }
-        sendResize(computeTarget(dir === 'row' ? upEvent.clientX : upEvent.clientY));
+        this.stage.classList.remove('is-dragging-divider', 'is-dragging-h', 'is-dragging-v');
+
+        let targetPaneUnits = leafStartUnits;
+        if (commit) {
+          const clientPos = upEvent ? (dir === 'row' ? upEvent.clientX : upEvent.clientY) : NaN;
+          targetPaneUnits = Number.isFinite(clientPos) ? computeDrag(clientPos).targetPaneUnits : pendingTargetUnits;
+        }
+        if (commit && targetPaneUnits !== leafStartUnits) {
+          this._send({
+            type: 'resize-pane-size',
+            paneId: leftPaneId,
+            ...(dir === 'row' ? { cols: targetPaneUnits } : { rows: targetPaneUnits }),
+          });
+        } else if (this.layoutTree && this.treeHost.firstElementChild) {
+          this._syncTreeInPlace(this.layoutTree, this.treeHost.firstElementChild);
+        }
       };
 
+      const onUp = (upEvent) => finish(true, upEvent);
+      const onCancel = () => finish(false, null);
+      this._activeDragCleanup = finish;
       this.global.addEventListener('pointermove', onMove);
       this.global.addEventListener('pointerup', onUp);
-      this.global.addEventListener('pointercancel', onUp);
+      this.global.addEventListener('pointercancel', onCancel);
+      this.global.addEventListener('blur', onCancel);
+      divider.addEventListener('lostpointercapture', onCancel);
     });
   }
 
@@ -1550,6 +1664,7 @@ export class SeamWindowSession {
   dispose() {
     if (this.disposed) return;
     this.disposed = true;
+    this._activeDragCleanup?.(false);
     this._disconnect();
     this.global.clearTimeout(this.wheelTimer);
     this.resizeObserver?.disconnect();

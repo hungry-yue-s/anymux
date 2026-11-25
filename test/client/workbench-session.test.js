@@ -300,4 +300,122 @@ describe('SeamWindowSession multi-pane workbench session', () => {
     session.dispose();
     f.close();
   });
+
+  it('never freezes output or input after resize resync snapshots with monotonic or reset seq', async () => {
+    const f = fixture();
+    const session = new SeamWindowSession(f.win, { container: f.host, target });
+    await session.ready;
+    const socket = f.sockets[0];
+    hydrateWindow(socket);
+
+    for (let s = 1; s <= 10; s++) {
+      socket.onmessage({ data: encodeOutputBinary({ paneId: '%1', seq: s, text: `o${s}` }) });
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+
+    // Case A: Monotonic server resync snapshot (seq = 11) + subsequent live output (seq = 12)
+    socket.onmessage({ data: encodeSnapshotBinary({ paneId: '%1', seq: 11, cols: 72, rows: 36, text: 'resync-a' }) });
+    socket.onmessage({ data: encodeOutputBinary({ paneId: '%1', seq: 12, text: 'live-after-a' }) });
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(f.terminals[0].writes.slice(-2).map((b) => new TextDecoder().decode(b))).toEqual(['resync-a', 'live-after-a']);
+    expect(session.send('pwd\r')).toBe(true);
+
+    // Case B: Older server snapshot reset (seq = 0) + restarted live output (seq = 1)
+    socket.onmessage({ data: encodeSnapshotBinary({ paneId: '%1', seq: 0, cols: 80, rows: 36, text: 'resync-b' }) });
+    socket.onmessage({ data: encodeOutputBinary({ paneId: '%1', seq: 1, text: 'live-after-b' }) });
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(f.terminals[0].writes.slice(-2).map((b) => new TextDecoder().decode(b))).toEqual(['resync-b', 'live-after-b']);
+    expect(session.send('ls\r')).toBe(true);
+
+    session.dispose();
+    f.close();
+  });
+
+  it('previews divider drag smoothly without mid-drag commands, preserves DOM in place, and computes nested split leaf widths', async () => {
+    const f = fixture();
+    const session = new SeamWindowSession(f.win, { container: f.host, target });
+    await session.ready;
+    const socket = f.sockets[0];
+    hydrateWindow(socket);
+
+    const pane1El = f.host.querySelector('.seam-pane[data-pane-id="%1"]');
+    const divider = f.host.querySelector('.seam-divider');
+    const [leftBranch, rightBranch] = f.host.querySelectorAll('.seam-branch');
+
+    // pointerdown -> pointermove previews flex without sending resize-pane-size mid-drag
+    divider.dispatchEvent(new f.win.MouseEvent('pointerdown', { button: 0, clientX: 400, bubbles: true }));
+    expect(session.stage.classList.contains('is-dragging-divider')).toBe(true);
+    f.win.dispatchEvent(new f.win.MouseEvent('pointermove', { clientX: 480, bubbles: true }));
+    expect(leftBranch.style.flex).toBe('70 1 0%');
+    expect(rightBranch.style.flex).toBe('49 1 0%');
+    expect(socket.sent.filter((m) => m.type === 'resize-pane-size')).toHaveLength(0);
+
+    // pointerup commits exactly one resize-pane-size and clears drag state
+    f.win.dispatchEvent(new f.win.MouseEvent('pointerup', { button: 0, clientX: 480, bubbles: true }));
+    expect(session.stage.classList.contains('is-dragging-divider')).toBe(false);
+    expect(socket.sent.filter((m) => m.type === 'resize-pane-size')).toEqual([
+      { type: 'resize-pane-size', paneId: '%1', cols: 70 },
+    ]);
+
+    // Updated layout message with same topology updates flex weights in place without detaching panes
+    sendLayout(socket, {
+      panes: [
+        { id: '%1', index: 0, active: true, width: 70, height: 36, cwd: '/srv/app-one', command: 'claude' },
+        { id: '%2', index: 1, active: false, width: 49, height: 36, cwd: '/srv/app-two', command: 'bash' },
+      ],
+      tree: {
+        type: 'split',
+        dir: 'row',
+        width: 120,
+        height: 36,
+        children: [
+          { type: 'pane', paneId: '%1', width: 70, height: 36 },
+          { type: 'pane', paneId: '%2', width: 49, height: 36 },
+        ],
+      },
+    });
+    expect(f.host.querySelector('.seam-pane[data-pane-id="%1"]')).toBe(pane1El);
+    expect(leftBranch.style.flex).toBe('70 1 0%');
+    expect(rightBranch.style.flex).toBe('49 1 0%');
+
+    // Nested split on the left side: composite left branch width=80, rightmost leaf %2 width=40.
+    sendLayout(socket, {
+      panes: [
+        { id: '%1', index: 0, active: true, width: 39, height: 36, command: 'bash' },
+        { id: '%2', index: 1, active: false, width: 40, height: 36, command: 'claude' },
+        { id: '%3', index: 2, active: false, width: 39, height: 36, command: 'zsh' },
+      ],
+      tree: {
+        type: 'split',
+        dir: 'row',
+        width: 120,
+        height: 36,
+        children: [
+          {
+            type: 'split',
+            dir: 'row',
+            width: 80,
+            height: 36,
+            children: [
+              { type: 'pane', paneId: '%1', width: 39, height: 36 },
+              { type: 'pane', paneId: '%2', width: 40, height: 36 },
+            ],
+          },
+          { type: 'pane', paneId: '%3', width: 39, height: 36 },
+        ],
+      },
+    });
+    socket.sent.length = 0;
+    const outerDivider = f.host.querySelector('.seam-divider[data-left-pane="%2"][data-right-pane="%3"]');
+    expect(outerDivider).not.toBeNull();
+    outerDivider.dispatchEvent(new f.win.MouseEvent('pointerdown', { button: 0, clientX: 500, bubbles: true }));
+    f.win.dispatchEvent(new f.win.MouseEvent('pointerup', { button: 0, clientX: 580, bubbles: true }));
+    // delta = +10 cols -> targetPaneUnits = leaf width (40) + 10 = 50, NOT composite width (80) + 10 = 90
+    expect(socket.sent.filter((m) => m.type === 'resize-pane-size')).toEqual([
+      { type: 'resize-pane-size', paneId: '%2', cols: 50 },
+    ]);
+
+    session.dispose();
+    f.close();
+  });
 });

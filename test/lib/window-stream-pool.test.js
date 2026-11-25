@@ -207,4 +207,40 @@ describe('ControlPool multi-pane window-stream', () => {
     lease.close();
     pool.dispose();
   });
+
+  it('keeps snapshot seq monotonic across resize resyncs so client output never stalls', async () => {
+    const { pool, controls, target, setWindowSpec } = makeFixture();
+    const frames = [];
+    const lease = await pool.subscribeWindow(target, f => frames.push(Buffer.isBuffer(f) ? decodeBinaryFrame(f) : f));
+
+    expect(frames.filter(f => f.kind === 'snapshot').map(s => [s.paneId, s.seq])).toEqual([
+      ['%3', 0],
+      ['%4', 0],
+    ]);
+
+    controls[0].emit('output', '%3', Buffer.from('a'));
+    controls[0].emit('output', '%3', Buffer.from('b'));
+    expect(frames.filter(f => f.kind === 'output' && f.paneId === '%3').map(o => o.seq)).toEqual([1, 2]);
+
+    setWindowSpec({
+      panes: [
+        { id: '%3', index: 0, x: 0, y: 0, width: 70, height: 48, command: 'zsh', label: 'left', cwd: '/repo/a' },
+        { id: '%4', index: 1, x: 71, y: 0, width: 99, height: 48, command: 'claude', label: 'right', cwd: '/repo/b' },
+      ],
+    });
+    expect(await lease.resizePaneSize('%3', { cols: 70 })).toBe(true);
+    expect(controls[0].commands).toContain('resize-pane -t %3 -x 70');
+
+    const resyncSnap = frames.filter(f => f.kind === 'snapshot' && f.paneId === '%3').at(-1);
+    expect(resyncSnap.seq).toBe(3);
+
+    controls[0].emit('output', '%3', Buffer.from('c'));
+    expect(frames.filter(f => f.kind === 'output' && f.paneId === '%3').at(-1)).toMatchObject({
+      seq: 4,
+    });
+    expect(frames.filter(f => f.kind === 'output' && f.paneId === '%3').at(-1).data.toString()).toBe('c');
+
+    lease.close();
+    pool.dispose();
+  });
 });

@@ -115,6 +115,12 @@
 .seam-divider:focus-visible::after,
 .seam-divider.is-dragging::after { opacity: 1; }
 .seam-divider:focus-visible { outline: none; }
+.seam-stage.is-dragging-divider { user-select: none; -webkit-user-select: none; }
+.seam-stage.is-dragging-divider.is-dragging-v,
+.seam-stage.is-dragging-divider.is-dragging-v * { cursor: col-resize !important; }
+.seam-stage.is-dragging-divider.is-dragging-h,
+.seam-stage.is-dragging-divider.is-dragging-h * { cursor: row-resize !important; }
+.seam-stage.is-dragging-divider iframe { pointer-events: none; }
 
 /* Seam Pane */
 .seam-pane {
