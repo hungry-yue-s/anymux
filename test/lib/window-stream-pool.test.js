@@ -240,6 +240,20 @@ describe('ControlPool multi-pane window-stream', () => {
     });
     expect(frames.filter(f => f.kind === 'output' && f.paneId === '%3').at(-1).data.toString()).toBe('c');
 
+    // Atomic multi-pane resizePaneBatch executes a single tmux transaction and advances seq monotonically
+    setWindowSpec({
+      panes: [
+        { id: '%3', index: 0, x: 0, y: 0, width: 75, height: 20, command: 'zsh', label: 'left', cwd: '/repo/a' },
+        { id: '%4', index: 1, x: 76, y: 0, width: 94, height: 48, command: 'claude', label: 'right', cwd: '/repo/b' },
+      ],
+    });
+    expect(await lease.resizePaneBatch([{ paneId: '%3', cols: 75 }, { paneId: '%4', rows: 20 }])).toBe(true);
+    expect(controls[0].commands).toContain('resize-pane -t %3 -x 75 ; resize-pane -t %4 -y 20');
+    const snapAfterBatch = frames.filter(f => f.kind === 'snapshot' && f.paneId === '%3').at(-1);
+    expect(snapAfterBatch.seq).toBe(5);
+    controls[0].emit('output', '%3', Buffer.from('d'));
+    expect(frames.filter(f => f.kind === 'output' && f.paneId === '%3').at(-1)).toMatchObject({ seq: 6 });
+
     lease.close();
     pool.dispose();
   });

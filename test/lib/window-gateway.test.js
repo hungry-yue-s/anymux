@@ -33,6 +33,7 @@ describe('window stream gateway', () => {
       input: (paneId, data) => calls.push(['input', paneId, Buffer.isBuffer(data) ? [...data] : data]),
       resizeWindow: (cols, rows) => calls.push(['resize-window', cols, rows]),
       resizePaneSize: (paneId, dims) => calls.push(['resize-pane-size', paneId, dims]),
+      resizePaneBatch: (resizes) => calls.push(['resize-pane-batch', resizes]),
       selectPane: paneId => calls.push(['select-pane', paneId]),
       zoomPane: (paneId, zoomed) => calls.push(['zoom-pane', paneId, zoomed]),
       takeover: () => calls.push(['takeover']),
@@ -56,6 +57,7 @@ describe('window stream gateway', () => {
     ws.emit('message', JSON.stringify({ type: 'input', paneId: '%5', encoding: 'base64', data: 'G1tNIP+A' }));
     ws.emit('message', JSON.stringify({ type: 'resize-window', cols: 120, rows: 40 }));
     ws.emit('message', JSON.stringify({ type: 'resize-pane-size', paneId: '%5', cols: 60 }));
+    ws.emit('message', JSON.stringify({ type: 'resize-pane-batch', resizes: [{ paneId: '%5', cols: 64 }, { paneId: '%6', rows: 22 }] }));
     ws.emit('message', JSON.stringify({ type: 'select-pane', paneId: '%5' }));
     ws.emit('message', JSON.stringify({ type: 'zoom-pane', paneId: '%5', zoomed: true }));
     ws.emit('message', JSON.stringify({ type: 'takeover' }));
@@ -67,6 +69,7 @@ describe('window stream gateway', () => {
       ['input', '%5', [27, 91, 77, 32, 255, 128]],
       ['resize-window', 120, 40],
       ['resize-pane-size', '%5', { cols: 60, rows: undefined }],
+      ['resize-pane-batch', [{ paneId: '%5', cols: 64 }, { paneId: '%6', rows: 22 }]],
       ['select-pane', '%5'],
       ['zoom-pane', '%5', true],
       ['takeover'],

@@ -166,8 +166,21 @@ body.fp-side-resizing .fp-side-resizer::after { width: 3px; background: var(--fp
 .fp-mermaid-open:focus-visible, .fp-mermaid-tool:focus-visible { outline-color: var(--fp-accent); }
 .fp-mermaid-dialog-viewport:focus-visible { box-shadow: inset 0 0 0 2px var(--fp-accent); }
 .fp-mermaid-close:hover { color: var(--accent-red); }
-/* The native window already provides the glass backing. Keep large chart
+/* The native window already provides the glass backing. Keep side docks and large chart
    surfaces clear, with faint groups and stronger nodes instead of extra panels. */
+html[data-native-transparency] .fp-overlay.fp-side:not(.fp-side-maximized),
+html[data-native-transparency] .fp-overlay.fp-side:not(.fp-side-maximized) .fp-modal,
+html[data-native-transparency] .fp-dock .fp-embedded,
+html[data-native-transparency] .fp-dock .fp-dock-tab-item.active {
+  background: transparent;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+html[data-native-transparency] .fp-overlay.fp-side.fp-side-maximized {
+  background: color-mix(in srgb, var(--fp-bg) 82%, transparent);
+  -webkit-backdrop-filter: blur(26px) saturate(1.25);
+  backdrop-filter: blur(26px) saturate(1.25);
+}
 html[data-native-transparency] .fp-mermaid-dialog-header,
 html[data-native-transparency] .fp-mermaid-dialog-viewport { background: transparent; }
 html[data-native-transparency] .fp-mermaid-embed {

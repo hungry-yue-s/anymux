@@ -421,4 +421,66 @@ describe('native window transparency', () => {
     expect(dom.window.localStorage.getItem('tmux_native_transparency')).toBe('35');
     expect(dom.window.document.documentElement.hasAttribute('data-native-transparency')).toBe(true);
   });
+
+  it('keeps left and right sidebars transparent under native transparency', () => {
+    const workspaceCss = readFileSync('plugins/ui/client/css/workspace.css', 'utf8');
+    const previewWorkspaceCss = readFileSync('plugins/files/client/css/file-preview-workspace.css', 'utf8');
+
+    expect(workspaceCss).toContain('html[data-native-transparency] .workspace-chrome .brand { background:transparent; }');
+    expect(workspaceCss).toContain(
+      'html[data-native-transparency] .ms-app .ms-sidebar .sidebar-footer,html[data-native-transparency] .ms-app.sidebar-collapsed .ms-sidebar .sidebar-footer { background:transparent; }',
+    );
+    expect(previewWorkspaceCss).toMatch(/html\[data-native-transparency\] \.fp-overlay\.fp-side:not\(\.fp-side-maximized\)/);
+    expect(previewWorkspaceCss).toMatch(/html\[data-native-transparency\] \.fp-dock \.fp-dock-tab-item\.active/);
+    expect(previewWorkspaceCss).toMatch(/html\[data-native-transparency\] \.fp-dock \.fp-embedded/);
+
+    loadTheme('tokyo-night', { native: true, transparency: '25' });
+    const doc = dom.window.document;
+    const style = doc.createElement('style');
+    const concreteCss = (workspaceCss + '\n' + previewWorkspaceCss)
+      .replace(/color-mix\([^;{}]+\)/g, '#16161e')
+      .replace(/var\(--fp-bg(?:,[^)]+)?\)/g, '#1a1b26')
+      .replace(/var\(--fp-panel(?:,[^)]+)?\)/g, '#24283b')
+      .replace(/var\(--workspace-bg(?:,[^)]+)?\)/g, '#1a1b26')
+      .replace(/var\(--workspace-sidebar(?:,[^)]+)?\)/g, '#16161e')
+      .replace(/var\(--workspace-panel(?:,[^)]+)?\)/g, '#24283b')
+      .replace(/var\(--workspace-[a-z-]+(?:,[^)]+)?\)/g, '#2f3450')
+      .replace(/var\(--fp-[a-z-]+(?:,[^)]+)?\)/g, '#2f3450');
+    style.textContent = concreteCss;
+    doc.head.appendChild(style);
+
+    doc.body.innerHTML = `
+      <div class="ms-app sidebar-collapsed mode-terminal">
+        <header class="workspace-chrome"><div class="brand"></div></header>
+        <aside class="ms-sidebar"><div class="sidebar-footer"></div></aside>
+        <main class="ms-main">
+          <div class="fp-overlay fp-side fp-dock">
+            <div class="fp-modal">
+              <div class="fp-dock-tabs">
+                <div class="fp-dock-tab-item active"></div>
+              </div>
+              <div class="fp-embedded"></div>
+            </div>
+          </div>
+        </main>
+      </div>
+    `;
+
+    const targets = [
+      doc.querySelector('.workspace-chrome .brand'),
+      doc.querySelector('.ms-sidebar .sidebar-footer'),
+      doc.querySelector('.fp-overlay.fp-side.fp-dock'),
+      doc.querySelector('.fp-dock .fp-modal'),
+      doc.querySelector('.fp-dock .fp-dock-tab-item.active'),
+      doc.querySelector('.fp-dock .fp-embedded'),
+    ];
+    for (const el of targets) {
+      expect(dom.window.getComputedStyle(el).backgroundColor).toBe('rgba(0, 0, 0, 0)');
+    }
+
+    doc.documentElement.removeAttribute('data-native-transparency');
+    expect(dom.window.getComputedStyle(doc.querySelector('.fp-overlay.fp-side.fp-dock')).backgroundColor).toBe('rgb(26, 27, 38)');
+    expect(dom.window.getComputedStyle(doc.querySelector('.ms-sidebar .sidebar-footer')).backgroundColor).toBe('rgb(22, 22, 30)');
+    expect(dom.window.getComputedStyle(doc.querySelector('.workspace-chrome .brand')).backgroundColor).toBe('rgb(22, 22, 30)');
+  });
 });

@@ -172,6 +172,16 @@ describe.skipIf(!binary || !existsSync(binary) || process.platform === 'win32')(
       expect(await lease.resizeWindow(110, 32)).toBe(true);
       expect(frames.filter(m => m.kind === 'snapshot')).toHaveLength(snapsNow);
 
+      // Split bottom-right pane vertically to test 3-pane T-junction resizePaneBatch atomically against real tmux
+      const p3 = (await f.run(['split-window', '-v', '-t', p2, '-P', '-F', '#{pane_id}', process.execPath, '-e', 'setInterval(()=>{},1000)'])).trim();
+      await until(() => frames.filter(m => m.type === 'layout').at(-1), l => l?.panes?.length === 3);
+      expect(await lease.resizePaneBatch([{ paneId: f.paneId, cols: 48 }, { paneId: p2, rows: 14 }])).toBe(true);
+      const batchLayout = await until(
+        () => frames.filter(m => m.type === 'layout').at(-1),
+        l => l?.panes?.find(p => p.id === f.paneId)?.width === 48 && l?.panes?.find(p => p.id === p2)?.height === 14,
+      );
+      expect(batchLayout.panes.find(p => p.id === p3)).toBeTruthy();
+
       lease.close();
     } catch (err) { error = err; throw err; } finally { await f.cleanup(error); }
   }, 25_000);

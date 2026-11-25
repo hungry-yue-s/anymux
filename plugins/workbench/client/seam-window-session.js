@@ -103,22 +103,64 @@ function commandKind(command) {
   return 'shell';
 }
 
-function collectChromeOverhead(tree) {
-  if (!tree) return { extraWidth: 0, extraHeight: 28 };
-  if (tree.type === 'pane') return { extraWidth: 0, extraHeight: 28 };
-  const children = tree.children || [];
-  if (!children.length) return { extraWidth: 0, extraHeight: 28 };
-  const childMetrics = children.map(collectChromeOverhead);
-  const dividerCount = Math.max(0, children.length - 1);
-  if (tree.dir === 'row') {
+const PANE_RAIL_PX = 28;
+const PANE_PAD_X = 16;
+const PANE_PAD_Y = 10;
+const DIVIDER_PX = 1;
+
+function measureLayoutMetrics(node, panes, cell) {
+  const fallback = {
+    chromeW: PANE_PAD_X,
+    chromeH: PANE_RAIL_PX + PANE_PAD_Y,
+    contentCols: 1,
+    contentRows: 1,
+    netWidthPx: PANE_PAD_X,
+    netHeightPx: PANE_RAIL_PX + PANE_PAD_Y,
+  };
+  if (!node) return fallback;
+  if (node.type === 'pane') {
+    const entry = panes?.get(node.paneId);
+    const isRich = Boolean(entry?.isRich);
+    const chromeW = isRich ? 0 : PANE_PAD_X;
+    const chromeH = PANE_RAIL_PX + (isRich ? 0 : PANE_PAD_Y);
+    const layoutW = node.width || entry?.meta?.width || 1;
+    const layoutH = node.height || entry?.meta?.height || 1;
+    const contentCols = Math.max(1, entry?.meta?.width || layoutW);
+    const contentRows = Math.max(1, entry?.meta?.height || layoutH);
+    // Clamp per-pane tmux non-content cells (e.g. pane-border-status) to [0, 2]
+    // so transient/stale metadata cannot distort window resize calculations.
+    const borderCols = Math.max(0, Math.min(2, layoutW - contentCols));
+    const borderRows = Math.max(0, Math.min(2, layoutH - contentRows));
     return {
-      extraWidth: childMetrics.reduce((sum, item) => sum + item.extraWidth, 0) + dividerCount,
-      extraHeight: Math.max(...childMetrics.map((item) => item.extraHeight)),
+      chromeW,
+      chromeH,
+      contentCols,
+      contentRows,
+      netWidthPx: chromeW - borderCols * cell.width,
+      netHeightPx: chromeH - borderRows * cell.height,
+    };
+  }
+  const children = (node.children || []).filter((child) => child && (child.type !== 'pane' || !panes || panes.has(child.paneId)));
+  if (!children.length) return fallback;
+  const childMetrics = children.map((child) => measureLayoutMetrics(child, panes, cell));
+  const dividerCount = Math.max(0, children.length - 1);
+  if (node.dir === 'row') {
+    return {
+      chromeW: childMetrics.reduce((sum, item) => sum + item.chromeW, 0) + dividerCount * DIVIDER_PX,
+      chromeH: Math.max(...childMetrics.map((item) => item.chromeH)),
+      contentCols: Math.max(1, childMetrics.reduce((sum, item) => sum + item.contentCols, 0)),
+      contentRows: Math.max(1, Math.min(...childMetrics.map((item) => item.contentRows))),
+      netWidthPx: childMetrics.reduce((sum, item) => sum + item.netWidthPx, 0) + dividerCount * (DIVIDER_PX - cell.width),
+      netHeightPx: Math.max(...childMetrics.map((item) => item.netHeightPx)),
     };
   }
   return {
-    extraWidth: Math.max(...childMetrics.map((item) => item.extraWidth)),
-    extraHeight: childMetrics.reduce((sum, item) => sum + item.extraHeight, 0) + dividerCount,
+    chromeH: childMetrics.reduce((sum, item) => sum + item.chromeH, 0) + dividerCount * DIVIDER_PX,
+    chromeW: Math.max(...childMetrics.map((item) => item.chromeW)),
+    contentRows: Math.max(1, childMetrics.reduce((sum, item) => sum + item.contentRows, 0)),
+    contentCols: Math.max(1, Math.min(...childMetrics.map((item) => item.contentCols))),
+    netHeightPx: childMetrics.reduce((sum, item) => sum + item.netHeightPx, 0) + dividerCount * (DIVIDER_PX - cell.height),
+    netWidthPx: Math.max(...childMetrics.map((item) => item.netWidthPx)),
   };
 }
 
@@ -128,6 +170,97 @@ function firstLeafPaneId(node, side = 'start') {
   const children = node.children || [];
   if (!children.length) return null;
   return firstLeafPaneId(side === 'end' ? children[children.length - 1] : children[0], side);
+}
+
+function collectDividerSegments(node, domNode, panes = null, fallbackX = 0, fallbackY = 0, out = []) {
+  if (!node || !domNode || node.type === 'pane') return out;
+  if (!domNode.classList?.contains('seam-split')) return out;
+  const splitX = Number.isInteger(node.x) ? node.x : fallbackX;
+  const splitY = Number.isInteger(node.y) ? node.y : fallbackY;
+  const activeChildren = (node.children || []).filter((child) => child && (child.type !== 'pane' || !panes || panes.has(child.paneId)));
+  const branches = [];
+  const dividers = [];
+  for (const el of domNode.children) {
+    if (el.classList?.contains('seam-branch')) branches.push(el);
+    else if (el.classList?.contains('seam-divider')) dividers.push(el);
+  }
+  if (branches.length !== activeChildren.length || dividers.length !== Math.max(0, activeChildren.length - 1)) {
+    return out;
+  }
+  let cursorX = splitX;
+  let cursorY = splitY;
+  for (let idx = 0; idx < activeChildren.length; idx++) {
+    const child = activeChildren[idx];
+    const childX = Number.isInteger(child.x) ? child.x : cursorX;
+    const childY = Number.isInteger(child.y) ? child.y : cursorY;
+    const childW = child.width || 1;
+    const childH = child.height || 1;
+    collectDividerSegments(child, branches[idx].firstElementChild, panes, childX, childY, out);
+    if (idx < dividers.length) {
+      if (node.dir === 'row') {
+        const divX = childX + childW;
+        out.push({
+          dir: 'row',
+          divider: dividers[idx],
+          leftBranch: branches[idx],
+          rightBranch: branches[idx + 1],
+          leftNode: child,
+          rightNode: activeChildren[idx + 1],
+          x: divX,
+          y1: splitY,
+          y2: splitY + (node.height || childH),
+        });
+        cursorX = divX + 1;
+      } else {
+        const divY = childY + childH;
+        out.push({
+          dir: 'col',
+          divider: dividers[idx],
+          leftBranch: branches[idx],
+          rightBranch: branches[idx + 1],
+          leftNode: child,
+          rightNode: activeChildren[idx + 1],
+          y: divY,
+          x1: splitX,
+          x2: splitX + (node.width || childW),
+        });
+        cursorY = divY + 1;
+      }
+    }
+  }
+  return out;
+}
+
+function findLayoutJunctions(segments) {
+  const vs = segments.filter((seg) => seg.dir === 'row');
+  const hs = segments.filter((seg) => seg.dir === 'col');
+  const byKey = new Map();
+  for (const v of vs) {
+    for (const h of hs) {
+      if (h.y < v.y1 - 1 || h.y > v.y2 || v.x < h.x1 - 1 || v.x > h.x2) continue;
+      let anchor = null;
+      if (v.x === h.x1 - 1) anchor = { divider: h.divider, side: 'left' };
+      else if (v.x === h.x2) anchor = { divider: h.divider, side: 'right' };
+      else if (h.y === v.y1 - 1) anchor = { divider: v.divider, side: 'top' };
+      else if (h.y === v.y2) anchor = { divider: v.divider, side: 'bottom' };
+      if (!anchor) continue;
+      const key = v.x + ':' + h.y;
+      let entry = byKey.get(key);
+      if (!entry) {
+        entry = { x: v.x, y: h.y, vSegments: new Set(), hSegments: new Set(), anchor };
+        byKey.set(key, entry);
+      }
+      entry.vSegments.add(v);
+      entry.hSegments.add(h);
+    }
+  }
+  return [...byKey.values()].map((entry) => ({
+    x: entry.x,
+    y: entry.y,
+    vSegments: [...entry.vSegments],
+    hSegments: [...entry.hSegments],
+    anchor: entry.anchor,
+  }));
 }
 
 /** Multi-pane Seam tiling workbench session backed by `/ws/window-stream/:windowId`. */
@@ -940,6 +1073,13 @@ export class SeamWindowSession {
     return sig(this.layoutTree);
   }
 
+  _branchFlex(child, dir) {
+    const metrics = measureLayoutMetrics(child, this.panes, this._cellMetrics());
+    return dir === 'col'
+      ? (metrics.contentRows + ' 1 ' + metrics.chromeH + 'px')
+      : (metrics.contentCols + ' 1 ' + metrics.chromeW + 'px');
+  }
+
   _syncTreeInPlace(node, domNode) {
     if (!node || !domNode) return false;
     if (node.type === 'pane') return domNode.dataset?.paneId === node.paneId;
@@ -963,8 +1103,7 @@ export class SeamWindowSession {
       const child = activeChildren[idx];
       const branch = branches[idx];
       if (!this._draggingDivider) {
-        const weight = node.dir === 'col' ? (child.height || 1) : (child.width || 1);
-        branch.style.flex = weight + ' 1 0%';
+        branch.style.flex = this._branchFlex(child, node.dir);
       }
       if (!this._syncTreeInPlace(child, branch.firstElementChild)) return false;
       if (idx < dividers.length) {
@@ -987,9 +1126,11 @@ export class SeamWindowSession {
     const nextKey = this._layoutTopologyKey();
     if (nextKey && nextKey === this._treeTopologyKey && host.childElementCount > 0) {
       if (this.zoomed || !this.layoutTree || this._syncTreeInPlace(this.layoutTree, host.firstElementChild)) {
+        this._syncJunctions();
         return;
       }
     }
+    this.lastRequestedSize = null;
 
     const hadFocus = Boolean(doc.activeElement && host.contains(doc.activeElement));
     host.replaceChildren();
@@ -1019,8 +1160,7 @@ export class SeamWindowSession {
         if (!branchEl) return;
         const branch = doc.createElement('div');
         branch.className = 'seam-branch';
-        const weight = node.dir === 'col' ? (child.height || 1) : (child.width || 1);
-        branch.style.flex = weight + ' 1 0%';
+        branch.style.flex = this._branchFlex(child, node.dir);
         branch.append(branchEl);
         split.append(branch);
 
@@ -1048,10 +1188,102 @@ export class SeamWindowSession {
       : (this.panes.values().next().value?.el || null);
     if (rootNode) host.append(rootNode);
     this._treeTopologyKey = nextKey;
+    this._syncJunctions();
     if (hadFocus && this.activePaneId) {
       const activeEntry = this.panes.get(this.activePaneId);
       if (activeEntry && !activeEntry.isRich) activeEntry.term?.focus();
     }
+  }
+
+  _buildAxisDragState(seg, cell) {
+    const dir = seg.dir;
+    const { leftNode: curLeft, rightNode: curRight } = seg.divider._seamNodes || { leftNode: seg.leftNode, rightNode: seg.rightNode };
+    const leftPaneId = firstLeafPaneId(curLeft, 'end');
+    if (!leftPaneId) return null;
+    const leftMetrics = measureLayoutMetrics(curLeft, this.panes, cell);
+    const rightMetrics = measureLayoutMetrics(curRight, this.panes, cell);
+    const startLeftUnits = dir === 'row' ? leftMetrics.contentCols : leftMetrics.contentRows;
+    const startRightUnits = dir === 'row' ? rightMetrics.contentCols : rightMetrics.contentRows;
+    const leftChromePx = dir === 'row' ? leftMetrics.chromeW : leftMetrics.chromeH;
+    const rightChromePx = dir === 'row' ? rightMetrics.chromeW : rightMetrics.chromeH;
+    const leafMeta = this.panes.get(leftPaneId)?.meta;
+    const leafRawUnits = dir === 'row' ? leafMeta?.width : leafMeta?.height;
+    const leafStartUnits = Number.isInteger(leafRawUnits) && leafRawUnits >= 2 ? leafRawUnits : startLeftUnits;
+    const rightBranch = seg.rightBranch || (seg.divider.nextElementSibling?.classList?.contains('seam-branch') ? seg.divider.nextElementSibling : null);
+    const minDelta = Math.max(2 - startLeftUnits, 2 - leafStartUnits);
+    const maxDelta = Math.max(minDelta, startRightUnits - 2);
+    return {
+      dir,
+      leftPaneId,
+      leftBranch: seg.leftBranch,
+      rightBranch,
+      startLeftUnits,
+      startRightUnits,
+      leftChromePx,
+      rightChromePx,
+      leafStartUnits,
+      minDelta,
+      maxDelta,
+    };
+  }
+
+  _previewAxisDelta(state, clampedDelta) {
+    state.leftBranch.style.flex = (state.startLeftUnits + clampedDelta) + ' 1 ' + state.leftChromePx + 'px';
+    if (state.rightBranch) {
+      state.rightBranch.style.flex = (state.startRightUnits - clampedDelta) + ' 1 ' + state.rightChromePx + 'px';
+    }
+    return state.leafStartUnits + clampedDelta;
+  }
+
+  _startAxisDrag(event, targetEl, { cursorClass, activeDividers = [], onMove, onFinish }) {
+    this._activeDragCleanup?.(false);
+    let ended = false;
+    if (typeof event.pointerId === 'number') {
+      try { targetEl.setPointerCapture?.(event.pointerId); } catch { /* noop */ }
+    }
+    this._draggingDivider = true;
+    targetEl.classList.add('is-dragging');
+    for (const div of activeDividers) div.classList.add('is-dragging');
+    this.stage.classList.add('is-dragging-divider', cursorClass);
+
+    const handleMove = (moveEvent) => {
+      if (!ended) onMove(moveEvent);
+    };
+
+    const finish = (commit, upEvent = null) => {
+      if (ended) return;
+      ended = true;
+      if (this._activeDragCleanup === finish) this._activeDragCleanup = null;
+      this.global.removeEventListener('pointermove', handleMove);
+      this.global.removeEventListener('pointerup', onUp);
+      this.global.removeEventListener('pointercancel', onCancel);
+      this.global.removeEventListener('blur', onCancel);
+      targetEl.removeEventListener('lostpointercapture', onCancel);
+      if (typeof event.pointerId === 'number') {
+        try {
+          if (targetEl.hasPointerCapture?.(event.pointerId)) targetEl.releasePointerCapture?.(event.pointerId);
+        } catch { /* noop */ }
+      }
+      this._draggingDivider = false;
+      targetEl.classList.remove('is-dragging');
+      for (const div of activeDividers) div.classList.remove('is-dragging', 'is-junction-hover');
+      this.stage.classList.remove('is-dragging-divider', cursorClass);
+
+      const didCommit = onFinish(commit, upEvent);
+      if (!didCommit && this.layoutTree && this.treeHost.firstElementChild) {
+        this._syncTreeInPlace(this.layoutTree, this.treeHost.firstElementChild);
+        this._syncJunctions();
+      }
+    };
+
+    const onUp = (upEvent) => finish(true, upEvent);
+    const onCancel = () => finish(false, null);
+    this._activeDragCleanup = finish;
+    this.global.addEventListener('pointermove', handleMove);
+    this.global.addEventListener('pointerup', onUp);
+    this.global.addEventListener('pointercancel', onCancel);
+    this.global.addEventListener('blur', onCancel);
+    targetEl.addEventListener('lostpointercapture', onCancel);
   }
 
   _bindDivider(divider, dir, leftNode, rightNode, leftBranch) {
@@ -1062,93 +1294,141 @@ export class SeamWindowSession {
     });
     divider.addEventListener('pointerdown', (event) => {
       if (event.button !== 0) return;
-      const { leftNode: curLeft, rightNode: curRight } = divider._seamNodes || { leftNode, rightNode };
-      const leftPaneId = firstLeafPaneId(curLeft, 'end');
-      if (!leftPaneId) return;
+      const cell = this._cellMetrics();
+      const state = this._buildAxisDragState({ dir, divider, leftBranch, leftNode, rightNode }, cell);
+      if (!state) return;
       event.preventDefault();
-      this._activeDragCleanup?.(false);
 
       const startPos = dir === 'row' ? event.clientX : event.clientY;
-      const startLeftUnits = dir === 'row' ? (curLeft.width || 10) : (curLeft.height || 10);
-      const startRightUnits = dir === 'row' ? (curRight.width || 10) : (curRight.height || 10);
-      const leafMeta = this.panes.get(leftPaneId)?.meta;
-      const leafRawUnits = dir === 'row' ? leafMeta?.width : leafMeta?.height;
-      const leafStartUnits = Number.isInteger(leafRawUnits) && leafRawUnits >= 2 ? leafRawUnits : startLeftUnits;
-      const cell = this._cellMetrics();
-      const stepPx = dir === 'row' ? cell.width : cell.height;
-      const nextSiblingBranch = divider.nextElementSibling?.classList?.contains('seam-branch') ? divider.nextElementSibling : null;
-      const minDelta = Math.max(2 - startLeftUnits, 2 - leafStartUnits);
-      const maxDelta = Math.max(minDelta, startRightUnits - 2);
-      let pendingTargetUnits = leafStartUnits;
-      let ended = false;
+      const stepPx = Math.max(4, dir === 'row' ? cell.width : cell.height);
+      let pendingTargetUnits = state.leafStartUnits;
 
-      if (typeof event.pointerId === 'number') {
-        try { divider.setPointerCapture?.(event.pointerId); } catch { /* noop */ }
-      }
-      this._draggingDivider = true;
-      divider.classList.add('is-dragging');
-      this.stage.classList.add('is-dragging-divider', dir === 'col' ? 'is-dragging-h' : 'is-dragging-v');
-
-      const computeDrag = (clientPos) => {
-        const rawDelta = Number.isFinite(clientPos) ? Math.round((clientPos - startPos) / Math.max(4, stepPx)) : 0;
-        const clamped = Math.max(minDelta, Math.min(maxDelta, rawDelta));
-        return {
-          nextLeftBranch: startLeftUnits + clamped,
-          nextRightBranch: startRightUnits - clamped,
-          targetPaneUnits: leafStartUnits + clamped,
-        };
+      const clampDelta = (clientPos) => {
+        const raw = Number.isFinite(clientPos) ? Math.round((clientPos - startPos) / stepPx) : 0;
+        return Math.max(state.minDelta, Math.min(state.maxDelta, raw));
       };
 
-      const onMove = (moveEvent) => {
-        if (ended) return;
-        const drag = computeDrag(dir === 'row' ? moveEvent.clientX : moveEvent.clientY);
-        pendingTargetUnits = drag.targetPaneUnits;
-        leftBranch.style.flex = drag.nextLeftBranch + ' 1 0%';
-        if (nextSiblingBranch) nextSiblingBranch.style.flex = drag.nextRightBranch + ' 1 0%';
-      };
-
-      const finish = (commit, upEvent = null) => {
-        if (ended) return;
-        ended = true;
-        if (this._activeDragCleanup === finish) this._activeDragCleanup = null;
-        this.global.removeEventListener('pointermove', onMove);
-        this.global.removeEventListener('pointerup', onUp);
-        this.global.removeEventListener('pointercancel', onCancel);
-        this.global.removeEventListener('blur', onCancel);
-        divider.removeEventListener('lostpointercapture', onCancel);
-        if (typeof event.pointerId === 'number') {
-          try {
-            if (divider.hasPointerCapture?.(event.pointerId)) divider.releasePointerCapture?.(event.pointerId);
-          } catch { /* noop */ }
-        }
-        this._draggingDivider = false;
-        divider.classList.remove('is-dragging');
-        this.stage.classList.remove('is-dragging-divider', 'is-dragging-h', 'is-dragging-v');
-
-        let targetPaneUnits = leafStartUnits;
-        if (commit) {
+      this._startAxisDrag(event, divider, {
+        cursorClass: dir === 'col' ? 'is-dragging-h' : 'is-dragging-v',
+        onMove: (moveEvent) => {
+          const clamped = clampDelta(dir === 'row' ? moveEvent.clientX : moveEvent.clientY);
+          pendingTargetUnits = this._previewAxisDelta(state, clamped);
+        },
+        onFinish: (commit, upEvent) => {
+          if (!commit) return false;
           const clientPos = upEvent ? (dir === 'row' ? upEvent.clientX : upEvent.clientY) : NaN;
-          targetPaneUnits = Number.isFinite(clientPos) ? computeDrag(clientPos).targetPaneUnits : pendingTargetUnits;
-        }
-        if (commit && targetPaneUnits !== leafStartUnits) {
+          const targetUnits = Number.isFinite(clientPos) ? (state.leafStartUnits + clampDelta(clientPos)) : pendingTargetUnits;
+          if (targetUnits === state.leafStartUnits) return false;
           this._send({
             type: 'resize-pane-size',
-            paneId: leftPaneId,
-            ...(dir === 'row' ? { cols: targetPaneUnits } : { rows: targetPaneUnits }),
+            paneId: state.leftPaneId,
+            ...(dir === 'row' ? { cols: targetUnits } : { rows: targetUnits }),
           });
-        } else if (this.layoutTree && this.treeHost.firstElementChild) {
-          this._syncTreeInPlace(this.layoutTree, this.treeHost.firstElementChild);
-        }
-      };
+          return true;
+        },
+      });
+    });
+  }
 
-      const onUp = (upEvent) => finish(true, upEvent);
-      const onCancel = () => finish(false, null);
-      this._activeDragCleanup = finish;
-      this.global.addEventListener('pointermove', onMove);
-      this.global.addEventListener('pointerup', onUp);
-      this.global.addEventListener('pointercancel', onCancel);
-      this.global.addEventListener('blur', onCancel);
-      divider.addEventListener('lostpointercapture', onCancel);
+  _syncJunctions() {
+    if (this._draggingDivider) return;
+    for (const old of this.treeHost.querySelectorAll('.seam-junction')) old.remove();
+    if (this.zoomed || !this.layoutTree || !this.treeHost.firstElementChild) return;
+    const segments = collectDividerSegments(this.layoutTree, this.treeHost.firstElementChild, this.panes);
+    const junctions = findLayoutJunctions(segments);
+    const doc = this.global.document;
+    for (const junction of junctions) {
+      const handle = doc.createElement('div');
+      handle.className = 'seam-junction is-anchor-' + junction.anchor.side;
+      handle.setAttribute('role', 'separator');
+      handle.setAttribute('aria-label', '同时调整交界处分窗大小');
+      handle.dataset.contextZone = 'divider';
+      handle.dataset.junctionKind = junction.vSegments.length + junction.hSegments.length >= 3 ? 'cross' : 't';
+      handle.dataset.junctionX = String(junction.x);
+      handle.dataset.junctionY = String(junction.y);
+      junction.anchor.divider.append(handle);
+      this._bindJunction(handle, junction);
+    }
+  }
+
+  _bindJunction(handle, junction) {
+    const allDividers = [...new Set([...junction.vSegments.map((s) => s.divider), ...junction.hSegments.map((s) => s.divider)])];
+    const setHover = (hovered) => {
+      for (const div of allDividers) div.classList.toggle('is-junction-hover', hovered);
+    };
+    handle.addEventListener('pointerenter', () => setHover(true));
+    handle.addEventListener('pointerleave', () => { if (!handle.classList.contains('is-dragging')) setHover(false); });
+    handle.addEventListener('dblclick', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      this.onAction('equalize', { layout: 'tiled' });
+    });
+    handle.addEventListener('pointerdown', (event) => {
+      if (event.button !== 0) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const cell = this._cellMetrics();
+      const vStates = junction.vSegments.map((seg) => this._buildAxisDragState(seg, cell)).filter(Boolean);
+      const hStates = junction.hSegments.map((seg) => this._buildAxisDragState(seg, cell)).filter(Boolean);
+      if (!vStates.length || !hStates.length) return;
+
+      const boundAxis = (states) => {
+        const min = Math.max(...states.map((s) => s.minDelta));
+        const max = Math.min(...states.map((s) => s.maxDelta));
+        return min <= max ? [min, max] : [0, 0];
+      };
+      const [minDeltaX, maxDeltaX] = boundAxis(vStates);
+      const [minDeltaY, maxDeltaY] = boundAxis(hStates);
+      const startX = event.clientX;
+      const startY = event.clientY;
+      const stepX = Math.max(4, cell.width);
+      const stepY = Math.max(4, cell.height);
+      let pendingDX = 0;
+      let pendingDY = 0;
+
+      const clampX = (clientX) => Math.max(minDeltaX, Math.min(maxDeltaX, Number.isFinite(clientX) ? Math.round((clientX - startX) / stepX) : 0));
+      const clampY = (clientY) => Math.max(minDeltaY, Math.min(maxDeltaY, Number.isFinite(clientY) ? Math.round((clientY - startY) / stepY) : 0));
+
+      this._startAxisDrag(event, handle, {
+        cursorClass: 'is-dragging-xy',
+        activeDividers: allDividers,
+        onMove: (moveEvent) => {
+          pendingDX = clampX(moveEvent.clientX);
+          pendingDY = clampY(moveEvent.clientY);
+          for (const st of vStates) this._previewAxisDelta(st, pendingDX);
+          for (const st of hStates) this._previewAxisDelta(st, pendingDY);
+        },
+        onFinish: (commit, upEvent) => {
+          if (!commit) return false;
+          const dx = upEvent && Number.isFinite(upEvent.clientX) ? clampX(upEvent.clientX) : pendingDX;
+          const dy = upEvent && Number.isFinite(upEvent.clientY) ? clampY(upEvent.clientY) : pendingDY;
+          const byPane = new Map();
+          if (dx !== 0) {
+            for (const st of vStates) {
+              const prev = byPane.get(st.leftPaneId) || { paneId: st.leftPaneId };
+              prev.cols = st.leafStartUnits + dx;
+              byPane.set(st.leftPaneId, prev);
+            }
+          }
+          if (dy !== 0) {
+            for (const st of hStates) {
+              const prev = byPane.get(st.leftPaneId) || { paneId: st.leftPaneId };
+              prev.rows = st.leafStartUnits + dy;
+              byPane.set(st.leftPaneId, prev);
+            }
+          }
+          const resizes = [...byPane.values()];
+          if (resizes.length === 1) {
+            this._send({ type: 'resize-pane-size', ...resizes[0] });
+            return true;
+          }
+          if (resizes.length > 1) {
+            this._send({ type: 'resize-pane-batch', resizes });
+            return true;
+          }
+          return false;
+        },
+      });
     });
   }
 
@@ -1421,10 +1701,24 @@ export class SeamWindowSession {
     const w = this.treeHost.clientWidth;
     const h = this.treeHost.clientHeight;
     if (!w || !h) return { cols: 0, rows: 0 };
-    const overhead = this.zoomed ? { extraWidth: 0, extraHeight: 28 } : collectChromeOverhead(this.layoutTree);
     const cell = this._cellMetrics();
-    const usableW = Math.max(cell.width * 2, w - overhead.extraWidth);
-    const usableH = Math.max(cell.height * 2, h - overhead.extraHeight);
+    let netWidthPx;
+    let netHeightPx;
+    if (this.zoomed) {
+      const activeEntry = (this.activePaneId && this.panes.get(this.activePaneId)) || this.panes.values().next().value;
+      const isRich = Boolean(activeEntry?.isRich);
+      const chromeW = isRich ? 0 : PANE_PAD_X;
+      const chromeH = PANE_RAIL_PX + (isRich ? 0 : PANE_PAD_Y);
+      const paneH = activeEntry?.meta?.height;
+      const borderRows = (Number.isInteger(paneH) && Number.isInteger(this.windowRows) && this.windowRows > paneH)
+        ? Math.min(2, this.windowRows - paneH) : 0;
+      netWidthPx = chromeW;
+      netHeightPx = chromeH - borderRows * cell.height;
+    } else {
+      ({ netWidthPx, netHeightPx } = measureLayoutMetrics(this.layoutTree, this.panes, cell));
+    }
+    const usableW = Math.max(cell.width * 2, w - netWidthPx);
+    const usableH = Math.max(cell.height * 2, h - netHeightPx);
     return {
       cols: Math.max(2, Math.floor(usableW / cell.width)),
       rows: Math.max(2, Math.floor(usableH / cell.height)),

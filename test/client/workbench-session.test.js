@@ -346,8 +346,8 @@ describe('SeamWindowSession multi-pane workbench session', () => {
     divider.dispatchEvent(new f.win.MouseEvent('pointerdown', { button: 0, clientX: 400, bubbles: true }));
     expect(session.stage.classList.contains('is-dragging-divider')).toBe(true);
     f.win.dispatchEvent(new f.win.MouseEvent('pointermove', { clientX: 480, bubbles: true }));
-    expect(leftBranch.style.flex).toBe('70 1 0%');
-    expect(rightBranch.style.flex).toBe('49 1 0%');
+    expect(leftBranch.style.flex).toBe('70 1 16px');
+    expect(rightBranch.style.flex).toBe('49 1 16px');
     expect(socket.sent.filter((m) => m.type === 'resize-pane-size')).toHaveLength(0);
 
     // pointerup commits exactly one resize-pane-size and clears drag state
@@ -375,8 +375,8 @@ describe('SeamWindowSession multi-pane workbench session', () => {
       },
     });
     expect(f.host.querySelector('.seam-pane[data-pane-id="%1"]')).toBe(pane1El);
-    expect(leftBranch.style.flex).toBe('70 1 0%');
-    expect(rightBranch.style.flex).toBe('49 1 0%');
+    expect(leftBranch.style.flex).toBe('70 1 16px');
+    expect(rightBranch.style.flex).toBe('49 1 16px');
 
     // Nested split on the left side: composite left branch width=80, rightmost leaf %2 width=40.
     sendLayout(socket, {
@@ -413,6 +413,292 @@ describe('SeamWindowSession multi-pane workbench session', () => {
     // delta = +10 cols -> targetPaneUnits = leaf width (40) + 10 = 50, NOT composite width (80) + 10 = 90
     expect(socket.sent.filter((m) => m.type === 'resize-pane-size')).toEqual([
       { type: 'resize-pane-size', paneId: '%2', cols: 50 },
+    ]);
+
+    session.dispose();
+    f.close();
+  });
+
+  it('accounts for pane padding, tmux dividers, and pane-border-status rows in _measureWindowGrid and branch flex', async () => {
+    const f = fixture();
+    const dims = { w: 227 * 8 + 50, h: 86 * 18 + 77 }; // 227 cols * 8px + 50px chrome; 86 rows * 18px + 77px chrome
+    const session = new SeamWindowSession(f.win, { container: f.host, target });
+    Object.defineProperties(session.treeHost, {
+      clientWidth: { configurable: true, get: () => dims.w },
+      clientHeight: { configurable: true, get: () => dims.h },
+    });
+    await session.ready;
+    const socket = f.sockets[0];
+    socket.readyState = 1;
+    socket.onopen?.();
+    socket.onmessage({ data: JSON.stringify({
+      type: 'ready',
+      protocol: 1,
+      instanceId: '42:123',
+      sessionId: '$1',
+      windowId: '@1',
+      windowCols: 229,
+      windowRows: 88,
+      zoomed: false,
+      sizeLease: 'owner',
+      inputAllowed: true,
+      foreignClient: false,
+    }) });
+
+    const panes = [
+      { id: '%14', index: 0, active: false, width: 100, height: 87, command: 'fish' },
+      { id: '%15', index: 1, active: true, width: 128, height: 46, command: 'lazygit' },
+      { id: '%16', index: 2, active: false, width: 55, height: 40, command: 'fish' },
+      { id: '%17', index: 3, active: false, width: 72, height: 40, command: 'fish' },
+    ];
+    const tree = {
+      type: 'split',
+      dir: 'row',
+      width: 229,
+      height: 88,
+      children: [
+        { type: 'pane', paneId: '%14', width: 100, height: 88 },
+        {
+          type: 'split',
+          dir: 'col',
+          width: 128,
+          height: 88,
+          children: [
+            { type: 'pane', paneId: '%15', width: 128, height: 47 },
+            {
+              type: 'split',
+              dir: 'row',
+              width: 128,
+              height: 40,
+              children: [
+                { type: 'pane', paneId: '%16', width: 55, height: 40 },
+                { type: 'pane', paneId: '%17', width: 72, height: 40 },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    sendLayout(socket, { windowCols: 229, windowRows: 88, activePaneId: '%15', panes, tree });
+    for (const p of panes) {
+      socket.onmessage({ data: encodeSnapshotBinary({ paneId: p.id, seq: 0, cols: p.width, rows: p.height, text: p.id }) });
+    }
+
+    // Branch flex uses content rows + fixed chrome basis (46 vs 40, never 47 vs 40)
+    const rightColBranches = f.host.querySelectorAll('.seam-split.is-col > .seam-branch');
+    expect(rightColBranches).toHaveLength(2);
+    expect(rightColBranches[0].style.flex).toBe('46 1 38px');
+    expect(rightColBranches[1].style.flex).toBe('40 1 38px');
+
+    // Exact 1:1 grid measurement: 229x88 converges with zero extra clipped cols or blank bottom rows
+    expect(session._measureWindowGrid()).toEqual({ cols: 229, rows: 88 });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(socket.sent.filter((m) => m.type === 'resize-window')).toHaveLength(0);
+
+    // Zoomed pane with pane-border-status top (87 content rows inside 88 window rows) also compensates cleanly
+    dims.w = 229 * 8 + 16;
+    dims.h = 87 * 18 + 38;
+    sendLayout(socket, {
+      windowCols: 229,
+      windowRows: 88,
+      zoomed: true,
+      activePaneId: '%15',
+      panes: panes.map((p) => (p.id === '%15' ? { ...p, width: 229, height: 87 } : p)),
+      tree,
+    });
+    expect(session._measureWindowGrid()).toEqual({ cols: 229, rows: 88 });
+
+    session.dispose();
+    f.close();
+  });
+
+  it('supports 3-way T-junction 2D dragging without firing parent divider 1D drag', async () => {
+    const f = fixture();
+    const session = new SeamWindowSession(f.win, { container: f.host, target });
+    await session.ready;
+    const socket = f.sockets[0];
+    hydrateWindow(socket);
+
+    const panes = [
+      { id: '%14', index: 0, active: false, width: 100, height: 87, command: 'fish' },
+      { id: '%15', index: 1, active: true, width: 128, height: 46, command: 'lazygit' },
+      { id: '%16', index: 2, active: false, width: 55, height: 40, command: 'fish' },
+      { id: '%17', index: 3, active: false, width: 72, height: 40, command: 'fish' },
+    ];
+    const tree = {
+      type: 'split', dir: 'row', width: 229, height: 88, x: 0, y: 0,
+      children: [
+        { type: 'pane', paneId: '%14', width: 100, height: 88, x: 0, y: 0 },
+        {
+          type: 'split', dir: 'col', width: 128, height: 88, x: 101, y: 0,
+          children: [
+            { type: 'pane', paneId: '%15', width: 128, height: 47, x: 101, y: 0 },
+            {
+              type: 'split', dir: 'row', width: 128, height: 40, x: 101, y: 48,
+              children: [
+                { type: 'pane', paneId: '%16', width: 55, height: 40, x: 101, y: 48 },
+                { type: 'pane', paneId: '%17', width: 72, height: 40, x: 157, y: 48 },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    sendLayout(socket, { windowCols: 229, windowRows: 88, activePaneId: '%15', panes, tree });
+
+    const junctions = [...f.host.querySelectorAll('.seam-junction')];
+    expect(junctions).toHaveLength(2);
+    expect(junctions.every((el) => el.dataset.junctionKind === 't')).toBe(true);
+
+    // Outer T-junction at (x=100, y=47) between %14 (left) and %15 / [%16,%17] (right)
+    const outerT = junctions.find((el) => el.dataset.junctionX === '100' && el.dataset.junctionY === '47');
+    expect(outerT).toBeTruthy();
+
+    // Hovering lights up BOTH intersecting dividers
+    outerT.dispatchEvent(new f.win.MouseEvent('pointerenter', { bubbles: false }));
+    expect(f.host.querySelectorAll('.seam-divider.is-junction-hover')).toHaveLength(2);
+
+    // Drag +10 cols (+80px) and -4 rows (-72px) simultaneously
+    socket.sent.length = 0;
+    outerT.dispatchEvent(new f.win.MouseEvent('pointerdown', { button: 0, clientX: 500, clientY: 500, bubbles: true }));
+    expect(session.stage.classList.contains('is-dragging-xy')).toBe(true);
+    f.win.dispatchEvent(new f.win.MouseEvent('pointermove', { clientX: 580, clientY: 428, bubbles: true }));
+    expect(socket.sent.filter((m) => m.type === 'resize-pane-size' || m.type === 'resize-pane-batch')).toHaveLength(0);
+
+    const outerRowBranches = f.host.querySelectorAll('.seam-tree-host > .seam-split.is-row > .seam-branch');
+    const rightColBranches = f.host.querySelectorAll('.seam-split.is-col > .seam-branch');
+    expect(outerRowBranches[0].style.flex).toBe('110 1 16px');
+    expect(outerRowBranches[1].style.flex).toBe('117 1 33px');
+    expect(rightColBranches[0].style.flex).toBe('42 1 38px');
+    expect(rightColBranches[1].style.flex).toBe('44 1 38px');
+
+    f.win.dispatchEvent(new f.win.MouseEvent('pointerup', { button: 0, clientX: 580, clientY: 428, bubbles: true }));
+    expect(session.stage.classList.contains('is-dragging-xy')).toBe(false);
+    // Exactly ONE atomic batch resize; parent 1D divider resize must NOT fire
+    expect(socket.sent.filter((m) => m.type === 'resize-pane-size')).toHaveLength(0);
+    expect(socket.sent.filter((m) => m.type === 'resize-pane-batch')).toEqual([
+      {
+        type: 'resize-pane-batch',
+        resizes: [
+          { paneId: '%14', cols: 110 },
+          { paneId: '%15', rows: 42 },
+        ],
+      },
+    ]);
+
+    session.dispose();
+    f.close();
+  });
+
+  it('supports 4-way +-junction 2D dragging for both col[row,row] and row[col,col] 2x2 grids', async () => {
+    const f = fixture();
+    const session = new SeamWindowSession(f.win, { container: f.host, target });
+    await session.ready;
+    const socket = f.sockets[0];
+    hydrateWindow(socket);
+
+    // Case 1: col[row(%1,%2), row(%3,%4)]
+    const panes = [
+      { id: '%1', index: 0, active: true, width: 60, height: 18, command: 'fish' },
+      { id: '%2', index: 1, active: false, width: 59, height: 18, command: 'fish' },
+      { id: '%3', index: 2, active: false, width: 60, height: 17, command: 'fish' },
+      { id: '%4', index: 3, active: false, width: 59, height: 17, command: 'fish' },
+    ];
+    sendLayout(socket, {
+      windowCols: 120,
+      windowRows: 36,
+      activePaneId: '%1',
+      panes,
+      tree: {
+        type: 'split', dir: 'col', width: 120, height: 36, x: 0, y: 0,
+        children: [
+          {
+            type: 'split', dir: 'row', width: 120, height: 18, x: 0, y: 0,
+            children: [
+              { type: 'pane', paneId: '%1', width: 60, height: 18, x: 0, y: 0 },
+              { type: 'pane', paneId: '%2', width: 59, height: 18, x: 61, y: 0 },
+            ],
+          },
+          {
+            type: 'split', dir: 'row', width: 120, height: 17, x: 0, y: 19,
+            children: [
+              { type: 'pane', paneId: '%3', width: 60, height: 17, x: 0, y: 19 },
+              { type: 'pane', paneId: '%4', width: 59, height: 17, x: 61, y: 19 },
+            ],
+          },
+        ],
+      },
+    });
+
+    const cross1 = f.host.querySelectorAll('.seam-junction');
+    expect(cross1).toHaveLength(1);
+    expect(cross1[0].dataset.junctionKind).toBe('cross');
+
+    socket.sent.length = 0;
+    cross1[0].dispatchEvent(new f.win.MouseEvent('pointerdown', { button: 0, clientX: 400, clientY: 300, bubbles: true }));
+    f.win.dispatchEvent(new f.win.MouseEvent('pointermove', { clientX: 440, clientY: 336, bubbles: true })); // +5 cols, +2 rows
+    const rowSplits1 = f.host.querySelectorAll('.seam-split.is-row');
+    expect(rowSplits1[0].children[0].style.flex).toBe('65 1 16px');
+    expect(rowSplits1[1].children[0].style.flex).toBe('65 1 16px');
+    const colBranches1 = f.host.querySelectorAll('.seam-tree-host > .seam-split.is-col > .seam-branch');
+    expect(colBranches1[0].style.flex).toBe('20 1 38px');
+    expect(colBranches1[1].style.flex).toBe('15 1 38px');
+
+    f.win.dispatchEvent(new f.win.MouseEvent('pointerup', { button: 0, clientX: 440, clientY: 336, bubbles: true }));
+    expect(socket.sent.filter((m) => m.type === 'resize-pane-batch')).toEqual([
+      {
+        type: 'resize-pane-batch',
+        resizes: [
+          { paneId: '%1', cols: 65 },
+          { paneId: '%3', cols: 65 },
+          { paneId: '%2', rows: 20 },
+        ],
+      },
+    ]);
+
+    // Case 2: row[col(%1,%3), col(%2,%4)]
+    sendLayout(socket, {
+      windowCols: 120,
+      windowRows: 36,
+      activePaneId: '%1',
+      panes,
+      tree: {
+        type: 'split', dir: 'row', width: 120, height: 36, x: 0, y: 0,
+        children: [
+          {
+            type: 'split', dir: 'col', width: 60, height: 36, x: 0, y: 0,
+            children: [
+              { type: 'pane', paneId: '%1', width: 60, height: 18, x: 0, y: 0 },
+              { type: 'pane', paneId: '%3', width: 60, height: 17, x: 0, y: 19 },
+            ],
+          },
+          {
+            type: 'split', dir: 'col', width: 59, height: 36, x: 61, y: 0,
+            children: [
+              { type: 'pane', paneId: '%2', width: 59, height: 18, x: 61, y: 0 },
+              { type: 'pane', paneId: '%4', width: 59, height: 17, x: 61, y: 19 },
+            ],
+          },
+        ],
+      },
+    });
+
+    const cross2 = f.host.querySelectorAll('.seam-junction');
+    expect(cross2).toHaveLength(1);
+    expect(cross2[0].dataset.junctionKind).toBe('cross');
+
+    socket.sent.length = 0;
+    cross2[0].dispatchEvent(new f.win.MouseEvent('pointerdown', { button: 0, clientX: 400, clientY: 300, bubbles: true }));
+    f.win.dispatchEvent(new f.win.MouseEvent('pointerup', { button: 0, clientX: 360, clientY: 264, bubbles: true })); // -5 cols, -2 rows
+    expect(socket.sent.filter((m) => m.type === 'resize-pane-batch')).toEqual([
+      {
+        type: 'resize-pane-batch',
+        resizes: [
+          { paneId: '%3', cols: 55 },
+          { paneId: '%1', rows: 16 },
+          { paneId: '%2', rows: 16 },
+        ],
+      },
     ]);
 
     session.dispose();
