@@ -235,4 +235,139 @@ describe('local workbench bridges', () => {
     await Promise.resolve();
     expect(w.AppShell.workspace('remote')).toEqual(workspace);
   });
+
+  it('upgrades bare and window terminal routes to Seam workbench when windowStream is available', async () => {
+    const w = setup();
+    w.eval(source('plugins/ui/client/js/router.js'));
+    w.eval(source('plugins/ui/client/js/store.js'));
+    w.eval(source('plugins/ui/client/js/terminal-target.js'));
+    w.eval(source('plugins/ui/client/js/app-shell.js'));
+    w.eval(source('plugins/ui/client/js/ms-app.js'));
+    const remoteWindow = { id: '@3', name: '编辑', index: 3, active: true, panes: [{ id: '%7' }] };
+    w.Store.setHealth('remote', { capabilities: { windowStream: { available: true } } });
+    w.Store.setWorkspace('remote', { provider: 'tmux', instanceId: '1:2', actions: {}, sessions: [{ id: '$2', name: '开发', windows: [remoteWindow] }] });
+    w.renderTerminal = vi.fn(() => { throw new Error('legacy terminal should not render when upgrading'); });
+    const views = [];
+    const workbenchApi = {
+      list: () => views,
+      create: vi.fn(async (input) => {
+        const view = { id: 'seam-view', ...input };
+        views.push(view);
+        return view;
+      }),
+      open: vi.fn((id) => w.Store.setRoute({ name: 'workbench', params: { serverId: 'remote', viewId: id } })),
+      selectPane: vi.fn(),
+      get: (id) => views.find((v) => v.id === id),
+      render: async () => {},
+      unmount() {},
+      currentContext: () => null,
+    };
+
+    // Async plugin boot simulation: initially landed on bare #/terminal/remote before Workbench loaded.
+    w.Store.setRoute({ name: 'terminal', params: { serverId: 'remote' } });
+    w.Router.current = () => w.Store.getState().route;
+    w.MsApp._bindEvents();
+    w.Workbench = workbenchApi;
+    await vi.waitFor(() => expect(workbenchApi.open).toHaveBeenCalledWith('seam-view'));
+    expect(workbenchApi.create).toHaveBeenCalledWith(expect.objectContaining({
+      serverId: 'remote', instanceId: '1:2', sessionId: '$2', windowId: '@3',
+    }));
+
+    // Explicit window route #/terminal/remote/$2/@3/%7 also upgrades and focuses pane %7.
+    workbenchApi.open.mockClear();
+    w.Store.setRoute({ name: 'terminal', params: { serverId: 'remote', sessionId: '$2', windowId: '@3', paneId: '%7' } });
+    await w.MsApp._onRoute(w.Store.getState().route);
+    expect(workbenchApi.open).toHaveBeenCalledWith('seam-view');
+    expect(workbenchApi.selectPane).toHaveBeenCalledWith('%7');
+  });
+
+  it('stays on legacy terminal when opened explicitly via open-legacy-terminal', async () => {
+    const w = setup();
+    w.eval(source('plugins/ui/client/js/router.js'));
+    w.eval(source('plugins/ui/client/js/store.js'));
+    w.eval(source('plugins/ui/client/js/terminal-target.js'));
+    w.eval(source('plugins/ui/client/js/app-shell.js'));
+    w.eval(source('plugins/ui/client/js/ms-app.js'));
+    const remoteWindow = { id: '@3', name: '编辑', index: 3, active: true, panes: [{ id: '%7' }] };
+    w.Store.setHealth('remote', { capabilities: { windowStream: { available: true } } });
+    w.Store.setWorkspace('remote', { provider: 'tmux', instanceId: '1:2', actions: {}, sessions: [{ id: '$2', name: '开发', windows: [remoteWindow] }] });
+    w.renderTerminal = vi.fn();
+    w.state = {};
+    const workbenchApi = {
+      list: () => [],
+      create: vi.fn(async () => ({ id: 'seam-view' })),
+      open: vi.fn(),
+      get: () => null,
+      render: async () => {},
+      unmount() {},
+      currentContext: () => null,
+    };
+    w.Workbench = workbenchApi;
+    w.Router.go = (next) => { w.Store.setRoute(next); return w.MsApp._onRoute(next); };
+    const btn = w.document.createElement('button');
+    btn.dataset.serverId = 'remote';
+    btn.dataset.session = '$2';
+    btn.dataset.window = '@3';
+    await w.MsApp._handleAction('open-legacy-terminal', btn);
+    expect(w.renderTerminal).toHaveBeenCalledOnce();
+    expect(workbenchApi.create).not.toHaveBeenCalled();
+    expect(workbenchApi.open).not.toHaveBeenCalled();
+  });
+
+  it('renders legacy-terminal banner safely with string TerminalTarget.serverId and switches to workbench', async () => {
+    const w = setup();
+    w.eval(source('plugins/ui/client/js/terminal-target.js'));
+    class FakeTerm {
+      constructor() { this.options = {}; this.cols = 80; this.rows = 24; this.buffer = { active: { viewportY: 0, getLine: () => null } }; }
+      open(el) { el.appendChild(w.document.createElement('div')); }
+      loadAddon() {}
+      onData() { return { dispose() {} }; }
+      onWriteParsed() { return { dispose() {} }; }
+      onScroll() { return { dispose() {} }; }
+      onRender() { return { dispose() {} }; }
+      onResize() { return { dispose() {} }; }
+      refresh() {}
+      clearTextureAtlas() {}
+      focus() {}
+      write() {}
+      dispose() {}
+    }
+    w.Terminal = FakeTerm;
+    w.FitAddon = { FitAddon: class { activate() {} fit() {} } };
+    w.WebglAddon = { WebglAddon: class { onContextLoss() {} activate() {} dispose() {} } };
+    w.WebSocket = class { constructor() { this.readyState = 0; } close() {} send() {} };
+    w.ResizeObserver = class { observe() {} disconnect() {} };
+    w.TerminalFonts = { coreReady: async () => true, ensure: async () => false };
+    w.Theme = { getTerminalTheme: () => ({}), supportsTransparency: () => false };
+    w.renderPanePills = vi.fn();
+    w._isValidWindowIndex = () => true;
+    w.escapeHtml = s => String(s ?? '');
+    w.state = { currentSession: 'DataAnt', currentWindow: '2', currentPane: '%4', currentTab: 'terminal' };
+    w.TerminalTarget.set({ serverId: 'local', sessionId: '$1', windowId: '@2' });
+    w.TerminalTarget.listPanes = async () => [{ id: '%4' }];
+    const workspace = {
+      provider: 'tmux', instanceId: '70691:1',
+      sessions: [{ id: '$1', name: 'DataAnt', windows: [{ id: '@2', index: 2, name: '机型库', panes: [{ id: '%4' }] }] }],
+    };
+    w.AppShell = {
+      health: id => (id === 'local' ? { capabilities: { windowStream: { available: true } } } : null),
+      workspace: id => (id === 'local' ? workspace : null),
+      _findSession: (ws, sid) => ws?.sessions?.find(s => s.id === sid),
+    };
+    w.Workbench = {
+      list: () => [],
+      create: vi.fn(async (input) => ({ id: 'wb-1', ...input })),
+      open: vi.fn(),
+    };
+    w.eval(source('plugins/terminal/client/js/terminal.js'));
+    const host = w.document.getElementById('ms-view');
+    w.renderTerminal(host);
+    const notice = host.querySelector('.legacy-terminal-notice');
+    expect(notice).not.toBeNull();
+    notice.querySelector('.legacy-terminal-switch').click();
+    await vi.waitFor(() => expect(w.Workbench.open).toHaveBeenCalledWith('wb-1'));
+    expect(w.Workbench.create).toHaveBeenCalledWith(expect.objectContaining({
+      serverId: 'local', sessionId: '$1', windowId: '@2', instanceId: '70691:1',
+    }));
+  });
 });

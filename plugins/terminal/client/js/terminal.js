@@ -1085,8 +1085,12 @@ function renderTerminal(container, known) {
   }
   var termContainer = view.querySelector('.terminal-container');
   terminalState.termContainer = termContainer;
+  var resolveLegacyServerId = function () {
+    var raw = window.TerminalTarget?.serverId;
+    return (typeof raw === 'function' ? raw.call(window.TerminalTarget) : raw) || 'local';
+  };
   if (!window.__anymuxLegacyBannerDismissed
-    && window.AppShell?.health?.(window.TerminalTarget?.serverId?.())?.capabilities?.windowStream?.available === true
+    && window.AppShell?.health?.(resolveLegacyServerId())?.capabilities?.windowStream?.available === true
     && window.Workbench?.create) {
     var notice = document.createElement('div');
     notice.className = 'legacy-terminal-notice';
@@ -1098,12 +1102,20 @@ function renderTerminal(container, known) {
     switchBtn.className = 'btn btn-sm legacy-terminal-switch';
     switchBtn.textContent = '切换到工作台';
     switchBtn.addEventListener('click', function () {
-      var sid = window.TerminalTarget?.serverId?.() || 'local';
+      var sid = resolveLegacyServerId();
       var ws = window.AppShell?.workspace?.(sid);
-      var session = window.AppShell?._findSession?.(ws, state.currentSession);
-      var win = session?.windows?.find(function (w) { return String(w.index) === String(state.currentWindow) || w.id === state.currentWindow; });
+      var session = window.AppShell?._findSession?.(ws, window.TerminalTarget?.sessionId)
+        || (ws?.sessions || []).find(function (s) { return s.id === state.currentSession || s.name === state.currentSession; });
+      var win = (session?.windows || []).find(function (w) {
+        return (window.TerminalTarget?.windowId && w.id === window.TerminalTarget.windowId)
+          || String(w.index) === String(state.currentWindow)
+          || w.id === state.currentWindow;
+      });
       if (!session || !ws?.instanceId || !win) return;
-      Promise.resolve(window.Workbench.create({
+      var existing = (window.Workbench.list?.(sid) || []).find(function (item) {
+        return item.instanceId === ws.instanceId && item.sessionId === session.id && item.windowId === win.id;
+      });
+      Promise.resolve(existing || window.Workbench.create({
         serverId: sid,
         sessionId: session.id,
         instanceId: ws.instanceId,

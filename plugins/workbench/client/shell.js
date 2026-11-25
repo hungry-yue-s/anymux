@@ -31,6 +31,30 @@ export function registerWorkbenchShell(global, api) {
     if (global.state) global.state.currentPane = context.paneId || null;
     global.AppShell?.render();
   }
+  async function openOrCreate({ serverId, instanceId, session, win = null, paneId = null, isCurrent = () => true }) {
+    const existing = api.list?.(serverId).find(item => item.instanceId === instanceId
+      && item.sessionId === session.id && item.windowId === win?.id);
+    const created = existing || await api.create({ serverId, sessionId: session.id, instanceId,
+      ...(win ? { windowId: win.id } : {}), title: win?.name || session.name });
+    if (isCurrent() && created?.id) {
+      api.open(created.id);
+      if (paneId) api.selectPane?.(paneId);
+    }
+    return created;
+  }
+  async function openTarget({ serverId, sessionId, windowId = null, paneId = null, isCurrent = () => true }) {
+    if (!available(serverId)) return false;
+    const workspace = global.AppShell.workspace(serverId)
+      || await global.MsApp.refreshWorkspace(serverId, { shared: true });
+    if (!isCurrent()) return false;
+    const session = global.AppShell._findSession(workspace, sessionId);
+    if (!session || !workspace?.instanceId) return false;
+    const win = (session.windows || []).find(item => item.id === windowId)
+      || (!windowId && ((session.windows || []).find(item => item.active) || session.windows?.[0]));
+    if (!win) return false;
+    await openOrCreate({ serverId, instanceId: workspace.instanceId, session, win, paneId, isCurrent });
+    return true;
+  }
   async function openWindow({ serverId, node, row, isCurrent }) {
     const workspace = global.AppShell.workspace(serverId)
       || await global.MsApp.refreshWorkspace(serverId, { shared: true });
@@ -42,15 +66,10 @@ export function registerWorkbenchShell(global, api) {
     const win = (session.windows || []).find(item => item.id === windowId)
       || (!windowId && ((session.windows || []).find(item => item.active) || session.windows?.[0]));
     if (windowId && !win) throw new Error('此窗口已不存在，请刷新会话列表');
-    const existing = api.list?.(serverId).find(item => item.instanceId === workspace.instanceId
-      && item.sessionId === sessionId && item.windowId === win?.id);
-    const created = existing || await api.create({ serverId, sessionId, instanceId: workspace.instanceId,
-      ...(win ? { windowId: win.id } : {}), title: win?.name || session.name });
-    if (isCurrent()) {
-      api.open(created.id);
-      const paneId = node.dataset.pane || row?.dataset.pane;
-      if (paneId) api.selectPane?.(paneId);
-    }
+    await openOrCreate({
+      serverId, instanceId: workspace.instanceId, session, win,
+      paneId: node.dataset.pane || row?.dataset.pane || null, isCurrent,
+    });
   }
   const entry = {
     id: 'workbench', currentContext,
@@ -88,6 +107,7 @@ export function registerWorkbenchShell(global, api) {
     unmount() { mountKey = null; mountedHost = null; lastContext = null; api.unmount(); },
     reconcileWorkspace: (serverId, workspace) => api.reconcileWorkspace?.(serverId, workspace),
     windowAction: serverId => available(serverId) ? 'open-workbench' : null,
+    openTarget,
     title: route => api.get?.(route.params.viewId)?.title || '工作台',
     actions: { 'new-workbench': openWindow, 'open-workbench': openWindow },
     renderSessionActions(serverId, session) {

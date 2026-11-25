@@ -36,6 +36,8 @@
     _terminalMountKey: null,
     _mountedTerminalView: null,
     _resolvingDefaultWindow: false,
+    _explicitLegacyTerminal: null,
+    _upgradingTerminalRoute: false,
 
     /**
      * A failed render used to leave a blank page with no trace. Always leave
@@ -186,8 +188,50 @@
       global.FilePreview.switchDockContext(serverId, windowId, instanceId);
     },
 
+    allowLegacyTerminal(serverId, sessionId = null, windowId = null) {
+      this._explicitLegacyTerminal = {
+        serverId: serverId || 'local',
+        sessionId: sessionId || null,
+        windowId: windowId || null,
+      };
+    },
+
+    _isLegacyTerminalAllowed(serverId, _sessionId = null, windowId = null) {
+      const allowed = this._explicitLegacyTerminal;
+      if (!allowed || allowed.serverId !== (serverId || 'local')) return false;
+      return !allowed.windowId || !windowId || allowed.windowId === windowId;
+    },
+
+    async _tryUpgradeTerminalRoute(serverId, workspace, params, generation) {
+      if (this._isLegacyTerminalAllowed(serverId, params.sessionId, params.windowId)) return false;
+      const entry = (global.PanelSlots?.terminalViews?.list() || [])
+        .find((item) => item.windowAction?.(serverId) && typeof item.openTarget === 'function');
+      if (!entry) return false;
+      const explicitSession = params.windowId ? global.AppShell._findSession(workspace, params.sessionId) : null;
+      const explicitWin = explicitSession ? global.AppShell._findWindow(explicitSession, params.windowId) : null;
+      const resolved = explicitWin
+        ? { sessionId: explicitSession.id, windowId: explicitWin.id, paneId: params.paneId }
+        : global.AppShell.resolveDefaultTarget(serverId)?.params;
+      if (!resolved?.sessionId || !resolved?.windowId) return false;
+      this._upgradingTerminalRoute = true;
+      try {
+        return Boolean(await entry.openTarget({
+          serverId,
+          sessionId: resolved.sessionId,
+          windowId: resolved.windowId,
+          paneId: resolved.paneId,
+          isCurrent: () => generation === this._routeGeneration,
+        }));
+      } catch (_err) {
+        return false;
+      } finally {
+        this._upgradingTerminalRoute = false;
+      }
+    },
+
     async _onRoute(route) {
       const generation = ++this._routeGeneration;
+      if (route?.name !== 'terminal') this._explicitLegacyTerminal = null;
       this._hideSidebarContextMenu();
       const view = global.document.getElementById('ms-view');
       if (!view) return;
@@ -320,6 +364,9 @@
         );
         return;
       }
+
+      if (await this._tryUpgradeTerminalRoute(serverId, workspace, params, generation)) return;
+      if (generation !== this._routeGeneration) return;
 
       // A bare #/terminal/:serverId resolves to the most recent window, or the
       // first one. This is a page-level default, not a global entry point.
@@ -840,7 +887,11 @@
       global.addEventListener('terminal-views-changed', () => {
         global.AppShell.render();
         const route = global.Router.current();
-        if (this._mountedTerminalView || global.PanelSlots?.terminalViews?.get(route.name)) {
+        const sid = route?.params?.serverId || 'local';
+        if (this._mountedTerminalView
+          || global.PanelSlots?.terminalViews?.get(route?.name)
+          || (route?.name === 'terminal' && !this._upgradingTerminalRoute
+            && !this._isLegacyTerminalAllowed(sid, route.params?.sessionId, route.params?.windowId))) {
           this._onRoute(route).catch(err => this._reportRouteFailure(err));
         }
       });
@@ -994,6 +1045,7 @@
       if (action === 'open-legacy-terminal') {
         const sessionId = node.dataset.session || (row && row.dataset.session);
         const windowId = node.dataset.window || (row && row.dataset.window);
+        this.allowLegacyTerminal(serverId, sessionId, windowId);
         global.Router.go({ name: 'terminal', params: { serverId, sessionId, windowId } });
         return;
       }

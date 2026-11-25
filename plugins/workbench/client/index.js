@@ -323,7 +323,12 @@ export function createWorkbench(global, options = {}) {
         command('减小字号', () => owner.session?.setFontSize(owner.session.term.options.fontSize - 1)),
         command('增大字号', () => owner.session?.setFontSize(owner.session.term.options.fontSize + 1)),
         command('重命名工作台', () => api.renameView(viewId)),
-        command('关闭本地工作台', () => { api.closeView(viewId); global.Router.go({ name: 'terminal', params: { serverId } }); }));
+        command('关闭本地工作台', () => {
+          const closing = viewNow() || view;
+          global.MsApp?.allowLegacyTerminal?.(serverId, closing?.sessionId, closing?.windowId);
+          api.closeView(viewId);
+          global.Router.go({ name: 'terminal', params: { serverId } });
+        }));
       more.append(summary, menu); owner.menu = more; owner.actions.append(more); owner.toolbar.append(owner.actions);
       owner.dismissMenu = (event) => { if (!more.contains(event.target) || event.key === 'Escape') more.open = false; };
       doc.addEventListener('pointerdown', owner.dismissMenu, true); doc.addEventListener('keydown', owner.dismissMenu);
@@ -346,7 +351,10 @@ export function createWorkbench(global, options = {}) {
         if (mounted !== owner || generation !== version) return;
         notify(error); owner.message.hidden = true;
         owner.root.append(button('重新尝试', '重新尝试连接同一个窗口', () => { api.unmount(); return api.render(serverId, viewId, { container }); }),
-          button('打开兼容终端', '打开服务器原有终端', () => global.Router.go({ name: 'terminal', params: { serverId, sessionId: view.sessionId, windowId: view.windowId } })));
+          button('打开兼容终端', '打开服务器原有终端', () => {
+            global.MsApp?.allowLegacyTerminal?.(serverId, view.sessionId, view.windowId);
+            global.Router.go({ name: 'terminal', params: { serverId, sessionId: view.sessionId, windowId: view.windowId } });
+          }));
       }
     },
     unmount() {
