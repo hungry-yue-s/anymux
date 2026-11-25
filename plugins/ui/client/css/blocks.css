@@ -177,8 +177,27 @@ body.blk-dragging .blk-mode-float > .blk-frame-head { cursor: grabbing; }
 .blk-mode-float > .blk-frame-resize { display: block; position: absolute; right: 0; bottom: 0; width: 18px; height: 18px; cursor: nwse-resize; z-index: 2;
   background: linear-gradient(135deg, transparent 50%, var(--b-line-strong) 50%, var(--b-line-strong) 58%, transparent 58%, transparent 70%, var(--b-line-strong) 70%, var(--b-line-strong) 78%, transparent 78%); }
 .blk-mode-max { position: absolute; inset: 0; z-index: 60; }
-.blk-mode-sheet { position: fixed; inset: 0; z-index: 12500; padding: env(safe-area-inset-top, 0) env(safe-area-inset-right, 0) env(safe-area-inset-bottom, 0) env(safe-area-inset-left, 0); }
-.blk-mode-sheet > .blk-frame-head { height: 48px; }
+.blk-mode-sheet {
+  position: fixed;
+  top: var(--mobile-viewport-top, 0px);
+  left: 0;
+  right: 0;
+  bottom: auto;
+  height: var(--mobile-viewport-height, 100dvh);
+  z-index: 12500;
+  padding: env(safe-area-inset-top, 0) env(safe-area-inset-right, 0) env(safe-area-inset-bottom, 0) env(safe-area-inset-left, 0);
+  box-sizing: border-box;
+}
+.blk-mode-sheet > .blk-frame-head { height: 52px; padding: 0 8px 0 14px; }
+.blk-mode-sheet > .blk-frame-head .blk-icon-btn { width: 44px; height: 44px; }
+
+@media (max-width: 767px), (pointer: coarse) and (max-height: 560px) and (max-width: 1023px) {
+  .git-file { min-height: 42px; padding: 6px 8px 6px 12px; }
+  .git-log-row { min-height: 44px; }
+  .git-bar .blk-btn, .git-bar .blk-icon-btn { min-height: 36px; min-width: 36px; }
+  .git-message, .blk-frame .blk-input { font-size: 16px; }
+  .blk-dialog { max-height: calc(var(--mobile-viewport-height, 100dvh) - 32px); overflow-y: auto; }
+}
 body.blk-dragging, body.blk-resizing { user-select: none; -webkit-user-select: none; }
 body.blk-resizing { cursor: col-resize; }
 body.blk-dragging iframe, body.blk-resizing iframe, body.fp-side-resizing iframe { pointer-events: none; }

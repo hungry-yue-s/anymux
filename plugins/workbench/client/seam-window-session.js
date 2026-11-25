@@ -20,6 +20,7 @@ const PANE_ICONS = {
   splitV: SVG_NS + '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 12h18"/></svg>',
   zoom: SVG_NS + '<path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5"/></svg>',
   unzoom: SVG_NS + '<path d="M8 3v5H3M16 3v5h5M8 21v-5H3M16 21v-5h5"/></svg>',
+  more: SVG_NS + '<circle cx="5" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.4" fill="currentColor" stroke="none"/></svg>',
   close: SVG_NS + '<path d="M18 6 6 18M6 6l12 12"/></svg>',
 };
 
@@ -104,25 +105,26 @@ function commandKind(command) {
 }
 
 const PANE_RAIL_PX = 28;
+const MOBILE_PANE_RAIL_PX = 38;
 const PANE_PAD_X = 16;
 const PANE_PAD_Y = 10;
 const DIVIDER_PX = 1;
 
-function measureLayoutMetrics(node, panes, cell) {
+function measureLayoutMetrics(node, panes, cell, railPx = PANE_RAIL_PX) {
   const fallback = {
     chromeW: PANE_PAD_X,
-    chromeH: PANE_RAIL_PX + PANE_PAD_Y,
+    chromeH: railPx + PANE_PAD_Y,
     contentCols: 1,
     contentRows: 1,
     netWidthPx: PANE_PAD_X,
-    netHeightPx: PANE_RAIL_PX + PANE_PAD_Y,
+    netHeightPx: railPx + PANE_PAD_Y,
   };
   if (!node) return fallback;
   if (node.type === 'pane') {
     const entry = panes?.get(node.paneId);
     const isRich = Boolean(entry?.isRich);
     const chromeW = isRich ? 0 : PANE_PAD_X;
-    const chromeH = PANE_RAIL_PX + (isRich ? 0 : PANE_PAD_Y);
+    const chromeH = railPx + (isRich ? 0 : PANE_PAD_Y);
     const layoutW = node.width || entry?.meta?.width || 1;
     const layoutH = node.height || entry?.meta?.height || 1;
     const contentCols = Math.max(1, entry?.meta?.width || layoutW);
@@ -142,7 +144,7 @@ function measureLayoutMetrics(node, panes, cell) {
   }
   const children = (node.children || []).filter((child) => child && (child.type !== 'pane' || !panes || panes.has(child.paneId)));
   if (!children.length) return fallback;
-  const childMetrics = children.map((child) => measureLayoutMetrics(child, panes, cell));
+  const childMetrics = children.map((child) => measureLayoutMetrics(child, panes, cell, railPx));
   const dividerCount = Math.max(0, children.length - 1);
   if (node.dir === 'row') {
     return {
@@ -308,9 +310,11 @@ export class SeamWindowSession {
     this._treeTopologyKey = null;
     this._draggingDivider = false;
     this._activeDragCleanup = null;
+    this.mobileSplitView = false;
 
     const doc = global.document;
     const mobile = !!global.MobileUI?.isMobile();
+    this._lastMobileMode = mobile;
     this.fontSize = Math.max(mobile ? 11 : 8, Math.min(22, fontSize || (mobile ? 13 : 14)));
     this.fontReady = false;
 
@@ -319,9 +323,14 @@ export class SeamWindowSession {
     this.leaseBar = doc.createElement('div');
     this.leaseBar.className = 'seam-lease-bar';
     this.leaseBar.hidden = true;
+    this.mobilePaneBar = doc.createElement('div');
+    this.mobilePaneBar.className = 'seam-mobile-panes';
+    this.mobilePaneBar.setAttribute('role', 'tablist');
+    this.mobilePaneBar.setAttribute('aria-label', '窗格切换');
+    this.mobilePaneBar.hidden = true;
     this.treeHost = doc.createElement('div');
     this.treeHost.className = 'seam-tree-host';
-    this.stage.append(this.leaseBar, this.treeHost);
+    this.stage.append(this.leaseBar, this.mobilePaneBar, this.treeHost);
     container.append(this.stage);
 
     this._listen(container, 'pointerdown', onFocus, true);
@@ -351,12 +360,22 @@ export class SeamWindowSession {
 
     this._bindStageMenus();
 
+    const handleViewportResize = () => {
+      const mobileNow = this._isMobile();
+      if (mobileNow !== this._lastMobileMode) {
+        this._lastMobileMode = mobileNow;
+        this._renderTree();
+        this._renderMobilePaneBar();
+        this.lastRequestedSize = null;
+      }
+      this.fit();
+    };
     if (global.ResizeObserver) {
       this.resizeObserver = new global.ResizeObserver(() => this.fit());
       this.resizeObserver.observe(this.treeHost);
     }
-    this._listen(global, 'resize', () => this.fit());
-    if (global.visualViewport) this._listen(global.visualViewport, 'resize', () => this.fit());
+    this._listen(global, 'resize', handleViewportResize);
+    if (global.visualViewport) this._listen(global.visualViewport, 'resize', handleViewportResize);
 
     this.ready = this._prepareFonts().then(() => {
       if (this.disposed || !container.isConnected) return;
@@ -542,6 +561,7 @@ export class SeamWindowSession {
 
     this._renderLeaseBar();
     this._syncActivePaneState();
+    this._renderMobilePaneBar();
     this._publishContext();
     this._syncInputGates();
     this.syncAttention();
@@ -809,8 +829,9 @@ export class SeamWindowSession {
     const splitHBtn = makeBtn('split-h', '左右分窗', PANE_ICONS.splitH, 'is-secondary');
     const splitVBtn = makeBtn('split-v', '上下分窗', PANE_ICONS.splitV, 'is-secondary');
     const zoomBtn = makeBtn('zoom', '放大/还原窗格', PANE_ICONS.zoom, 'is-secondary');
+    const menuBtn = makeBtn('menu', '窗格菜单', PANE_ICONS.more, 'is-pane-menu');
     const closeBtn = makeBtn('close', '关闭窗格', PANE_ICONS.close, 'is-secondary is-close');
-    actions.append(splitHBtn, splitVBtn, zoomBtn, closeBtn);
+    actions.append(splitHBtn, splitVBtn, zoomBtn, menuBtn, closeBtn);
 
     const confirmBox = doc.createElement('div');
     confirmBox.className = 'pane-confirm';
@@ -888,6 +909,7 @@ export class SeamWindowSession {
       if (action === 'split-h') this.onAction('split', { paneId, direction: 'horizontal' });
       else if (action === 'split-v') this.onAction('split', { paneId, direction: 'vertical' });
       else if (action === 'zoom') this.zoomPane(paneId);
+      else if (action === 'menu') this._openPaneRailMenu(paneId, { anchor: btn });
       else if (action === 'close') {
         if (this.panes.size <= 1) this.onAction('close-window', { paneId });
         else { actions.hidden = true; confirmBox.hidden = false; el.classList.add('is-confirming'); }
@@ -1062,9 +1084,70 @@ export class SeamWindowSession {
     }
   }
 
+  _isMobile() {
+    return Boolean(this.global.MobileUI?.isMobile?.());
+  }
+
+  _isMobileSinglePane() {
+    return Boolean(this._isMobile() && !this.mobileSplitView && !this.zoomed && this.panes.size > 1 && this.activePaneId && this.panes.has(this.activePaneId));
+  }
+
+  _renderMobilePaneBar() {
+    const doc = this.global.document;
+    if (!this._isMobile() || this.panes.size <= 1) {
+      this.mobilePaneBar.hidden = true;
+      this.mobilePaneBar.replaceChildren();
+      return;
+    }
+    this.mobilePaneBar.hidden = false;
+    const tabs = doc.createElement('div');
+    tabs.className = 'seam-mobile-pane-tabs';
+    const sorted = [...this.panes.values()].sort((a, b) => (a.meta?.index ?? 0) - (b.meta?.index ?? 0));
+    for (const entry of sorted) {
+      const btn = doc.createElement('button');
+      btn.type = 'button';
+      const isActive = entry.paneId === this.activePaneId;
+      btn.className = 'seam-mobile-pane-tab' + (isActive ? ' is-active' : '');
+      btn.setAttribute('role', 'tab');
+      btn.setAttribute('aria-selected', String(isActive));
+      btn.dataset.paneId = entry.paneId;
+      const num = doc.createElement('span');
+      num.className = 'pane-num';
+      num.textContent = String(Number.isInteger(entry.meta?.index) ? entry.meta.index : Number(entry.paneId.slice(1)) || 0);
+      const name = doc.createElement('span');
+      name.className = 'seam-mobile-pane-name';
+      name.textContent = entry.titleEl?.textContent || entry.meta?.command || ('窗格 ' + num.textContent);
+      btn.append(num, name);
+      if (entry.el.classList.contains('is-needs-you')) {
+        const dot = doc.createElement('span');
+        dot.className = 'seam-mobile-pane-dot';
+        dot.setAttribute('aria-hidden', 'true');
+        btn.append(dot);
+      }
+      btn.addEventListener('click', () => this.selectPane(entry.paneId));
+      tabs.append(btn);
+    }
+    const splitToggle = doc.createElement('button');
+    splitToggle.type = 'button';
+    splitToggle.className = 'seam-mobile-split-toggle';
+    splitToggle.setAttribute('aria-pressed', String(this.mobileSplitView));
+    splitToggle.textContent = this.mobileSplitView ? '单窗' : '分屏';
+    splitToggle.addEventListener('click', () => {
+      this.mobileSplitView = !this.mobileSplitView;
+      this._renderTree();
+      this._renderMobilePaneBar();
+      this.lastRequestedSize = null;
+      this.fit();
+    });
+    this.mobilePaneBar.replaceChildren(tabs, splitToggle);
+  }
+
   _layoutTopologyKey() {
     if (this.zoomed && this.activePaneId && this.panes.has(this.activePaneId)) {
       return 'zoom:' + this.activePaneId;
+    }
+    if (this._isMobileSinglePane()) {
+      return 'mobile-single:' + this.activePaneId;
     }
     if (!this.layoutTree) {
       const firstId = this.panes.values().next().value?.paneId || '';
@@ -1081,7 +1164,7 @@ export class SeamWindowSession {
   }
 
   _branchFlex(child, dir) {
-    const metrics = measureLayoutMetrics(child, this.panes, this._cellMetrics());
+    const metrics = measureLayoutMetrics(child, this.panes, this._cellMetrics(), this._isMobile() ? MOBILE_PANE_RAIL_PX : PANE_RAIL_PX);
     return dir === 'col'
       ? (metrics.contentRows + ' 1 ' + metrics.chromeH + 'px')
       : (metrics.contentCols + ' 1 ' + metrics.chromeW + 'px');
@@ -1132,7 +1215,7 @@ export class SeamWindowSession {
     const host = this.treeHost;
     const nextKey = this._layoutTopologyKey();
     if (nextKey && nextKey === this._treeTopologyKey && host.childElementCount > 0) {
-      if (this.zoomed || !this.layoutTree || this._syncTreeInPlace(this.layoutTree, host.firstElementChild)) {
+      if (this.zoomed || this._isMobileSinglePane() || !this.layoutTree || this._syncTreeInPlace(this.layoutTree, host.firstElementChild)) {
         this._syncJunctions();
         return;
       }
@@ -1142,12 +1225,13 @@ export class SeamWindowSession {
     const hadFocus = Boolean(doc.activeElement && host.contains(doc.activeElement));
     host.replaceChildren();
 
-    if (this.zoomed && this.activePaneId && this.panes.has(this.activePaneId)) {
+    if ((this.zoomed || this._isMobileSinglePane()) && this.activePaneId && this.panes.has(this.activePaneId)) {
       const entry = this.panes.get(this.activePaneId);
       const wrap = doc.createElement('div');
       wrap.className = 'seam-split is-row';
       wrap.append(entry.el);
       host.append(wrap);
+      this._ensurePaneRenderer(entry, entry.meta);
       this._treeTopologyKey = nextKey;
       if (hadFocus && !entry.isRich) entry.term?.focus();
       return;
@@ -1194,6 +1278,11 @@ export class SeamWindowSession {
       ? buildNode(this.layoutTree)
       : (this.panes.values().next().value?.el || null);
     if (rootNode) host.append(rootNode);
+    for (const entry of this.panes.values()) {
+      if (entry.body.isConnected && !entry.opened && !entry.isRich) {
+        this._ensurePaneRenderer(entry, entry.meta);
+      }
+    }
     this._treeTopologyKey = nextKey;
     this._syncJunctions();
     if (hadFocus && this.activePaneId) {
@@ -1439,6 +1528,44 @@ export class SeamWindowSession {
     });
   }
 
+  _openPaneRailMenu(paneId, pos = {}) {
+    const ContextMenu = this.global.ContextMenu;
+    if (!ContextMenu) return false;
+    const entry = this.panes.get(paneId);
+    ContextMenu.open({
+      ...(Number.isFinite(pos.x) ? { x: pos.x } : {}),
+      ...(Number.isFinite(pos.y) ? { y: pos.y } : {}),
+      ...(pos.anchor ? { anchor: pos.anchor } : {}),
+      label: '窗格操作',
+      items: [
+        { id: 'split-h', label: '左右分窗', action: () => this.onAction('split', { paneId, direction: 'horizontal' }) },
+        { id: 'split-v', label: '上下分窗', action: () => this.onAction('split', { paneId, direction: 'vertical' }) },
+        { id: 'split-rich-browser', label: '拆分富窗格: 网页', action: () => this.onAction('split-rich', { paneId, direction: 'horizontal', kind: 'browser' }) },
+        { id: 'split-rich-doc', label: '拆分富窗格: 文档', action: () => this.onAction('split-rich', { paneId, direction: 'horizontal', kind: 'doc' }) },
+        {
+          id: 'open-git-preview',
+          label: '打开 Git 预览',
+          children: [
+            { id: 'git-preview-sidebar', label: '侧边栏', action: () => this.onAction('open-git-preview', { paneId, mode: 'sidebar' }) },
+            { id: 'git-preview-replace', label: '覆盖当前窗格', action: () => this.onAction('open-git-preview', { paneId, mode: 'replace' }) },
+            { id: 'git-preview-down', label: '向下分窗展示', action: () => this.onAction('open-git-preview', { paneId, mode: 'split-down' }) },
+            { id: 'git-preview-right', label: '向右分窗展示', action: () => this.onAction('open-git-preview', { paneId, mode: 'split-right' }) },
+          ],
+        },
+        ...(entry?.isRich ? [{ id: 'to-terminal', label: '切换回终端', action: () => this.onAction('set-pane-kind', { paneId, kind: 'terminal' }) }] : []),
+        { id: 'zoom', label: this.zoomed && this.activePaneId === paneId ? '还原窗格' : '最大化窗格', action: () => this.zoomPane(paneId) },
+        { id: 'rename', label: '重命名窗格', action: () => this.startRenamePane(paneId) },
+        { id: 'break', label: '拆分为独立窗口', disabled: this.panes.size <= 1, action: () => this.onAction('break-pane', { paneId }) },
+        ...(!entry?.isRich ? [{ id: 'history', label: '更多历史', action: () => this.onAction('history', { paneId }) }, { id: 'clear', label: '清屏', action: () => this.onAction('clear-pane', { paneId }) }] : []),
+        { separator: true },
+        { id: 'respawn', label: '重置窗格', danger: true, action: () => this.onAction('respawn-pane', { paneId }) },
+        { id: 'close', label: '关闭窗格', danger: true, action: () => (this.panes.size <= 1 ? this.onAction('close-window', { paneId }) : this.onAction('close-pane', { paneId })) },
+      ],
+      onClose: () => entry?.term?.focus(),
+    });
+    return true;
+  }
+
   _bindStageMenus() {
     const doc = this.global.document;
     const gitPreviewItem = (paneId) => ({
@@ -1456,30 +1583,7 @@ export class SeamWindowSession {
       if (!ContextMenu) return false;
       const rail = targetEl.closest?.('[data-context-zone="pane-rail"]');
       if (rail) {
-        const paneId = rail.dataset.paneId;
-        const entry = this.panes.get(paneId);
-        ContextMenu.open({
-          x: clientX,
-          y: clientY,
-          label: '窗格操作',
-          items: [
-            { id: 'split-h', label: '左右分窗', action: () => this.onAction('split', { paneId, direction: 'horizontal' }) },
-            { id: 'split-v', label: '上下分窗', action: () => this.onAction('split', { paneId, direction: 'vertical' }) },
-            { id: 'split-rich-browser', label: '拆分富窗格: 网页', action: () => this.onAction('split-rich', { paneId, direction: 'horizontal', kind: 'browser' }) },
-            { id: 'split-rich-doc', label: '拆分富窗格: 文档', action: () => this.onAction('split-rich', { paneId, direction: 'horizontal', kind: 'doc' }) },
-            gitPreviewItem(paneId),
-            ...(entry?.isRich ? [{ id: 'to-terminal', label: '切换回终端', action: () => this.onAction('set-pane-kind', { paneId, kind: 'terminal' }) }] : []),
-            { id: 'zoom', label: this.zoomed && this.activePaneId === paneId ? '还原窗格' : '最大化窗格', action: () => this.zoomPane(paneId) },
-            { id: 'rename', label: '重命名窗格', action: () => this.startRenamePane(paneId) },
-            { id: 'break', label: '拆分为独立窗口', disabled: this.panes.size <= 1, action: () => this.onAction('break-pane', { paneId }) },
-            ...(!entry?.isRich ? [{ id: 'history', label: '更多历史', action: () => this.onAction('history', { paneId }) }, { id: 'clear', label: '清屏', action: () => this.onAction('clear-pane', { paneId }) }] : []),
-            { separator: true },
-            { id: 'respawn', label: '重置窗格', danger: true, action: () => this.onAction('respawn-pane', { paneId }) },
-            { id: 'close', label: '关闭窗格', danger: true, action: () => (this.panes.size <= 1 ? this.onAction('close-window', { paneId }) : this.onAction('close-pane', { paneId })) },
-          ],
-          onClose: () => entry?.term?.focus(),
-        });
-        return true;
+        return this._openPaneRailMenu(rail.dataset.paneId, { x: clientX, y: clientY });
       }
 
       const divider = targetEl.closest?.('[data-context-zone="divider"]');
@@ -1605,6 +1709,7 @@ export class SeamWindowSession {
       entry.statusBadge.className = 'pane-status ' + (notice.state === 'failed' ? 'is-failed' : 'is-waiting');
       entry.statusBadge.textContent = notice.state === 'failed' ? '◆ 异常停止' : '◆ 等待确认';
     }
+    this._renderMobilePaneBar();
   }
 
   _publishContext() {
@@ -1682,9 +1787,15 @@ export class SeamWindowSession {
     const prev = this.activePaneId;
     this.activePaneId = paneId;
     this._syncActivePaneState();
+    if (this._isMobile() && !this.mobileSplitView && this.panes.size > 1) {
+      this._renderTree();
+      this.lastRequestedSize = null;
+      this.fit();
+    }
+    this._renderMobilePaneBar();
     this._syncInputGates();
     this._publishContext();
-    this.panes.get(paneId)?.term?.focus();
+    if (!this._isMobile()) this.panes.get(paneId)?.term?.focus();
     if (prev !== paneId && this.status === 'live') {
       this._send({ type: 'select-pane', paneId });
     }
@@ -1735,20 +1846,43 @@ export class SeamWindowSession {
     const h = this.treeHost.clientHeight;
     if (!w || !h) return { cols: 0, rows: 0 };
     const cell = this._cellMetrics();
+    const railPx = this._isMobile() ? MOBILE_PANE_RAIL_PX : PANE_RAIL_PX;
+    if (this._isMobileSinglePane()) {
+      const activeEntry = (this.activePaneId && this.panes.get(this.activePaneId)) || this.panes.values().next().value;
+      const isRich = Boolean(activeEntry?.isRich);
+      const chromeW = isRich ? 0 : PANE_PAD_X;
+      const chromeH = railPx + (isRich ? 0 : PANE_PAD_Y);
+      const usableW = Math.max(cell.width * 2, w - chromeW);
+      const usableH = Math.max(cell.height * 2, h - chromeH);
+      const targetCols = Math.max(2, Math.floor(usableW / cell.width));
+      const targetRows = Math.max(2, Math.floor(usableH / cell.height));
+      const paneW = activeEntry?.meta?.width;
+      const paneH = activeEntry?.meta?.height;
+      const ratioX = (Number.isInteger(paneW) && Number.isInteger(this.windowCols) && this.windowCols > 0)
+        ? Math.max(0.25, Math.min(1, paneW / this.windowCols))
+        : 1;
+      const ratioY = (Number.isInteger(paneH) && Number.isInteger(this.windowRows) && this.windowRows > 0)
+        ? Math.max(0.25, Math.min(1, paneH / this.windowRows))
+        : 1;
+      return {
+        cols: Math.max(2, Math.min(240, Math.round(targetCols / ratioX))),
+        rows: Math.max(2, Math.min(160, Math.round(targetRows / ratioY))),
+      };
+    }
     let netWidthPx;
     let netHeightPx;
     if (this.zoomed) {
       const activeEntry = (this.activePaneId && this.panes.get(this.activePaneId)) || this.panes.values().next().value;
       const isRich = Boolean(activeEntry?.isRich);
       const chromeW = isRich ? 0 : PANE_PAD_X;
-      const chromeH = PANE_RAIL_PX + (isRich ? 0 : PANE_PAD_Y);
+      const chromeH = railPx + (isRich ? 0 : PANE_PAD_Y);
       const paneH = activeEntry?.meta?.height;
       const borderRows = (Number.isInteger(paneH) && Number.isInteger(this.windowRows) && this.windowRows > paneH)
         ? Math.min(2, this.windowRows - paneH) : 0;
       netWidthPx = chromeW;
       netHeightPx = chromeH - borderRows * cell.height;
     } else {
-      ({ netWidthPx, netHeightPx } = measureLayoutMetrics(this.layoutTree, this.panes, cell));
+      ({ netWidthPx, netHeightPx } = measureLayoutMetrics(this.layoutTree, this.panes, cell, railPx));
     }
     const usableW = Math.max(cell.width * 2, w - netWidthPx);
     const usableH = Math.max(cell.height * 2, h - netHeightPx);
@@ -1853,16 +1987,67 @@ export class SeamWindowSession {
 
   _installTouchSelection(entry) {
     const { body, term } = entry;
-    let origin, anchor, selecting = false, suppressClick = false, copyButton;
+    let origin, lastTouch, anchor, selecting = false, scrolling = false, suppressClick = false, copyButton;
+    let accumPx = 0, velocity = 0, lastMoveTime = 0, momentumId = null, lastPoint = { x: 0, y: 0 };
     const clearHold = () => { this.global.clearTimeout(entry.holdTimer); entry.holdTimer = null; };
+    const stopMomentum = () => {
+      if (momentumId != null && this.global.cancelAnimationFrame) this.global.cancelAnimationFrame(momentumId);
+      momentumId = null;
+    };
+    const scrollBottomBtn = this.global.document.createElement('button');
+    scrollBottomBtn.type = 'button';
+    scrollBottomBtn.className = 'wb-scroll-bottom';
+    scrollBottomBtn.textContent = '↓ 底部';
+    scrollBottomBtn.hidden = true;
+    const syncScrollBottom = () => {
+      const buf = term.buffer?.active;
+      const scrolledUp = Boolean(
+        this._isMobile()
+        && buf
+        && buf.type !== 'alternate'
+        && Number(buf.baseY) > 0
+        && Number(buf.viewportY) < Number(buf.baseY),
+      );
+      scrollBottomBtn.hidden = !scrolledUp;
+    };
+    scrollBottomBtn.addEventListener('click', (event) => {
+      event.preventDefault(); event.stopPropagation();
+      stopMomentum();
+      term.scrollToBottom?.();
+      syncScrollBottom();
+    });
+    entry.el.append(scrollBottomBtn);
+    const onScrollSub = term.onScroll?.(syncScrollBottom);
+    const onParsedSub = term.onWriteParsed?.(syncScrollBottom);
+
     const position = (touch) => {
       const screen = term.element?.querySelector?.('.xterm-screen') || term.element;
       const rect = screen?.getBoundingClientRect?.();
       if (!rect?.width || !rect?.height) return null;
       return {
         col: Math.max(0, Math.min(term.cols - 1, Math.floor((touch.clientX - rect.left) * term.cols / rect.width))),
-        row: term.buffer.active.viewportY + Math.max(0, Math.min(term.rows - 1, Math.floor((touch.clientY - rect.top) * term.rows / rect.height))),
+        row: (term.buffer?.active?.viewportY || 0) + Math.max(0, Math.min(term.rows - 1, Math.floor((touch.clientY - rect.top) * term.rows / rect.height))),
       };
+    };
+    const applyScrollLines = (lines, clientX, clientY) => {
+      if (!lines || this.disposed) return;
+      const mouseMode = term.modes?.mouseTrackingMode;
+      if (mouseMode && mouseMode !== 'none') {
+        const pt = position({ clientX, clientY });
+        const mx = Math.max(2, (pt ? pt.col : 1) + 1);
+        const my = Math.max(2, (pt ? pt.row - (term.buffer?.active?.viewportY || 0) : 1) + 1);
+        const btn = lines > 0 ? 65 : 64;
+        const seq = '\x1b[<' + btn + ';' + mx + ';' + my + 'M';
+        this._sendInput(entry.paneId, seq.repeat(Math.abs(lines)), false);
+        return;
+      }
+      if (term.buffer?.active?.type === 'alternate') {
+        const seq = lines > 0 ? '\x1b[B' : '\x1b[A';
+        this._sendInput(entry.paneId, seq.repeat(Math.abs(lines)), false);
+        return;
+      }
+      term.scrollLines?.(lines);
+      syncScrollBottom();
     };
     const showCopy = () => {
       if (copyButton) return;
@@ -1872,19 +2057,27 @@ export class SeamWindowSession {
         event.preventDefault(); event.stopPropagation();
         const selection = term.getSelection?.();
         if (selection) this.copy(selection);
+        term.clearSelection?.();
         copyButton?.remove(); copyButton = null;
         suppressClick = false; selecting = false;
       });
       entry.el.append(copyButton);
     };
     const onStart = (event) => {
-      if (!this.global.MobileUI?.isMobile() || event.touches.length !== 1 || event.target.closest?.('.wb-touch-copy')) return;
-      clearHold(); selecting = false; copyButton?.remove(); copyButton = null;
-      const touch = event.touches[0]; origin = { x: touch.clientX, y: touch.clientY }; anchor = position(touch);
+      if (!this._isMobile() || event.touches.length !== 1 || event.target.closest?.('.wb-touch-copy, .wb-scroll-bottom')) return;
+      clearHold(); stopMomentum(); selecting = false; scrolling = false; accumPx = 0; velocity = 0;
+      copyButton?.remove(); copyButton = null;
+      const touch = event.touches[0];
+      origin = { x: touch.clientX, y: touch.clientY };
+      lastTouch = { x: touch.clientX, y: touch.clientY };
+      lastPoint = { x: touch.clientX, y: touch.clientY };
+      lastMoveTime = Date.now();
+      anchor = position(touch);
       if (!anchor) return;
       entry.holdTimer = this.global.setTimeout(() => {
-        if (this.disposed || !anchor) return;
+        if (this.disposed || !anchor || scrolling) return;
         selecting = true; suppressClick = true;
+        this.global.navigator?.vibrate?.(20);
         const line = term.buffer.active.getLine(anchor.row);
         const word = (col) => /[\p{L}\p{N}_./\\:~-]/u.test(line?.getCell?.(col)?.getChars() || '');
         let left = anchor.col, right = anchor.col;
@@ -1897,17 +2090,67 @@ export class SeamWindowSession {
     const onMove = (event) => {
       if (!origin || event.touches.length !== 1) { clearHold(); return; }
       const touch = event.touches[0];
-      if (!selecting) { if (Math.hypot(touch.clientX - origin.x, touch.clientY - origin.y) > 10) clearHold(); return; }
-      event.preventDefault(); event.stopPropagation();
-      const point = position(touch); if (!point) return;
-      const first = anchor.row * term.cols + anchor.col;
-      const last = point.row * term.cols + point.col;
-      const start = Math.min(first, last);
-      term.select?.(start % term.cols, Math.floor(start / term.cols), Math.abs(last - first) + 1);
+      if (selecting) {
+        event.preventDefault(); event.stopPropagation();
+        const point = position(touch); if (!point) return;
+        const first = anchor.row * term.cols + anchor.col;
+        const last = point.row * term.cols + point.col;
+        const start = Math.min(first, last);
+        term.select?.(start % term.cols, Math.floor(start / term.cols), Math.abs(last - first) + 1);
+        return;
+      }
+      const totalDx = touch.clientX - origin.x;
+      const totalDy = touch.clientY - origin.y;
+      if (!scrolling) {
+        if (Math.hypot(totalDx, totalDy) <= 10) return;
+        clearHold();
+        if (Math.abs(totalDy) >= Math.abs(totalDx)) scrolling = true;
+        else return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      const now = Date.now();
+      const dy = lastTouch.y - touch.clientY;
+      const dt = Math.max(1, now - lastMoveTime);
+      lastTouch = { x: touch.clientX, y: touch.clientY };
+      lastPoint = { x: touch.clientX, y: touch.clientY };
+      lastMoveTime = now;
+      velocity = dy / dt;
+      const cellH = Math.max(8, this._cellMetrics().height || 18);
+      accumPx += dy;
+      const lines = Math.trunc(accumPx / cellH);
+      if (lines !== 0) {
+        accumPx -= lines * cellH;
+        applyScrollLines(lines, touch.clientX, touch.clientY);
+      }
     };
-    const onEnd = (event) => { clearHold(); origin = null; if (selecting) { event.preventDefault(); event.stopPropagation(); } };
+    const onEnd = (event) => {
+      clearHold(); origin = null; lastTouch = null;
+      if (selecting) { event.preventDefault(); event.stopPropagation(); return; }
+      if (scrolling) {
+        event.preventDefault(); event.stopPropagation();
+        scrolling = false;
+        if (Math.abs(velocity) > 0.25 && typeof this.global.requestAnimationFrame === 'function') {
+          let v = velocity;
+          let carry = 0;
+          const cellH = Math.max(8, this._cellMetrics().height || 18);
+          const step = () => {
+            if (this.disposed || Math.abs(v) < 0.04) { momentumId = null; return; }
+            carry += v * 16;
+            const lines = Math.trunc(carry / cellH);
+            if (lines !== 0) {
+              carry -= lines * cellH;
+              applyScrollLines(lines, lastPoint.x, lastPoint.y);
+            }
+            v *= 0.92;
+            momentumId = this.global.requestAnimationFrame(step);
+          };
+          momentumId = this.global.requestAnimationFrame(step);
+        }
+      }
+    };
     const onClick = (event) => {
-      if (event.target.closest?.('.wb-touch-copy')) return;
+      if (event.target.closest?.('.wb-touch-copy, .wb-scroll-bottom')) return;
       if (suppressClick) { event.preventDefault(); event.stopImmediatePropagation(); suppressClick = false; }
     };
     body.addEventListener('touchstart', onStart, { capture: true, passive: true });
@@ -1916,7 +2159,8 @@ export class SeamWindowSession {
     body.addEventListener('touchcancel', clearHold, { passive: true });
     body.addEventListener('click', onClick, true);
     entry.cleanups.push(() => {
-      clearHold(); copyButton?.remove();
+      clearHold(); stopMomentum(); copyButton?.remove(); scrollBottomBtn.remove();
+      onScrollSub?.dispose?.(); onParsedSub?.dispose?.();
       body.removeEventListener('touchstart', onStart, { capture: true });
       body.removeEventListener('touchmove', onMove, { capture: true });
       body.removeEventListener('touchend', onEnd, { capture: true });

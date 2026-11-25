@@ -133,3 +133,102 @@
     font-size: 13.5px;
   }
 }
+
+.seam-ctx-scrim {
+  position: fixed;
+  inset: var(--mobile-viewport-top, 0px) 0 auto;
+  width: 100%;
+  height: var(--mobile-viewport-height, 100dvh);
+  z-index: 14999;
+  background: rgba(0, 0, 0, 0.42);
+  -webkit-backdrop-filter: blur(4px);
+  backdrop-filter: blur(4px);
+}
+.seam-ctx-scrim[hidden] { display: none !important; }
+
+.seam-context-menu.is-mobile-sheet {
+  position: fixed;
+  left: max(8px, env(safe-area-inset-left, 0px)) !important;
+  right: max(8px, env(safe-area-inset-right, 0px)) !important;
+  top: auto !important;
+  bottom: calc(100dvh - var(--mobile-viewport-height, 100dvh) - var(--mobile-viewport-top, 0px) + max(8px, env(safe-area-inset-bottom, 0px))) !important;
+  width: auto;
+  min-width: 0;
+  max-width: none;
+  max-height: min(76dvh, calc(var(--mobile-viewport-height, 100dvh) - 32px));
+  display: flex;
+  flex-direction: column;
+  padding: 6px 8px calc(8px + env(safe-area-inset-bottom, 0px));
+  border-radius: 20px;
+  z-index: 15000;
+  overflow: hidden;
+  box-shadow: 0 -10px 40px rgba(0, 0, 0, 0.36);
+}
+.seam-context-menu.is-mobile-sheet::before {
+  content: "";
+  align-self: center;
+  width: 34px;
+  height: 4px;
+  margin: 2px 0 6px;
+  border-radius: 999px;
+  background: var(--workspace-line-strong, var(--border));
+  flex: none;
+}
+.seam-ctx-sheet-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 42px;
+  padding: 0 4px 6px 8px;
+  border-bottom: 1px solid var(--workspace-line, var(--border-subtle));
+  flex: none;
+}
+.seam-ctx-sheet-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 13.5px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.seam-ctx-sheet-back,
+.seam-ctx-sheet-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  min-width: 40px;
+  min-height: 40px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--workspace-accent, var(--accent-blue));
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.seam-ctx-sheet-close {
+  color: var(--workspace-muted, var(--text-secondary));
+  font-size: 20px;
+}
+.seam-ctx-sheet-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-top: 4px;
+}
+.seam-context-menu.is-mobile-sheet .seam-ctx-item {
+  min-height: 48px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  font-size: 14px;
+}
+html[data-native-transparency] .seam-context-menu.is-mobile-sheet {
+  background: color-mix(in srgb, var(--workspace-panel, var(--bg-card)) 88%, transparent);
+  -webkit-backdrop-filter: blur(24px) saturate(1.25);
+  backdrop-filter: blur(24px) saturate(1.25);
+}

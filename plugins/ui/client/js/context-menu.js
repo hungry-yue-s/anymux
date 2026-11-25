@@ -3,12 +3,36 @@
 
   var MENU_ID = 'seam-context-menu';
   var SUBMENU_ID = 'seam-context-submenu';
+  var SCRIM_ID = 'seam-context-scrim';
   var activeMenu = null;
   var activeSubmenu = null;
   var activeSubTrigger = null;
   var returnFocusEl = null;
   var activeOnClose = null;
   var cleanupListeners = null;
+
+  function isMobileSheet() {
+    if (global.MobileUI && typeof global.MobileUI.isMobile === 'function') {
+      return Boolean(global.MobileUI.isMobile());
+    }
+    return (global.innerWidth || 1280) < 768;
+  }
+
+  function ensureScrimElement() {
+    var doc = global.document;
+    var el = doc.getElementById(SCRIM_ID);
+    if (el) return el;
+    el = doc.createElement('div');
+    el.id = SCRIM_ID;
+    el.className = 'seam-ctx-scrim';
+    el.hidden = true;
+    el.addEventListener('click', function (event) {
+      event.stopPropagation();
+      close({ restoreFocus: false });
+    });
+    doc.body.appendChild(el);
+    return el;
+  }
 
   function ensureMenuElement(id, baseClass) {
     var doc = global.document;
@@ -47,6 +71,8 @@
     var doc = global.document;
     var restoreFocus = !options || options.restoreFocus !== false;
     closeSubmenu({ restoreFocus: false });
+    var scrim = doc.getElementById(SCRIM_ID);
+    if (scrim) scrim.hidden = true;
     var menu = activeMenu || doc.getElementById(MENU_ID);
     if (cleanupListeners) {
       cleanupListeners();
@@ -54,6 +80,7 @@
     }
     if (menu) {
       menu.hidden = true;
+      menu.classList.remove('is-mobile-sheet');
       menu.replaceChildren();
     }
     var target = returnFocusEl;
@@ -220,11 +247,19 @@
           return submenu;
         };
         btn._openSubmenu = openSub;
-        btn.addEventListener('mouseenter', function () { openSub(false); });
-        btn.addEventListener('click', function (event) {
-          event.stopPropagation();
-          openSub(true);
-        });
+        if (menuOpts && menuOpts.mobileSheet && typeof menuOpts.onDrill === 'function') {
+          btn.addEventListener('click', function (event) {
+            event.stopPropagation();
+            if (btn.disabled) return;
+            menuOpts.onDrill(entry, childItems);
+          });
+        } else {
+          btn.addEventListener('mouseenter', function () { openSub(false); });
+          btn.addEventListener('click', function (event) {
+            event.stopPropagation();
+            openSub(true);
+          });
+        }
       } else {
         if (!isSubmenu) {
           btn.addEventListener('mouseenter', function () {
@@ -259,16 +294,70 @@
     var prevFocus = opts.returnFocus !== undefined ? opts.returnFocus : doc.activeElement;
     close({ restoreFocus: false });
 
+    var mobileSheet = isMobileSheet();
     var menu = ensureMenuElement(MENU_ID, 'seam-context-menu');
-    menu.className = 'seam-context-menu' + (opts.className ? ' ' + opts.className : '');
+    menu.className = 'seam-context-menu' + (mobileSheet ? ' is-mobile-sheet' : '') + (opts.className ? ' ' + opts.className : '');
     menu.setAttribute('aria-label', opts.label || '上下文菜单');
     menu.replaceChildren();
-    populateMenu(menu, normalized, { isSubmenu: false });
+
+    if (mobileSheet) {
+      menu.style.left = '';
+      menu.style.top = '';
+      menu.style.visibility = '';
+      var scrim = ensureScrimElement();
+      scrim.hidden = false;
+      var sheetHead = doc.createElement('div');
+      sheetHead.className = 'seam-ctx-sheet-head';
+      var sheetBody = doc.createElement('div');
+      sheetBody.className = 'seam-ctx-sheet-body';
+      menu.append(sheetHead, sheetBody);
+
+      var renderSheetLevel = function (levelItems, title, parentTitle) {
+        sheetHead.replaceChildren();
+        if (parentTitle != null) {
+          var backBtn = doc.createElement('button');
+          backBtn.type = 'button';
+          backBtn.className = 'seam-ctx-sheet-back';
+          backBtn.textContent = '‹ 返回';
+          backBtn.addEventListener('click', function (event) {
+            event.stopPropagation();
+            renderSheetLevel(normalized, parentTitle, null);
+          });
+          sheetHead.appendChild(backBtn);
+        }
+        var heading = doc.createElement('strong');
+        heading.className = 'seam-ctx-sheet-title';
+        heading.textContent = title || '操作';
+        var closeBtn = doc.createElement('button');
+        closeBtn.type = 'button';
+        closeBtn.className = 'seam-ctx-sheet-close';
+        closeBtn.textContent = '×';
+        closeBtn.setAttribute('aria-label', '关闭菜单');
+        closeBtn.addEventListener('click', function (event) {
+          event.stopPropagation();
+          close({ restoreFocus: false });
+        });
+        sheetHead.append(heading, closeBtn);
+
+        sheetBody.replaceChildren();
+        populateMenu(sheetBody, levelItems, {
+          isSubmenu: parentTitle != null,
+          mobileSheet: true,
+          onDrill: function (entry, childItems) {
+            renderSheetLevel(childItems, entry.label, title);
+          },
+        });
+      };
+      renderSheetLevel(normalized, opts.label || '操作', null);
+      menu.hidden = false;
+    } else {
+      populateMenu(menu, normalized, { isSubmenu: false });
+      positionMenu(menu, opts);
+    }
 
     activeMenu = menu;
     returnFocusEl = prevFocus;
     activeOnClose = opts.onClose || null;
-    positionMenu(menu, opts);
 
     var onPointerDown = function (event) {
       if (!menu.contains(event.target) && !(activeSubmenu && activeSubmenu.contains(event.target))) {
@@ -327,8 +416,10 @@
       global.removeEventListener('blur', onResizeOrBlur);
     };
 
-    var first = enabledItems(menu)[0];
-    if (first) first.focus({ preventScroll: true });
+    if (!mobileSheet) {
+      var first = enabledItems(menu)[0];
+      if (first) first.focus({ preventScroll: true });
+    }
     return menu;
   }
 

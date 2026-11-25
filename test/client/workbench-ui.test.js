@@ -269,4 +269,43 @@ describe('native workbench UI', () => {
     f.close();
   });
 
+  it('provides extended mobile quick keys with paste, Git menu shortcut, and visualViewport refit', async () => {
+    const f = fixture();
+    f.win.MobileUI.isMobile = () => true;
+    const vvListeners = {};
+    f.win.visualViewport = {
+      addEventListener: vi.fn((name, fn) => { vvListeners[name] = fn; }),
+      removeEventListener: vi.fn((name, fn) => { if (vvListeners[name] === fn) delete vvListeners[name]; }),
+    };
+    Object.defineProperty(f.win.navigator, 'clipboard', {
+      value: { readText: vi.fn(async () => 'git status') },
+      configurable: true,
+    });
+
+    const view = await f.api.create({ serverId: 'dev', ...remote });
+    await f.api.render('dev', view.id, { container: f.host });
+    const session = f.sessions[0];
+    session.fit = vi.fn();
+
+    const quickBtns = [...f.host.querySelectorAll('.mobile-terminal-quick-keys button')].map((b) => b.dataset.wbKey);
+    expect(quickBtns).toEqual(['esc', 'tab', 'ctrl', 'up', 'down', 'paste']);
+
+    f.host.querySelector('[data-wb-key="up"]').click();
+    expect(session.send).toHaveBeenCalledWith('\x1b[A');
+
+    f.host.querySelector('[data-wb-key="paste"]').click();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(session.paste).toHaveBeenCalledWith('git status');
+
+    const menuLabels = [...f.win.document.querySelectorAll('.wb-command-menu .wb-menu-item')].map((b) => b.textContent);
+    expect(menuLabels).toContain('打开 Git 预览');
+
+    vvListeners.resize?.();
+    expect(session.fit).toHaveBeenCalled();
+
+    f.api.unmount();
+    expect(f.win.visualViewport.removeEventListener).toHaveBeenCalled();
+    f.close();
+  });
+
 });

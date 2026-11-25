@@ -97,12 +97,19 @@ export function fixture() {
         coreService: { triggerDataEvent: (data) => this.listeners.data?.(data) },
         _renderService: { dimensions: { css: { cell: { width: 8, height: 18 } } } },
       };
-      this.buffer = { active: { viewportY: 0, getLine: () => null } };
+      this.buffer = { active: { viewportY: 0, baseY: 0, type: 'normal', getLine: () => null } };
+      this.modes = { mouseTrackingMode: 'none' };
+      this.scrolledLines = [];
+      this.scrolledToBottom = 0;
       terminals.push(this);
     }
     open(host) {
       this.element = win.document.createElement('div');
       this.element.className = 'xterm';
+      const screen = win.document.createElement('div');
+      screen.className = 'xterm-screen';
+      screen.getBoundingClientRect = () => ({ left: 0, top: 0, width: 320, height: 360 });
+      this.element.append(screen);
       this.textarea = win.document.createElement('textarea');
       this.textarea.className = 'xterm-helper-textarea';
       this.element.append(this.textarea);
@@ -112,8 +119,11 @@ export function fixture() {
     onData(fn) { this.listeners.data = fn; return { dispose() {} }; }
     onBinary(fn) { this.listeners.binary = fn; return { dispose() {} }; }
     onTitleChange(fn) { this.listeners.title = fn; return { dispose() {} }; }
-    onWriteParsed() { return { dispose() {} }; }
-    onScroll() { return { dispose() {} }; }
+    onWriteParsed(fn) { this.listeners.writeParsed = fn; return { dispose() {} }; }
+    onScroll(fn) { this.listeners.scroll = fn; return { dispose() {} }; }
+    scrollLines(n) { this.scrolledLines.push(n); }
+    scrollToBottom() { this.scrolledToBottom += 1; this.buffer.active.viewportY = this.buffer.active.baseY; this.listeners.scroll?.(); }
+    clearSelection() {}
     write(data, done) { this.writes.push(data); done?.(); }
     reset() { this.resets += 1; }
     resize(cols, rows) { this.cols = cols; this.rows = rows; }
@@ -773,6 +783,77 @@ describe('SeamWindowSession multi-pane workbench session', () => {
     socket.sent.length = 0;
     expect(session.requestResync('%1', true)).toBe(true);
     expect(socket.sent).toEqual([{ type: 'resync', paneId: '%1', forceSnapshot: true }]);
+
+    session.dispose();
+    f.close();
+  });
+
+  it('defaults mobile multi-pane windows to single-pane focus switcher with split toggle, rail menu button, touch scroll, and scroll-to-bottom pill', async () => {
+    const f = fixture();
+    f.win.MobileUI = { isMobile: () => true };
+    const menus = [];
+    f.win.ContextMenu = { open: (spec) => menus.push(spec), installLongPress: () => () => {} };
+
+    const session = new SeamWindowSession(f.win, { container: f.host, target });
+    await session.ready;
+    const socket = f.sockets[0];
+    hydrateWindow(socket);
+
+    // Multi-pane on mobile shows 1 focused pane + mobile pane switcher tabs
+    expect(session.mobilePaneBar.hidden).toBe(false);
+    expect(f.host.querySelectorAll('.seam-mobile-pane-tab')).toHaveLength(2);
+    expect(f.host.querySelectorAll('.seam-pane')).toHaveLength(1);
+    expect(f.host.querySelector('.seam-pane').dataset.paneId).toBe('%1');
+
+    // Switch active pane via mobile tab bar
+    f.host.querySelectorAll('.seam-mobile-pane-tab')[1].click();
+    expect(session.activePaneId).toBe('%2');
+    expect(f.host.querySelector('.seam-pane').dataset.paneId).toBe('%2');
+
+    // Toggle split view on mobile -> shows both panes side by side
+    f.host.querySelector('.seam-mobile-split-toggle').click();
+    expect(f.host.querySelector('.seam-mobile-split-toggle').textContent).toBe('单窗');
+    expect(f.host.querySelectorAll('.seam-pane')).toHaveLength(2);
+    f.host.querySelector('.seam-mobile-split-toggle').click();
+    expect(f.host.querySelectorAll('.seam-pane')).toHaveLength(1);
+
+    // Clicking visible rail menu button opens pane-rail ContextMenu items anchored to button
+    const menuBtn = f.host.querySelector('[data-pane-action="menu"]');
+    menuBtn.click();
+    expect(menus.at(-1).anchor).toBe(menuBtn);
+    expect(menus.at(-1).items.some((i) => i.id === 'open-git-preview')).toBe(true);
+    expect(menus.at(-1).items.some((i) => i.id === 'respawn')).toBe(true);
+
+    // Touch swipe scrolls normal scrollback via term.scrollLines and toggles ↓ 底部 pill
+    const term2 = f.terminals[1];
+    const body2 = f.host.querySelector('.seam-pane[data-pane-id="%2"] .pane-body');
+    const dispatchTouch = (type, x, y) => {
+      const ev = new f.win.Event(type, { bubbles: true, cancelable: true });
+      Object.defineProperty(ev, 'touches', { value: [{ clientX: x, clientY: y }] });
+      body2.dispatchEvent(ev);
+    };
+    dispatchTouch('touchstart', 100, 300);
+    dispatchTouch('touchmove', 100, 240); // swipe up -> +60px -> scrollLines(+3)
+    dispatchTouch('touchend', 100, 240);
+    expect(term2.scrolledLines.reduce((a, b) => a + b, 0)).toBeGreaterThanOrEqual(3);
+
+    // Scrolled up normal buffer exposes ↓ 底部 pill which returns to bottom on click
+    term2.buffer.active.baseY = 50;
+    term2.buffer.active.viewportY = 20;
+    term2.listeners.scroll?.();
+    const bottomBtn = f.host.querySelector('.seam-pane[data-pane-id="%2"] .wb-scroll-bottom');
+    expect(bottomBtn.hidden).toBe(false);
+    bottomBtn.click();
+    expect(term2.scrolledToBottom).toBe(1);
+    expect(bottomBtn.hidden).toBe(true);
+
+    // Mouse-tracking TUI apps receive SGR wheel sequences on touch swipe
+    socket.sent.length = 0;
+    term2.modes.mouseTrackingMode = 'sgr';
+    dispatchTouch('touchstart', 100, 200);
+    dispatchTouch('touchmove', 100, 254); // swipe down -> wheel up \x1b[<64;...M
+    dispatchTouch('touchend', 100, 254);
+    expect(socket.sent.some((m) => m.type === 'input' && m.paneId === '%2' && m.data.includes('\x1b[<64;'))).toBe(true);
 
     session.dispose();
     f.close();

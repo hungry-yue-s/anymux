@@ -177,9 +177,30 @@ export function createWorkbench(global, options = {}) {
     trigger.setAttribute('aria-expanded', 'false'); trigger.setAttribute('aria-controls', drawer.id); trigger.setAttribute('aria-label', '打开终端工具');
     trigger.addEventListener('click', () => toggleDrawer(true));
     const keys = element('div', 'mobile-terminal-quick-keys');
-    for (const [id, label, seq] of [['esc', 'Esc', '\x1b'], ['tab', 'Tab', '\t'], ['ctrl', 'Ctrl+C', '\x03']]) {
-      const key = element('button', '', label); key.type = 'button'; key.dataset.wbKey = id; key.addEventListener('click', () => send(seq)); keys.append(key);
+    const quick = (id, label, run) => {
+      const key = element('button', '', label);
+      key.type = 'button';
+      key.dataset.wbKey = id;
+      key.addEventListener('click', () => {
+        try { Promise.resolve(run()).catch(notify); } catch (error) { notify(error); }
+      });
+      keys.append(key);
+    };
+    for (const [id, label, seq] of [
+      ['esc', 'Esc', '\x1b'],
+      ['tab', 'Tab', '\t'],
+      ['ctrl', 'Ctrl+C', '\x03'],
+      ['up', '↑', '\x1b[A'],
+      ['down', '↓', '\x1b[B'],
+    ]) {
+      quick(id, label, () => send(seq));
     }
+    quick('paste', '粘贴', async () => {
+      if (!global.navigator.clipboard?.readText) throw new Error('当前浏览器不支持读取剪贴板');
+      const text = await global.navigator.clipboard.readText();
+      if (!text) { notify('剪贴板为空'); return; }
+      if (!owner.session?.paste(text)) notify('终端尚未连接，内容未发送');
+    });
     const keyboard = element('button', 'mobile-terminal-keyboard', '输入'); keyboard.type = 'button'; keyboard.setAttribute('aria-label', '打开键盘输入'); keyboard.addEventListener('click', focusKeyboard);
     tools.append(...(hasPlugin('keypad', owner.serverId) ? [trigger] : []), keys, keyboard);
     owner.root.append(tools, upload, drawer);
@@ -337,6 +358,7 @@ export function createWorkbench(global, options = {}) {
         command('拆分富窗格: 网页', () => api.splitRich({ kind: 'browser' })),
         command('拆分富窗格: 文档', () => api.splitRich({ kind: 'doc' })),
         command('拆分富窗格: Git 变更', () => api.splitRich({ kind: 'diff' })),
+        command('打开 Git 预览', () => api.openGitPreview({ mode: 'sidebar' })),
         command('重新连接', () => owner.session?.refresh()), command('粘贴', async () => {
           const selected = context(); const text = await global.navigator.clipboard.readText();
           if (context().key !== selected.key) throw new Error('原生焦点已变化，请重新粘贴');
@@ -362,7 +384,9 @@ export function createWorkbench(global, options = {}) {
       container.replaceChildren(owner.root); doc.body.classList.add('terminal-active'); placeToolbar(owner);
       owner.resize = () => { if (mounted === owner) { placeToolbar(owner); owner.session?.fit(); } };
       owner.visibility = () => owner.session?.setVisible(!doc.hidden);
-      global.addEventListener('resize', owner.resize); doc.addEventListener('visibilitychange', owner.visibility);
+      global.addEventListener('resize', owner.resize);
+      global.visualViewport?.addEventListener?.('resize', owner.resize);
+      doc.addEventListener('visibilitychange', owner.visibility);
       try {
         const [, tabId] = await Promise.all([supported(serverId), tab]);
         if (mounted !== owner || generation !== version) return;
@@ -383,7 +407,10 @@ export function createWorkbench(global, options = {}) {
     unmount() {
       generation++; const owner = mounted; mounted = null; if (!owner) return;
       owner.toolsCleanup?.(); owner.uploadCleanup?.(); for (const reader of owner.histories.values()) reader.close();
-      global.clearTimeout(owner.fitTimer); global.removeEventListener('resize', owner.resize); doc.removeEventListener('visibilitychange', owner.visibility);
+      global.clearTimeout(owner.fitTimer);
+      global.removeEventListener('resize', owner.resize);
+      global.visualViewport?.removeEventListener?.('resize', owner.resize);
+      doc.removeEventListener('visibilitychange', owner.visibility);
       doc.removeEventListener('pointerdown', owner.dismissMenu, true); doc.removeEventListener('keydown', owner.dismissMenu);
       if (owner.addedTerminalLayout) doc.getElementById('ms-topbar')?.classList.remove('terminal-layout');
       owner.session?.dispose(); owner.actions.remove(); owner.root.remove(); doc.body.classList.remove('terminal-active'); announceFocus();

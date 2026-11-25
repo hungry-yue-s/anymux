@@ -162,4 +162,52 @@ describe('Unified 5-zone ContextMenu', () => {
     expect(sub.hidden).toBe(true);
     expect(w.ContextMenu.isOpen()).toBe(false);
   });
+
+  it('renders a mobile bottom action sheet with inline submenu drill-down and scrim dismissal', () => {
+    const w = setupDom();
+    Object.defineProperty(w, 'innerWidth', { value: 390, configurable: true });
+    w.MobileUI = { isMobile: () => true };
+    const ran = vi.fn();
+
+    const menu = w.ContextMenu.open({
+      x: 20,
+      y: 20,
+      label: '窗格操作',
+      items: [
+        { id: 'split-h', label: '左右分窗', action: () => ran('split-h') },
+        {
+          id: 'open-git-preview',
+          label: '打开 Git 预览',
+          children: [
+            { id: 'git-sidebar', label: '侧边栏', action: () => ran('sidebar') },
+            { id: 'git-replace', label: '覆盖当前窗格', action: () => ran('replace') },
+          ],
+        },
+      ],
+    });
+
+    const scrim = w.document.getElementById('seam-context-scrim');
+    expect(menu.classList.contains('is-mobile-sheet')).toBe(true);
+    expect(scrim.hidden).toBe(false);
+    expect(menu.querySelector('.seam-ctx-sheet-title').textContent).toBe('窗格操作');
+
+    // Drill inline into submenu without opening floating submenu
+    menu.querySelector('[data-ctx-action="open-git-preview"]').click();
+    expect(w.document.getElementById('seam-context-submenu')).toBeNull();
+    expect(menu.querySelector('.seam-ctx-sheet-title').textContent).toBe('打开 Git 预览');
+    expect(menu.querySelector('[data-ctx-action="git-replace"]')).not.toBeNull();
+
+    // Navigate back to root menu level
+    menu.querySelector('.seam-ctx-sheet-back').click();
+    expect(menu.querySelector('.seam-ctx-sheet-title').textContent).toBe('窗格操作');
+    expect(menu.querySelector('[data-ctx-action="split-h"]')).not.toBeNull();
+
+    // Drill again and select child action -> runs action and hides sheet + scrim
+    menu.querySelector('[data-ctx-action="open-git-preview"]').click();
+    menu.querySelector('[data-ctx-action="git-replace"]').click();
+    expect(ran).toHaveBeenCalledWith('replace');
+    expect(w.ContextMenu.isOpen()).toBe(false);
+    expect(scrim.hidden).toBe(true);
+    expect(menu.classList.contains('is-mobile-sheet')).toBe(false);
+  });
 });
