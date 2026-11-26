@@ -310,4 +310,39 @@ describe('native workbench UI', () => {
     f.close();
   });
 
+  it('debounces visibilitychange hiding for 10s so quick tab switches avoid re-snapshotting', async () => {
+    const f = fixture();
+    let hidden = false;
+    Object.defineProperty(f.win.document, 'hidden', { configurable: true, get: () => hidden });
+    const view = await f.api.create({ serverId: 'dev', ...remote });
+    await f.api.render('dev', view.id, { container: f.host });
+    const session = f.sessions[0];
+    session.setVisible = vi.fn();
+
+    vi.useFakeTimers();
+    try {
+      hidden = true;
+      f.win.document.dispatchEvent(new f.win.Event('visibilitychange'));
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(session.setVisible).not.toHaveBeenCalledWith(false);
+
+      // Returning before 10s cancels pending hide.
+      hidden = false;
+      f.win.document.dispatchEvent(new f.win.Event('visibilitychange'));
+      await vi.advanceTimersByTimeAsync(15000);
+      expect(session.setVisible).not.toHaveBeenCalledWith(false);
+      expect(session.setVisible).toHaveBeenCalledWith(true);
+
+      // Staying hidden >= 10s notifies session.setVisible(false).
+      session.setVisible.mockClear();
+      hidden = true;
+      f.win.document.dispatchEvent(new f.win.Event('visibilitychange'));
+      await vi.advanceTimersByTimeAsync(10000);
+      expect(session.setVisible).toHaveBeenCalledWith(false);
+    } finally {
+      vi.useRealTimers();
+      f.close();
+    }
+  });
+
 });

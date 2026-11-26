@@ -201,29 +201,30 @@
       var context = el('ms-server-context');
       if (!context) return;
       var mode = this.mode(route);
+      var html;
       if (mode === 'status') {
-        context.innerHTML = this._renderServerRail(route);
-        return;
+        html = this._renderServerRail(route);
+      } else if (mode === 'settings') {
+        html = this._renderSettingsNav();
+      } else {
+        var serverId = this.activeServerId();
+        var server = this.server(serverId);
+        var health = this.health(serverId);
+        var stateTone = tone(health.state);
+
+        var switcher = '<button class="server-switcher" data-action="server-switcher" aria-label="切换服务器，当前 '
+          + esc(server ? server.name : serverId) + '" title="切换服务器">'
+          + '<span class="dot ' + stateTone.dot + '"></span>'
+          + '<span><strong>' + esc(server ? server.name : serverId) + '</strong>'
+          + '<small>' + esc(this._addressOf(server)) + ' · '
+          + esc(this._latencyOf(health)) + '</small></span>'
+          + '<span>⌄</span></button>';
+
+        html = '<div class="subnav">' + this._renderTree(serverId, route) + '</div>' + switcher;
       }
-      if (mode === 'settings') {
-        context.innerHTML = this._renderSettingsNav();
-        return;
-      }
-
-      var serverId = this.activeServerId();
-      var server = this.server(serverId);
-      var health = this.health(serverId);
-      var stateTone = tone(health.state);
-
-      var switcher = '<button class="server-switcher" data-action="server-switcher" aria-label="切换服务器，当前 '
-        + esc(server ? server.name : serverId) + '" title="切换服务器">'
-        + '<span class="dot ' + stateTone.dot + '"></span>'
-        + '<span><strong>' + esc(server ? server.name : serverId) + '</strong>'
-        + '<small>' + esc(this._addressOf(server)) + ' · '
-        + esc(this._latencyOf(health)) + '</small></span>'
-        + '<span>⌄</span></button>';
-
-      context.innerHTML = '<div class="subnav">' + this._renderTree(serverId, route) + '</div>' + switcher;
+      if (context._lastSidebarHtml === html && context.childElementCount > 0) return;
+      context._lastSidebarHtml = html;
+      context.innerHTML = html;
     },
 
     /**

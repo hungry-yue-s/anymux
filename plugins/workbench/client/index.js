@@ -15,6 +15,7 @@ const LOCK_PREFIX = 'anymux_native_';
 // under the old prefix.
 const LEGACY_TAB_KEY = 'twp_native_tab';
 const LEGACY_LOCK_PREFIX = 'twp_native_';
+const VISIBILITY_HIDE_DELAY_MS = 10_000;
 
 /**
  * Asks for a Web Lock without waiting: true when it was free (and, with
@@ -399,7 +400,18 @@ export function createWorkbench(global, options = {}) {
       owner.root.append(owner.toolbar, owner.notice, owner.terminal, owner.message); installTools(owner);
       container.replaceChildren(owner.root); doc.body.classList.add('terminal-active'); placeToolbar(owner);
       owner.resize = () => { if (mounted === owner) { placeToolbar(owner); owner.session?.fit(); } };
-      owner.visibility = () => owner.session?.setVisible(!doc.hidden);
+      owner.visibility = () => {
+        global.clearTimeout(owner.hideTimer);
+        if (!doc.hidden) {
+          owner.hideTimer = null;
+          owner.session?.setVisible(true);
+          return;
+        }
+        owner.hideTimer = global.setTimeout(() => {
+          owner.hideTimer = null;
+          if (mounted === owner && doc.hidden) owner.session?.setVisible(false);
+        }, VISIBILITY_HIDE_DELAY_MS);
+      };
       global.addEventListener('resize', owner.resize);
       global.visualViewport?.addEventListener?.('resize', owner.resize);
       doc.addEventListener('visibilitychange', owner.visibility);
@@ -424,6 +436,7 @@ export function createWorkbench(global, options = {}) {
       generation++; const owner = mounted; mounted = null; if (!owner) return;
       owner.toolsCleanup?.(); owner.uploadCleanup?.(); for (const reader of owner.histories.values()) reader.close();
       global.clearTimeout(owner.fitTimer);
+      global.clearTimeout(owner.hideTimer);
       global.removeEventListener('resize', owner.resize);
       global.visualViewport?.removeEventListener?.('resize', owner.resize);
       doc.removeEventListener('visibilitychange', owner.visibility);

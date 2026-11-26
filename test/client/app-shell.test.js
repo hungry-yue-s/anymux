@@ -255,6 +255,11 @@ describe('AppShell sidebar tree', () => {
     ctx.Store.setHealth('local', { state: 'online', latencyMs: 5, capabilities: {} });
     ctx.Shell.render();
     expect(ctx.document.activeElement).toBe(terminalInput);
+
+    // Re-rendering with unchanged state preserves sidebar DOM identity without replacing innerHTML.
+    const stableNode = ctx.document.querySelector('[data-window="@2"] .tree-item');
+    ctx.Shell.render();
+    expect(ctx.document.querySelector('[data-window="@2"] .tree-item')).toBe(stableNode);
   });
 
   it('escapes a hostile session name', () => {

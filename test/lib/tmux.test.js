@@ -341,4 +341,33 @@ describe('by-id tmux helpers', () => {
     const { renameWindowById } = await import('../../lib/tmux.js');
     await expect(renameWindowById('@1', 'bad:name')).rejects.toThrow(/Invalid window name/);
   });
+
+  it('batches server state via snapshotServerState into a single tmux invocation', async () => {
+    const { createTmuxApi } = await import('../../lib/tmux.js');
+    const SEP = '=:=';
+    const calls = [];
+    const api = createTmuxApi({
+      exec: async (_cmd, args) => {
+        calls.push(args);
+        const stdout = [
+          ['S', '$1', 'main', '1', '1', '1700000000'].join(SEP),
+          ['W', '$1', '@1', '0', 'work', '1', '120', '40', '0', '1700000001', '0', 'abcd,120x40,0,0,1'].join(SEP),
+          ['C', '$1', '0', '%1', 'zsh', '/repo', '1234'].join(SEP),
+          ['T', '%1', 'Title'].join(SEP),
+        ].join('\n');
+        return { stdout, stderr: '' };
+      },
+    });
+    const snap = await api.snapshotServerState();
+    expect(calls).toHaveLength(1);
+    expect(snap.sessions).toEqual([
+      { id: '$1', name: 'main', windows: 1, attached: true, lastActivity: '1700000000' },
+    ]);
+    expect(snap.windowsBySession.get('$1')).toEqual([
+      { id: '@1', index: 0, name: 'work', active: true, width: 120, height: 40, bell: false, activity: 1700000001, zoomed: false, layout: 'abcd,120x40,0,0,1' },
+    ]);
+    expect(snap.paneCommandsBySession.get('$1')).toEqual([
+      { windowIndex: 0, paneId: '%1', command: 'zsh', path: '/repo', pid: 1234, title: 'Title' },
+    ]);
+  });
 });

@@ -309,7 +309,9 @@ var terminalState = {
 };
 
 function _updateTerminalTheme() {
-  if (terminalState.term) terminalState.term.options.theme = Theme.getTerminalTheme();
+  if (!terminalState.term) return;
+  terminalState.term.options.theme = Theme.getTerminalTheme();
+  terminalState.term.options.allowTransparency = !!(Theme.getTransparency && Theme.getTransparency() > 0);
 }
 document.addEventListener('tmux-theme-change', _updateTerminalTheme);
 document.addEventListener('tmux-transparency-change', _updateTerminalTheme);
@@ -746,7 +748,7 @@ function createTerminalInstance(paneCols, paneRows, nozoom) {
     theme: Theme.getTerminalTheme(),
     // Resolve contrast against each cell background, including TUI colors.
     minimumContrastRatio: 4.5,
-    allowTransparency: !!(Theme.supportsTransparency && Theme.supportsTransparency()),
+    allowTransparency: !!(Theme.getTransparency && Theme.getTransparency() > 0),
     fontFamily: 'monospace',
     fontSize: _calcTerminalFontSize(paneCols, paneRows),
     cursorBlink: true,

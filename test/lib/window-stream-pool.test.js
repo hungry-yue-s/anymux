@@ -2,7 +2,7 @@ import { EventEmitter } from 'node:events';
 import { describe, it, expect } from 'vitest';
 import { ControlPool } from '../../lib/terminal/control-pool.js';
 import { tmuxLayoutChecksum } from '../../lib/terminal/tmux-layout.js';
-import { decodeBinaryFrame } from '../../lib/terminal/window-protocol.js';
+import { compactNativeSnapshot, decodeBinaryFrame } from '../../lib/terminal/window-protocol.js';
 
 const SEP = '=:=';
 const withChecksum = body => `${tmuxLayoutChecksum(body)},${body}`;
@@ -113,7 +113,7 @@ describe('ControlPool multi-pane window-stream', () => {
     const received = [];
     const lease = await pool.subscribeWindow(target, frame => received.push(Buffer.isBuffer(frame) ? decodeBinaryFrame(frame) : frame));
 
-    expect(controls[0].commands).toContain('refresh-client -f pause-after=2');
+    expect(controls[0].commands).toContain('refresh-client -f pause-after=5');
     expect(received[0]).toMatchObject({ type: 'ready', sizeLease: 'owner', inputAllowed: true, windowCols: 160, windowRows: 48 });
     expect(received[1]).toMatchObject({ type: 'layout', windowId: '@2', activePaneId: '%3' });
     expect(received[1].tree.type).toBe('split');
@@ -290,6 +290,125 @@ describe('ControlPool multi-pane window-stream', () => {
     expect(mobileFrames.filter(f => f.type === 'ready').at(-1)).toMatchObject({ sizeLease: 'owner', inputAllowed: true });
 
     mobile.close();
+    pool.dispose();
+  });
+
+  it('compacts native snapshots along logical \\r\\n lines, strips default trailing spaces, and bounds resize snapshots to 80 history lines', async () => {
+    const HDR = '\x1bc\x1b[?25l\x1b[?7h\x1b[?6l\x1b[4l';
+    const PFX = '\x1b[0m\x0f\x1b(B\x1b)0';
+    const SFX = '\x1b]8;;\x1b\\';
+    const POST = '\x1b[3g';
+    // H0 (complete), H1+H2 (soft-wrapped pair, NO \r\n between H1 & H2), H3 (complete), V0+V1 (visible rows=2).
+    const raw = Buffer.from(
+      HDR
+      + `${PFX}H0     ${SFX}\r\n`
+      + `${PFX}H1_WRAP   ${SFX}`
+      + `${PFX}H2_CONT   ${SFX}\r\n`
+      + `${PFX}H3\x1b[42m   ${SFX}\r\n`
+      + `${PFX}V0     ${SFX}\r\n`
+      + `${PFX}V1${SFX}`
+      + POST,
+    );
+    // Asking for maxHistoryLines=2 from 4 history rows -> cutIdx=2 hits inside soft-wrapped H2_CONT, advances to H3 (historyLines=1).
+    const bounded = compactNativeSnapshot(raw, { rows: 2, maxHistoryLines: 2 });
+    const boundedText = bounded.data.toString('utf8');
+    expect(bounded.historyTotal).toBe(4);
+    expect(bounded.historyLines).toBe(1);
+    expect(boundedText).not.toContain('H0');
+    expect(boundedText).not.toContain('H2_CONT');
+    expect(boundedText).toContain(`${PFX}H3\x1b[42m   ${SFX}\r\n`); // keeps colored trailing spaces
+    expect(boundedText).toContain(`${PFX}V0${SFX}\r\n`); // strips default-bg trailing spaces
+    expect(boundedText).toContain(`${PFX}V1${SFX}`);
+
+    // Unbounded trailing-space strip preserves wrapped rows while trimming unwrapped rows.
+    const full = compactNativeSnapshot(raw, { rows: 2, maxHistoryLines: 10 });
+    expect(full.historyLines).toBe(4);
+    expect(full.data.toString('utf8')).toContain(`${PFX}H1_WRAP   ${SFX}${PFX}H2_CONT${SFX}\r\n`);
+
+    // Alt-screen snapshot preserves alt section and bounds normal history.
+    const altRaw = Buffer.from(
+      HDR
+      + `${PFX}NH0   ${SFX}\r\n${PFX}NH1   ${SFX}\r\n${PFX}NV0   ${SFX}`
+      + `\x1b[?1049h\x1b[H${PFX}ALT0   ${SFX}\r\n${PFX}ALT1${SFX}`
+      + POST,
+    );
+    const altBounded = compactNativeSnapshot(altRaw, { rows: 1, maxHistoryLines: 1 });
+    expect(altBounded.historyTotal).toBe(2);
+    expect(altBounded.historyLines).toBe(1);
+    expect(altBounded.data.toString('utf8')).toContain(`\x1b[?1049h\x1b[H${PFX}ALT0${SFX}\r\n${PFX}ALT1${SFX}`);
+
+    // Non-native payloads pass through unchanged.
+    const plain = Buffer.from('\x1bcPLAIN');
+    expect(compactNativeSnapshot(plain, { rows: 24 })).toEqual({ data: plain, historyLines: null, historyTotal: null });
+
+    // ControlPool snapshots active pane first and enforces resizeSnapshotHistoryLines (80) on resize.
+    const bigSnap = Buffer.from(
+      HDR + Array.from({ length: 120 }, (_, i) => `${PFX}L${i}     ${SFX}`).join('\r\n') + POST,
+    );
+    const snapOrder = [];
+    let pane4Width = 79;
+    let control;
+    const pool = new ControlPool({
+      tmux: {
+        run: async argv => {
+          if (argv[0] === 'list-panes') {
+            return makeWindowListOutput({
+              cols: 80 + 1 + pane4Width,
+              rows: 10,
+              activePaneId: '%4',
+              panes: [
+                { id: '%3', index: 0, x: 0, y: 0, width: 80, height: 10, command: 'zsh', label: 'left', cwd: '/repo/a' },
+                { id: '%4', index: 1, x: 81, y: 0, width: pane4Width, height: 10, command: 'claude', label: 'right', cwd: '/repo/b' },
+              ],
+            });
+          }
+          if (argv[0] === 'display-message') return '1';
+          if (argv[0] === 'list-clients') return '';
+          throw new Error(`unexpected command: ${argv.join(' ')}`);
+        },
+      },
+      workspace: { invalidate() {} },
+      outputBatchMs: 0,
+      pauseAfterSec: 5,
+      initialSnapshotHistoryLines: 100,
+      resizeSnapshotHistoryLines: 10,
+      createControl: () => {
+        control = new (class extends EventEmitter {
+          constructor() { super(); this.commands = []; this.child = { pid: 999 }; }
+          async command(text, { onResult } = {}) {
+            this.commands.push(text);
+            if (text.includes('#{client_pid}')) { const b = Buffer.from('99:100|$1|441'); onResult?.(b); return b; }
+            const resizeMatch = /resize-pane -t %4 -x (\d+)/.exec(text);
+            if (resizeMatch) pane4Width = Number(resizeMatch[1]);
+            if (text.includes('capture-pane -Q -p -t ')) {
+              const paneId = /capture-pane -Q -p -t (%\d+)/.exec(text)[1];
+              snapOrder.push(paneId);
+              const snap = Buffer.from(JSON.stringify({
+                version: 1, instanceId: '99:100', windowId: '@2', paneId,
+                cols: paneId === '%4' ? pane4Width : 80,
+                rows: 10,
+                dataBase64: bigSnap.toString('base64'),
+              }));
+              onResult?.(snap);
+              return snap;
+            }
+            return Buffer.alloc(0);
+          }
+          dispose() {}
+        })();
+        return control;
+      },
+    });
+    const frames = [];
+    const lease = await pool.subscribeWindow({ instanceId: '99:100', sessionId: '$1', windowId: '@2' }, f => frames.push(Buffer.isBuffer(f) ? decodeBinaryFrame(f) : f));
+    expect(snapOrder[0]).toBe('%4'); // active pane snapshotted first
+    const initSnap = frames.find(f => f.kind === 'snapshot' && f.paneId === '%4');
+    expect(initSnap.historyLines).toBe(100);
+
+    await lease.resizePaneBatch([{ paneId: '%4', cols: 70 }]);
+    const resizedSnap = frames.filter(f => f.kind === 'snapshot' && f.paneId === '%4').at(-1);
+    expect(resizedSnap.historyLines).toBe(10);
+    lease.close();
     pool.dispose();
   });
 });

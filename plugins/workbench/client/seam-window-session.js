@@ -5,6 +5,8 @@ const FONT_FAMILY = "'Anymux Mono', 'Maple Mono NF CN', 'JetBrains Mono', 'Fira 
 const MAX_WEBGL_PANES = 6;
 const MAX_RENDER_BACKLOG = 16 * 1024 * 1024;
 const INPUT_CHUNK_BYTES = 32768;
+const SYNC_UPDATE_START = new Uint8Array([0x1b, 0x5b, 0x3f, 0x32, 0x30, 0x32, 0x36, 0x68]);
+const SYNC_UPDATE_END = new Uint8Array([0x1b, 0x5b, 0x3f, 0x32, 0x30, 0x32, 0x36, 0x6c]);
 
 const SVG_NS = '<svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true">';
 const PANE_ICONS = {
@@ -431,8 +433,12 @@ export class SeamWindowSession {
     const themeSync = () => {
       if (this.disposed) return;
       const theme = global.Theme?.getTerminalTheme?.();
+      const allowTransparency = (global.Theme?.getTransparency?.() || 0) > 0;
       for (const pane of this.panes.values()) {
-        if (pane.term) pane.term.options.theme = theme;
+        if (pane.term) {
+          pane.term.options.theme = theme;
+          pane.term.options.allowTransparency = allowTransparency;
+        }
       }
     };
     this._listen(doc, 'tmux-theme-change', themeSync);
@@ -732,12 +738,22 @@ export class SeamWindowSession {
       this._becameReady();
     };
 
-    entry.term.reset();
-    if (frame.cols >= 2 && frame.rows >= 2) {
+    const hasRis = frame.data.byteLength >= 2 && frame.data[0] === 0x1b && frame.data[1] === 0x63;
+    if (!hasRis) entry.term.reset();
+    if (frame.cols >= 2 && frame.rows >= 2 && (entry.term.cols !== frame.cols || entry.term.rows !== frame.rows)) {
       entry.term.resize(frame.cols, frame.rows);
     }
-    if (frame.data.byteLength === 0) finishRestore();
-    else entry.term.write(frame.data, finishRestore);
+    if (frame.data.byteLength === 0) {
+      finishRestore();
+    } else if (hasRis) {
+      const wrapped = new Uint8Array(SYNC_UPDATE_START.byteLength + frame.data.byteLength + SYNC_UPDATE_END.byteLength);
+      wrapped.set(SYNC_UPDATE_START, 0);
+      wrapped.set(frame.data, SYNC_UPDATE_START.byteLength);
+      wrapped.set(SYNC_UPDATE_END, SYNC_UPDATE_START.byteLength + frame.data.byteLength);
+      entry.term.write(wrapped, finishRestore);
+    } else {
+      entry.term.write(frame.data, finishRestore);
+    }
   }
 
   _queueLiveWrite(entry, bytes, epoch) {
@@ -792,7 +808,7 @@ export class SeamWindowSession {
     const term = new this.global.Terminal({
       theme: this.global.Theme?.getTerminalTheme?.(),
       minimumContrastRatio: 4.5,
-      allowTransparency: !!this.global.Theme?.supportsTransparency?.(),
+      allowTransparency: (this.global.Theme?.getTransparency?.() || 0) > 0,
       fontFamily: this.fontReady ? FONT_FAMILY : 'monospace',
       fontSize: this.fontSize,
       cursorBlink: true,
@@ -1140,9 +1156,13 @@ export class SeamWindowSession {
     const idx = Number.isInteger(entry.meta.index) ? entry.meta.index : Number(entry.paneId.slice(1)) || 0;
     const isRich = Boolean(entry.meta.kind && entry.meta.kind !== 'terminal');
     const kind = isRich ? entry.meta.kind : commandKind(entry.meta.command || entry.meta.label);
+    const icoKey = isRich ? (PANE_ICONS[kind] ? kind : 'rich') : (PANE_ICONS[kind] ? kind : 'shell');
     entry.num.textContent = String(idx);
     entry.ico.className = 'pane-proc-ico is-' + kind;
-    entry.ico.innerHTML = PANE_ICONS[kind] || (isRich ? PANE_ICONS.rich : PANE_ICONS.shell);
+    if (entry._icoKey !== icoKey) {
+      entry._icoKey = icoKey;
+      entry.ico.innerHTML = PANE_ICONS[icoKey] || PANE_ICONS.shell;
+    }
     const parsedPayload = isRich ? parseTilePayload(entry.meta.payload) : null;
     const richFallbackTitle = isRich
       ? (kind === 'diff'
@@ -1158,8 +1178,13 @@ export class SeamWindowSession {
     entry.ctxEl.textContent = cwdShort || '';
     entry.ctxEl.title = entry.meta.cwd || '';
     entry.ctxEl.hidden = !cwdShort;
-    entry.zoomBtn.classList.toggle('is-zoomed', this.zoomed && entry.paneId === this.activePaneId);
-    entry.zoomBtn.innerHTML = this.zoomed && entry.paneId === this.activePaneId ? PANE_ICONS.unzoom : PANE_ICONS.zoom;
+    const isZoomed = this.zoomed && entry.paneId === this.activePaneId;
+    entry.zoomBtn.classList.toggle('is-zoomed', isZoomed);
+    const zoomKey = isZoomed ? 'unzoom' : 'zoom';
+    if (entry._zoomIconKey !== zoomKey) {
+      entry._zoomIconKey = zoomKey;
+      entry.zoomBtn.innerHTML = PANE_ICONS[zoomKey];
+    }
     if (!isRich && entry.opened && prevCwd !== entry.meta.cwd) {
       this._attachPaneLinkProvider(entry);
     }
@@ -1168,9 +1193,14 @@ export class SeamWindowSession {
   _syncActivePaneState() {
     for (const entry of this.panes.values()) {
       const isActive = entry.paneId === this.activePaneId;
+      const isZoomed = this.zoomed && isActive;
       entry.el.classList.toggle('is-active', isActive);
-      entry.zoomBtn.classList.toggle('is-zoomed', this.zoomed && isActive);
-      entry.zoomBtn.innerHTML = this.zoomed && isActive ? PANE_ICONS.unzoom : PANE_ICONS.zoom;
+      entry.zoomBtn.classList.toggle('is-zoomed', isZoomed);
+      const zoomKey = isZoomed ? 'unzoom' : 'zoom';
+      if (entry._zoomIconKey !== zoomKey) {
+        entry._zoomIconKey = zoomKey;
+        entry.zoomBtn.innerHTML = PANE_ICONS[zoomKey];
+      }
     }
   }
 

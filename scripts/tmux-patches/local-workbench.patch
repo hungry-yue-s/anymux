@@ -1,5 +1,35 @@
+diff --git a/client.c b/client.c
+index c7f5741..0cf3ce6 100644
+--- a/client.c
++++ b/client.c
+@@ -415,6 +415,11 @@ client_main(struct event_base *base, int argc, char **argv, uint64_t flags,
+ 		if (client_exittype == MSG_DETACHKILL && ppid > 1)
+ 			kill(ppid, SIGHUP);
+ 	} else if (client_flags & CLIENT_CONTROL) {
++		/* MSYS dup descriptors do not reliably share O_NONBLOCK. Set the
++		 * original stdout before stdio can flush a final control message. */
++		if ((~client_flags & CLIENT_CONTROLCONTROL) &&
++		    !isatty(STDOUT_FILENO))
++			setblocking(STDOUT_FILENO, 0);
+ 		if (client_exitreason != CLIENT_EXIT_NONE)
+ 			printf("%%exit %s\n", client_exit_message());
+ 		else
+@@ -432,7 +437,12 @@ client_main(struct event_base *base, int argc, char **argv, uint64_t flags,
+ 
+ 	/* Restore the streams to blocking. */
+ 	setblocking(STDIN_FILENO, 1);
+-	setblocking(STDOUT_FILENO, 1);
++	/* A stopped pipe reader may have left %exit in stdio after EAGAIN.
++	 * Restoring blocking here makes the atexit flush hang indefinitely.
++	 * TTY clients still get their original descriptor mode back. */
++	if ((~client_flags & CLIENT_CONTROL) ||
++	    (client_flags & CLIENT_CONTROLCONTROL) || isatty(STDOUT_FILENO))
++		setblocking(STDOUT_FILENO, 1);
+ 	setblocking(STDERR_FILENO, 1);
+ 
+ 	return (client_exitval);
 diff --git a/cmd-capture-pane.c b/cmd-capture-pane.c
-index a9ed4bc4..b00f25c7 100644
+index a9ed4bc..fbf771c 100644
 --- a/cmd-capture-pane.c
 +++ b/cmd-capture-pane.c
 @@ -18,8 +18,12 @@
@@ -36,7 +66,7 @@ index a9ed4bc4..b00f25c7 100644
  	const char		*bufname;
  	size_t			 len;
  
-@@ -425,7 +430,38 @@ cmd_capture_pane_exec(struct cmd *self, struct cmdq_item *item)
+@@ -425,7 +430,42 @@ cmd_capture_pane_exec(struct cmd *self, struct cmdq_item *item)
  	}
  
  	len = 0;
@@ -62,11 +92,15 @@ index a9ed4bc4..b00f25c7 100644
 +		encoded = xmalloc(len);
 +		b64_ntop(EVBUFFER_DATA(snapshot), EVBUFFER_LENGTH(snapshot),
 +		    encoded, len);
++		u_int htotal = wp->base.grid->hsize;
++		u_int hlines = htotal > 250 ? 250 : htotal;
 +		xasprintf(&buf, "{\"version\":1,\"paneId\":\"%%%u\","
 +		    "\"instanceId\":\"%ld:%lld\",\"windowId\":\"@%u\","
-+		    "\"cols\":%u,\"rows\":%u,\"data\":\"%s\"}", wp->id,
-+		    (long)getpid(), (long long)start_time.tv_sec, wp->window->id,
-+		    screen_size_x(&wp->base), screen_size_y(&wp->base), encoded);
++		    "\"cols\":%u,\"rows\":%u,"
++		    "\"historyLines\":%u,\"historyTotal\":%u,\"data\":\"%s\"}",
++		    wp->id, (long)getpid(), (long long)start_time.tv_sec,
++		    wp->window->id, screen_size_x(&wp->base),
++		    screen_size_y(&wp->base), hlines, htotal, encoded);
 +		free(encoded);
 +		evbuffer_free(snapshot);
 +		len = strlen(buf);
@@ -303,7 +337,7 @@ index 7f76ff9..26e00c8 100644
  	TAILQ_FOREACH_SAFE(cl, &cs->deferred, entry, cl1) {
  		TAILQ_REMOVE(&cs->deferred, cl, entry);
 diff --git a/file.c b/file.c
-index 83691db5..5e0c9d6b 100644
+index 83691db..5e0c9d6 100644
 --- a/file.c
 +++ b/file.c
 @@ -108,7 +108,8 @@ file_create_with_client(struct client *c, int stream, client_file_cb cb,
@@ -429,7 +463,7 @@ index 83691db5..5e0c9d6b 100644
  	    file_read_error_callback, cf);
  	if (cf->event == NULL)
 diff --git a/format.c b/format.c
-index d88c29d6..01824343 100644
+index d88c29d..0182434 100644
 --- a/format.c
 +++ b/format.c
 @@ -6891,6 +6891,8 @@ format_defaults(struct format_tree *ft, struct client *c, struct session *s,
@@ -442,7 +476,7 @@ index d88c29d6..01824343 100644
  		log_debug("%s: c=%s", __func__, c->name);
  	else
 diff --git a/grid.c b/grid.c
-index 53c8c2cb..c219321c 100644
+index 53c8c2c..c219321 100644
 --- a/grid.c
 +++ b/grid.c
 @@ -1062,7 +1062,7 @@ grid_string_cells_add_hyperlink(char *buf, size_t len, const char *id,
@@ -455,10 +489,10 @@ index 53c8c2cb..c219321c 100644
      const struct grid_cell *gc, char *buf, size_t len, int flags,
      struct screen *sc, int *has_link)
 diff --git a/input.c b/input.c
-index 8f58d9bc..dc52b080 100644
+index 8f58d9b..b565e0c 100644
 --- a/input.c
 +++ b/input.c
-@@ -955,6 +955,256 @@ input_pending(struct input_ctx *ictx)
+@@ -955,6 +955,305 @@ input_pending(struct input_ctx *ictx)
  	return (ictx->since_ground);
  }
  
@@ -491,28 +525,75 @@ index 8f58d9bc..dc52b080 100644
 + * today's tab stops. Full rows preserve wrapped-line boundaries. */
 +static void
 +input_snapshot_line(struct evbuffer *out, struct screen *s, struct grid *gd,
-+    u_int y, u_int width)
++    u_int y, u_int width, int trim_trailing)
 +{
 +	struct grid_cell gc, last = grid_default_cell;
-+	char code[8192];
-+	u_int x, n;
++	const struct grid_line *line;
++	char code[8192], run[4096];
++	u_int x, n, end = width;
++	size_t rlen = 0;
 +	int link = 0;
 +
++	if (trim_trailing) {
++		line = grid_peek_line(gd, y);
++		if (line == NULL)
++			end = 0;
++		else {
++			if (line->cellsize < end)
++				end = line->cellsize;
++			while (end > 0) {
++				grid_get_cell(gd, end - 1, y, &gc);
++				if (gc.attr != 0 || !COLOUR_DEFAULT(gc.fg) ||
++				    !COLOUR_DEFAULT(gc.bg) ||
++				    !COLOUR_DEFAULT(gc.us) || gc.link != 0 ||
++				    (gc.flags & (GRID_FLAG_FG256|
++				    GRID_FLAG_BG256|GRID_FLAG_PADDING|
++				    GRID_FLAG_EXTENDED|GRID_FLAG_TAB)) != 0 ||
++				    gc.data.size != 1 || gc.data.data[0] != ' ')
++					break;
++				end--;
++			}
++		}
++	}
++
 +	evbuffer_add_printf(out, "\033[0m\017\033(B\033)0");
-+	for (x = 0; x < width; x++) {
++	for (x = 0; x < end; x++) {
 +		grid_get_cell(gd, x, y, &gc);
 +		if (gc.flags & GRID_FLAG_PADDING)
 +			continue;
 +		grid_string_cells_code(&last, &gc, code, sizeof code,
 +		    GRID_STRING_WITH_SEQUENCES, s, &link);
-+		evbuffer_add(out, code, strlen(code));
++		if (code[0] != '\0') {
++			if (rlen != 0) {
++				evbuffer_add(out, run, rlen);
++				rlen = 0;
++			}
++			evbuffer_add(out, code, strlen(code));
++		}
 +		last = gc;
 +		if (gc.flags & GRID_FLAG_TAB) {
-+			for (n = 0; n < gc.data.width; n++)
-+				evbuffer_add(out, " ", 1);
-+		} else
-+			evbuffer_add(out, gc.data.data, gc.data.size);
++			for (n = 0; n < gc.data.width; n++) {
++				if (rlen == sizeof run) {
++					evbuffer_add(out, run, rlen);
++					rlen = 0;
++				}
++				run[rlen++] = ' ';
++			}
++		} else if (gc.data.size > 0) {
++			if (rlen + gc.data.size > sizeof run) {
++				if (rlen != 0) {
++					evbuffer_add(out, run, rlen);
++					rlen = 0;
++				}
++				evbuffer_add(out, gc.data.data, gc.data.size);
++			} else {
++				memcpy(run + rlen, gc.data.data, gc.data.size);
++				rlen += gc.data.size;
++			}
++		}
 +	}
++	if (rlen != 0)
++		evbuffer_add(out, run, rlen);
 +	evbuffer_add_printf(out, "\033]8;;\033\\");
 +}
 +
@@ -522,12 +603,14 @@ index 8f58d9bc..dc52b080 100644
 +{
 +	u_int y;
 +	const struct grid_line *line;
++	int wrapped;
 +
 +	for (y = first; y < first + count; y++) {
-+		input_snapshot_line(out, s, gd, y, width);
 +		line = grid_peek_line(gd, y);
-+		if (y + 1 < first + count &&
-+		    (line == NULL || (~line->flags & GRID_LINE_WRAPPED)))
++		wrapped = y + 1 < first + count && line != NULL &&
++		    (line->flags & GRID_LINE_WRAPPED);
++		input_snapshot_line(out, s, gd, y, width, !wrapped);
++		if (y + 1 < first + count && !wrapped)
 +			evbuffer_add(out, "\r\n", 2);
 +	}
 +}
@@ -555,9 +638,9 @@ index 8f58d9bc..dc52b080 100644
 +input_snapshot_normal(struct screen *s, struct screen *normal)
 +{
 +	struct grid *gd;
-+	u_int hsize = s->grid->hsize > 2000 ? 2000 : s->grid->hsize;
++	u_int hsize = s->grid->hsize > 250 ? 250 : s->grid->hsize;
 +
-+	screen_init(normal, screen_size_x(s), screen_size_y(s), 2000);
++	screen_init(normal, screen_size_x(s), screen_size_y(s), 250);
 +	gd = normal->grid;
 +	gd->linedata = xreallocarray(gd->linedata, hsize + gd->sy,
 +	    sizeof *gd->linedata);
@@ -617,7 +700,7 @@ index 8f58d9bc..dc52b080 100644
 +			input_snapshot_colour(out, 4, x, wp->palette.palette[x]);
 +	}
 +	/* Bound the checkpoint; older scrollback is retrieved on demand. */
-+	first = history->hsize > 2000 ? history->hsize - 2000 : 0;
++	first = history->hsize > 250 ? history->hsize - 250 : 0;
 +	if (history->hsize > first) {
 +		input_snapshot_grid(out, s, history, first,
 +		    history->hsize - first, sx);
@@ -716,7 +799,7 @@ index 8f58d9bc..dc52b080 100644
  static void
  input_set_state(struct input_ctx *ictx, const struct input_transition *itr)
 diff --git a/proc.c b/proc.c
-index bfe1fbe2..5b1193ad 100644
+index bfe1fbe..5b1193a 100644
 --- a/proc.c
 +++ b/proc.c
 @@ -358,6 +358,24 @@ proc_kill_peer(struct tmuxpeer *peer)
@@ -745,7 +828,7 @@ index bfe1fbe2..5b1193ad 100644
  proc_flush_peer(struct tmuxpeer *peer)
  {
 diff --git a/server-client.c b/server-client.c
-index 78e92f35..8a3cc320 100644
+index 78e92f3..8a3cc32 100644
 --- a/server-client.c
 +++ b/server-client.c
 @@ -2941,8 +2941,14 @@ server_client_dispatch_identify(struct client *c, struct imsg *imsg)
@@ -766,7 +849,7 @@ index 78e92f35..8a3cc320 100644
  
  	if (c->flags & CLIENT_CONTROL)
 diff --git a/tmux.h b/tmux.h
-index b961b67d..50828fa6 100644
+index b961b67..50828fa 100644
 --- a/tmux.h
 +++ b/tmux.h
 @@ -2092,6 +2092,7 @@ struct client_file {
@@ -811,31 +894,3 @@ index b961b67d..50828fa6 100644
  void	control_discard(struct client *);
  void	control_discard_all(struct client *);
  void	control_start(struct client *);
---- a/client.c
-+++ b/client.c
-@@ -415,6 +415,11 @@
- 		if (client_exittype == MSG_DETACHKILL && ppid > 1)
- 			kill(ppid, SIGHUP);
- 	} else if (client_flags & CLIENT_CONTROL) {
-+		/* MSYS dup descriptors do not reliably share O_NONBLOCK. Set the
-+		 * original stdout before stdio can flush a final control message. */
-+		if ((~client_flags & CLIENT_CONTROLCONTROL) &&
-+		    !isatty(STDOUT_FILENO))
-+			setblocking(STDOUT_FILENO, 0);
- 		if (client_exitreason != CLIENT_EXIT_NONE)
- 			printf("%%exit %s\n", client_exit_message());
- 		else
-@@ -432,7 +437,12 @@
- 
- 	/* Restore the streams to blocking. */
- 	setblocking(STDIN_FILENO, 1);
--	setblocking(STDOUT_FILENO, 1);
-+	/* A stopped pipe reader may have left %exit in stdio after EAGAIN.
-+	 * Restoring blocking here makes the atexit flush hang indefinitely.
-+	 * TTY clients still get their original descriptor mode back. */
-+	if ((~client_flags & CLIENT_CONTROL) ||
-+	    (client_flags & CLIENT_CONTROLCONTROL) || isatty(STDOUT_FILENO))
-+		setblocking(STDOUT_FILENO, 1);
- 	setblocking(STDERR_FILENO, 1);
- 
- 	return (client_exitval);

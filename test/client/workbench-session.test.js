@@ -1377,4 +1377,36 @@ describe('SeamWindowSession multi-pane workbench session', () => {
     session.dispose();
     f.close();
   });
+
+  it('skips synchronous term.reset() for RIS snapshots, wraps DEC 2026 sync update, and binds allowTransparency to non-zero transparency', async () => {
+    const f = fixture();
+    let transparency = 0;
+    f.win.Theme.getTransparency = () => transparency;
+    const session = new SeamWindowSession(f.win, { container: f.host, target: { ...target } });
+    await session.ready;
+    const socket = f.sockets[0];
+    hydrateWindow(socket);
+
+    expect(f.terminals[0].options.allowTransparency).toBe(false);
+    const resetsBefore = f.terminals[0].resets;
+    socket.onmessage({ data: encodeSnapshotBinary({ paneId: '%1', seq: 1, cols: 60, rows: 36, text: '\x1bcUPDATED' }) });
+    expect(f.terminals[0].resets).toBe(resetsBefore);
+    const lastWrite = new TextDecoder().decode(f.terminals[0].writes.at(-1));
+    expect(lastWrite).toBe('\x1b[?2026h\x1bcUPDATED\x1b[?2026l');
+
+    transparency = 0.25;
+    f.win.document.dispatchEvent(new f.win.Event('tmux-theme-change'));
+    expect(f.terminals[0].options.allowTransparency).toBe(true);
+    session.dispose();
+    f.close();
+
+    const f2 = fixture();
+    f2.win.Theme.getTransparency = () => 0.3;
+    const s2 = new SeamWindowSession(f2.win, { container: f2.host, target: { ...target } });
+    await s2.ready;
+    hydrateWindow(f2.sockets[0]);
+    expect(f2.terminals[0].options.allowTransparency).toBe(true);
+    s2.dispose();
+    f2.close();
+  });
 });
