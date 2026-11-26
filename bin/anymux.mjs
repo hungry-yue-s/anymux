@@ -16,7 +16,7 @@
 // pairing file; the others drive tmux directly, so open windows update live.
 
 import { existsSync, readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { spawn, execFileSync } from 'node:child_process';
 import http from 'node:http';
 import https from 'node:https';
@@ -71,7 +71,10 @@ function rest(args) {
 
 function readPairing() {
   // A panel installed as tmux-web-panel that has not restarted since still writes the old path.
-  const paths = appPathCandidates('config', 'node.json');
+  const defaultPaths = appPathCandidates('config', 'node.json');
+  const paths = process.env.ANYMUX_CONFIG_DIR
+    ? [join(process.env.ANYMUX_CONFIG_DIR, 'node.json'), ...defaultPaths]
+    : defaultPaths;
   for (const path of paths) {
     try {
       return JSON.parse(readFileSync(path, 'utf8'));

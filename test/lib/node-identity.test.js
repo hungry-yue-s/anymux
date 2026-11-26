@@ -100,6 +100,44 @@ describe('node identity', () => {
       expect(parsePairing(bad)).toBeNull();
     }
   });
+
+  it('writes to custom pairingPath without overwriting global pairing or legacy dir', async () => {
+    const customPath = path.join(configDir, 'isolated-node.json');
+    const identity = await initNodeIdentity({ configDir, port: 17699, listenHost: '127.0.0.1', home, pairingPath: customPath });
+    expect(identity.pairingPath).toBe(customPath);
+    expect(JSON.parse(await fs.readFile(customPath, 'utf8')).port).toBe(17699);
+    await expect(fs.stat(pairingFilePath(home))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('preserves a reachable live pairing file on another port, but heals a dead/stale pairing', async () => {
+    const first = await initNodeIdentity({ configDir, port: 7681, listenHost: '127.0.0.1', home });
+    expect(first.preservedExisting).toBe(false);
+
+    // Another panel tries to write port 17699 while 7681 is reachable -> preserved!
+    const secondary = await initNodeIdentity({
+      configDir,
+      port: 17699,
+      listenHost: '127.0.0.1',
+      home,
+      preserveLivePairing: true,
+      probeEndpoint: async (_host, p) => p === 7681,
+    });
+    expect(secondary.preservedExisting).toBe(true);
+    expect(secondary.pairingPath).toBeNull();
+    expect(JSON.parse(await fs.readFile(pairingFilePath(home), 'utf8')).port).toBe(7681);
+
+    // Stale dead pairing (probe returns false) -> healed to active port!
+    const healed = await initNodeIdentity({
+      configDir,
+      port: 18888,
+      listenHost: '127.0.0.1',
+      home,
+      preserveLivePairing: true,
+      probeEndpoint: async () => false,
+    });
+    expect(healed.preservedExisting).toBe(false);
+    expect(JSON.parse(await fs.readFile(pairingFilePath(home), 'utf8')).port).toBe(18888);
+  });
 });
 
 describe('collectNodeInfo', () => {

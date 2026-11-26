@@ -14,10 +14,13 @@
 // not be loaded at all.
 
 import { homedir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { rewriteLocalNodePath } from '../../lib/hub/proxy.js';
+import { appDir } from '../../lib/legacy-names.js';
 import { initNodeIdentity } from '../../lib/node/identity.js';
 import { collectNodeInfo } from '../../lib/node/info.js';
 import { handle } from '../../lib/servers/errors.js';
+import { isPrivateServer } from '../../lib/tmux-server.js';
 import express from 'express';
 
 export const name = 'node';
@@ -27,13 +30,25 @@ export const inject = ['launch', 'http', 'tmux'];
 /** @param {{ home?: string }} [config] */
 export async function apply(ctx, config) {
   const launch = ctx.launch;
+  const userHome = config?.home || homedir();
+  const defaultConfigDir = resolve(appDir('config', { home: userHome }));
+  const isolated = !config?.home && (
+    isPrivateServer()
+    || launch.port === 0
+    || (!launch.managedRuntime && resolve(launch.configDir) !== defaultConfigDir)
+  );
   const identity = await initNodeIdentity({
     configDir: launch.configDir,
     port: launch.port,
     listenHost: launch.host,
     tlsCertPath: launch.tls ? launch.tls.cert : null,
-    home: config?.home || homedir(),
+    home: userHome,
+    pairingPath: isolated ? join(launch.configDir, 'node.json') : null,
+    preserveLivePairing: !isolated && !config?.home,
   });
+  if (identity.preservedExisting) {
+    ctx.logger?.warn('kept existing live pairing file (%s); skipping overwrite for port %d', identity.existingEndpoint, launch.port);
+  }
   /** capability name → probe returning { available, version, reason } */
   const capabilities = new Map();
   // The plugins this installation runs, so a hub's pages only call what is there.
