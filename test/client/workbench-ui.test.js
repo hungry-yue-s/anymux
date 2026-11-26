@@ -345,4 +345,40 @@ describe('native workbench UI', () => {
     }
   });
 
+  it('skips capability HTTP check when AppShell health already reports windowStream, and warm-caches switched windows with LRU eviction', async () => {
+    const f = fixture();
+    f.win.AppShell = {
+      health: (sid) => sid === 'dev' ? { capabilities: { windowStream: { available: true, protocol: 1 } } } : null,
+    };
+    const addParkedSpy = (s) => { s.setParked = vi.fn(); };
+    const v1 = await f.api.create({ serverId: 'dev', instanceId: '42:123', sessionId: '$1', windowId: '@1', paneId: '%1' });
+    const v2 = await f.api.create({ serverId: 'dev', instanceId: '42:123', sessionId: '$1', windowId: '@2', paneId: '%2' });
+    // supported() fast path skipped /api/workbench/window-capability
+    expect(f.win.Api.get).not.toHaveBeenCalled();
+
+    await f.api.render('dev', v1.id, { container: f.host });
+    addParkedSpy(f.sessions[0]);
+    expect(f.win.Api.get).not.toHaveBeenCalled();
+
+    // Switch to @2 -> @1 is parked (not disposed!)
+    await f.api.render('dev', v2.id, { container: f.host });
+    addParkedSpy(f.sessions[1]);
+    expect(f.sessions[0].setParked).toHaveBeenCalledWith(true);
+    expect(f.sessions[0].disposed).not.toBe(true);
+    expect(f.sessions).toHaveLength(2);
+
+    // Switch back to @1 -> reuses exact same Session instance with 0 new Session constructions!
+    await f.api.render('dev', v1.id, { container: f.host });
+    expect(f.sessions).toHaveLength(2);
+    expect(f.sessions[0].setParked).toHaveBeenLastCalledWith(false);
+    expect(f.sessions[1].setParked).toHaveBeenCalledWith(true);
+
+    // Closing or unmounting disposes both active and parked views cleanly.
+    f.api.closeView(v2.id);
+    expect(f.sessions[1].disposed).toBe(true);
+    f.api.unmount();
+    expect(f.sessions[0].disposed).toBe(true);
+    f.close();
+  });
+
 });

@@ -65,7 +65,8 @@ export function createWorkbench(global, options = {}) {
   let storage; try { storage = global.localStorage; } catch { /* memory-only */ }
   const store = createViewStore(storage, options.storageScope || 'local');
   const Session = options.Session || SeamWindowSession;
-  const tab = tabIdentity(global), pending = new Map();
+  const maxWarmViews = Number.isInteger(options.maxWarmViews) && options.maxWarmViews >= 0 ? options.maxWarmViews : 4;
+  const tab = tabIdentity(global), pending = new Map(), warmCache = new Map(), supportedCache = new Map();
   let mounted = null, generation = 0, pendingFocusPane = null;
   const mobile = () => global.MobileUI?.isMobile() ?? global.innerWidth < 768;
   const emit = (name, detail) => global.dispatchEvent(new global.CustomEvent(name, { detail }));
@@ -103,8 +104,19 @@ export function createWorkbench(global, options = {}) {
   const announceFocus = () => { emit('terminal-context-changed', context()); emit('workbench-focus-changed', context()); };
   async function supported(serverId) {
     if (!hasPlugin('control-terminal', serverId)) throw new Error('此服务器未启用原生终端插件');
+    const hasShellHealth = typeof global.AppShell?.health === 'function';
+    const known = hasShellHealth ? global.AppShell.health(serverId)?.capabilities?.windowStream : null;
+    if (known?.available === true && known.protocol === 1) {
+      supportedCache.set(serverId, Date.now());
+      return true;
+    }
+    if (hasShellHealth) {
+      const cachedAt = supportedCache.get(serverId);
+      if (cachedAt && Date.now() - cachedAt < 60_000) return true;
+    }
     const capability = await global.Api.get(nodeUrl(serverId, '/api/workbench/window-capability'));
     if (!capability?.available || capability.protocol !== 1) throw new Error('请更新 Node 和正在运行的 tmux。仅替换 tmux 程序不会更新已有服务，请在下一次安全重启 tmux 后启用；当前可使用兼容终端。');
+    if (hasShellHealth) supportedCache.set(serverId, Date.now());
     return true;
   }
   async function ensureWindow(viewId) {
@@ -266,7 +278,13 @@ export function createWorkbench(global, options = {}) {
         return run().catch(notify);
       },
       onState: ({ status, message, reason }) => {
-        if (mounted !== owner) return;
+        if (mounted !== owner) {
+          if (warmCache.get(owner.viewId) === owner && status !== 'live') {
+            warmCache.delete(owner.viewId);
+            disposeOwner(owner);
+          }
+          return;
+        }
         owner.root.dataset.status = status; owner.message.hidden = status === 'live';
         owner.message.textContent = message || ({ connecting: '正在连接工作台…', disconnected: '连接已断开，正在重连…', invalid: '无法连接此窗口', exited: '终端会话已结束' }[status] || '');
         owner.message.classList.toggle('terminal-status-notice', status === 'detached');
@@ -336,6 +354,61 @@ export function createWorkbench(global, options = {}) {
     }).catch((error) => { if (mounted === owner) notify(error); });
   }
 
+  function bindOwnerEvents(owner) {
+    if (owner.eventsBound) return;
+    owner.eventsBound = true;
+    doc.addEventListener('pointerdown', owner.dismissMenu, true);
+    doc.addEventListener('keydown', owner.dismissMenu);
+    global.addEventListener('resize', owner.resize);
+    global.visualViewport?.addEventListener?.('resize', owner.resize);
+    doc.addEventListener('visibilitychange', owner.visibility);
+  }
+  function unbindOwnerEvents(owner) {
+    if (!owner.eventsBound) return;
+    owner.eventsBound = false;
+    doc.removeEventListener('pointerdown', owner.dismissMenu, true);
+    doc.removeEventListener('keydown', owner.dismissMenu);
+    global.removeEventListener('resize', owner.resize);
+    global.visualViewport?.removeEventListener?.('resize', owner.resize);
+    doc.removeEventListener('visibilitychange', owner.visibility);
+    if (owner.addedTerminalLayout) {
+      doc.getElementById('ms-topbar')?.classList.remove('terminal-layout');
+      owner.addedTerminalLayout = false;
+    }
+  }
+  function disposeOwner(owner) {
+    if (!owner) return;
+    owner.toolsCleanup?.(); owner.uploadCleanup?.(); for (const reader of owner.histories.values()) reader.close();
+    global.clearTimeout(owner.fitTimer);
+    global.clearTimeout(owner.hideTimer);
+    unbindOwnerEvents(owner);
+    owner.session?.dispose(); owner.actions.remove(); owner.root.remove();
+  }
+  function parkOwner(owner) {
+    if (!owner) return;
+    owner.closeDrawer?.();
+    if (owner.menu) owner.menu.open = false;
+    global.clearTimeout(owner.fitTimer); owner.fitTimer = null;
+    global.clearTimeout(owner.hideTimer); owner.hideTimer = null;
+    unbindOwnerEvents(owner);
+    owner.actions.remove();
+    owner.root.remove();
+    owner.session?.setParked?.(true);
+    warmCache.delete(owner.viewId);
+    warmCache.set(owner.viewId, owner);
+    while (warmCache.size > maxWarmViews) {
+      const oldestKey = warmCache.keys().next().value;
+      const oldest = warmCache.get(oldestKey);
+      warmCache.delete(oldestKey);
+      disposeOwner(oldest);
+    }
+  }
+  function clearWarmCache() {
+    if (!warmCache.size) return;
+    for (const cached of warmCache.values()) disposeOwner(cached);
+    warmCache.clear();
+  }
+
   const api = {
     list: (serverId) => store.list(serverId), get: (id) => store.get(id), supported,
     currentContext: context,
@@ -358,11 +431,58 @@ export function createWorkbench(global, options = {}) {
     async render(serverId, viewId, { container } = {}) {
       if (!container) throw new Error('缺少工作台容器');
       if (mounted?.viewId === viewId && mounted.host === container && mounted.root.isConnected) { mounted.session?.fit(); return; }
-      api.unmount(); const view = store.get(viewId);
+      const view = store.get(viewId);
       if (!view || view.serverId !== serverId) {
+        api.unmount();
         container.replaceChildren(element('div', 'wb-empty', '此浏览器没有保存这个原生工作台。旧版原型布局数据仍保留；请从会话中的现有窗口打开工作台。')); return;
       }
-      const owner = { serverId, viewId, host: container, histories: new Map(), session: null, root: element('section', 'wb-stage terminal-view'), closeDrawer() {} };
+      if (mounted) {
+        const prev = mounted;
+        mounted = null;
+        generation++;
+        const sameWindow = prev.serverId === view.serverId
+          && prev.session?.target?.instanceId === view.instanceId
+          && prev.session?.target?.windowId === view.windowId;
+        const canPark = maxWarmViews > 0
+          && prev.viewId !== viewId
+          && prev.session
+          && !prev.session.disposed
+          && prev.session.status === 'live'
+          && !sameWindow;
+        if (canPark) parkOwner(prev);
+        else disposeOwner(prev);
+      }
+      const cached = warmCache.get(viewId);
+      if (cached) {
+        warmCache.delete(viewId);
+        const stillMatches = cached.serverId === serverId
+          && cached.session
+          && !cached.session.disposed
+          && cached.session.status === 'live'
+          && cached.session.target?.instanceId === view.instanceId
+          && cached.session.target?.sessionId === view.sessionId
+          && cached.session.target?.windowId === view.windowId;
+        if (stillMatches) {
+          mounted = cached;
+          cached.host = container;
+          cached.root.setAttribute('aria-label', view.title);
+          container.replaceChildren(cached.root);
+          doc.body.classList.add('terminal-active');
+          placeToolbar(cached);
+          bindOwnerEvents(cached);
+          cached.session.setParked?.(false);
+          if (pendingFocusPane && cached.session.selectPane?.(pendingFocusPane)) {
+            pendingFocusPane = null;
+          }
+          announceFocus();
+          if (!mobile() && (doc.activeElement === doc.body || cached.root.contains(doc.activeElement))) {
+            cached.session.focus();
+          }
+          return;
+        }
+        disposeOwner(cached);
+      }
+      const owner = { serverId, viewId, host: container, histories: new Map(), session: null, root: element('section', 'wb-stage terminal-view'), eventsBound: false, closeDrawer() {} };
       mounted = owner; const version = generation;
       owner.root.dataset.viewId = viewId; owner.root.setAttribute('aria-label', view.title);
       owner.toolbar = element('header', 'wb-toolbar'); owner.actions = element('div', 'wb-toolbar-actions');
@@ -393,7 +513,6 @@ export function createWorkbench(global, options = {}) {
         }));
       more.append(summary, menu); owner.menu = more; owner.actions.append(more); owner.toolbar.append(owner.actions);
       owner.dismissMenu = (event) => { if (!more.contains(event.target) || event.key === 'Escape') more.open = false; };
-      doc.addEventListener('pointerdown', owner.dismissMenu, true); doc.addEventListener('keydown', owner.dismissMenu);
       owner.notice = element('p', 'wb-notice'); owner.notice.hidden = true; owner.notice.setAttribute('role', 'status');
       owner.terminal = element('div', 'wb-window-terminal');
       owner.message = element('div', 'wb-window-message', '正在准备原生终端…'); owner.message.setAttribute('role', 'status');
@@ -409,12 +528,13 @@ export function createWorkbench(global, options = {}) {
         }
         owner.hideTimer = global.setTimeout(() => {
           owner.hideTimer = null;
-          if (mounted === owner && doc.hidden) owner.session?.setVisible(false);
+          if (mounted === owner && doc.hidden) {
+            owner.session?.setVisible(false);
+            clearWarmCache();
+          }
         }, VISIBILITY_HIDE_DELAY_MS);
       };
-      global.addEventListener('resize', owner.resize);
-      global.visualViewport?.addEventListener?.('resize', owner.resize);
-      doc.addEventListener('visibilitychange', owner.visibility);
+      bindOwnerEvents(owner);
       try {
         const [, tabId] = await Promise.all([supported(serverId), tab]);
         if (mounted !== owner || generation !== version) return;
@@ -433,16 +553,11 @@ export function createWorkbench(global, options = {}) {
       }
     },
     unmount() {
-      generation++; const owner = mounted; mounted = null; if (!owner) return;
-      owner.toolsCleanup?.(); owner.uploadCleanup?.(); for (const reader of owner.histories.values()) reader.close();
-      global.clearTimeout(owner.fitTimer);
-      global.clearTimeout(owner.hideTimer);
-      global.removeEventListener('resize', owner.resize);
-      global.visualViewport?.removeEventListener?.('resize', owner.resize);
-      doc.removeEventListener('visibilitychange', owner.visibility);
-      doc.removeEventListener('pointerdown', owner.dismissMenu, true); doc.removeEventListener('keydown', owner.dismissMenu);
-      if (owner.addedTerminalLayout) doc.getElementById('ms-topbar')?.classList.remove('terminal-layout');
-      owner.session?.dispose(); owner.actions.remove(); owner.root.remove(); doc.body.classList.remove('terminal-active'); announceFocus();
+      generation++; const owner = mounted; mounted = null;
+      disposeOwner(owner);
+      clearWarmCache();
+      doc.body.classList.remove('terminal-active');
+      announceFocus();
     },
     async split(direction = 'horizontal', targetPaneId = null) {
       if (!['horizontal', 'vertical'].includes(direction)) throw new Error('无效分割方向');
@@ -579,9 +694,31 @@ export function createWorkbench(global, options = {}) {
       owner.closeDrawer(); const reader = openHistory(global, { ...selected.target, paneId: id }, { title: store.get(owner.viewId).title, onClose: () => owner.histories.delete(id) });
       owner.histories.set(id, reader); return reader;
     },
-    closeView(id) { if (mounted?.viewId === id) api.unmount(); store.close(id); changed(); emit('workbench-view-closed', { viewId: id }); },
+    closeView(id) {
+      if (mounted?.viewId === id) {
+        generation++; const owner = mounted; mounted = null;
+        disposeOwner(owner);
+        doc.body.classList.remove('terminal-active');
+        announceFocus();
+      }
+      if (warmCache.has(id)) {
+        const cached = warmCache.get(id);
+        warmCache.delete(id);
+        disposeOwner(cached);
+      }
+      store.close(id); changed(); emit('workbench-view-closed', { viewId: id });
+    },
     reconcileWorkspace(serverId, workspace) {
-      if (mounted?.serverId !== serverId || workspace?.complete !== true) return;
+      if (workspace?.complete !== true) return;
+      for (const [cachedId, cached] of [...warmCache.entries()]) {
+        if (cached.serverId !== serverId) continue;
+        const cachedView = store.get(cachedId);
+        if (workspace.instanceId !== cachedView?.instanceId) {
+          warmCache.delete(cachedId);
+          disposeOwner(cached);
+        }
+      }
+      if (mounted?.serverId !== serverId) return;
       const view = viewNow();
       if (workspace.instanceId !== view?.instanceId) mounted.session?.invalidate('tmux 实例已变化，原工作台身份已保留。请从当前窗口新建工作台。');
       // Native context/exit is authoritative. A delayed workspace tree must not

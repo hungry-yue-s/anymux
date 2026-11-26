@@ -49,6 +49,8 @@ describe('client service', () => {
     expect(imports['@anymux/client']).toMatch(/^\/client\/lib\/index\.js\?h=/);
     expect(imports['/client/core/api.js']).toMatch(/^\/client\/core\/api\.js\?h=/);
     expect(html).toMatch(/<script type="module" src="\/client\/boot\.js\?h=[0-9a-f]{12}"><\/script>/);
+    expect(html).toContain('window.__ANYMUX_CLIENT_MANIFEST__=');
+    expect(html).toMatch(/<link rel="modulepreload" href="\/client\/boot\.js\?h=[0-9a-f]{12}">/);
     // Before any module script of the page itself.
     expect(html.indexOf('type="importmap"')).toBeLessThan(html.indexOf('type="module"'));
   });

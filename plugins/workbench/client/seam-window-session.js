@@ -390,12 +390,15 @@ export class SeamWindowSession {
     this._draggingDivider = false;
     this._activeDragCleanup = null;
     this.mobileSplitView = false;
+    this.parked = false;
+    this._webglAttachHandle = null;
 
     const doc = global.document;
     const mobile = !!global.MobileUI?.isMobile();
     this._lastMobileMode = mobile;
     this.fontSize = Math.max(mobile ? 11 : 8, Math.min(22, fontSize || (mobile ? 13 : 14)));
     this.fontReady = false;
+    this.rendererPrepared = true;
 
     this.stage = doc.createElement('div');
     this.stage.className = 'seam-stage';
@@ -463,10 +466,10 @@ export class SeamWindowSession {
     this._listen(global, 'resize', handleViewportResize);
     if (global.visualViewport) this._listen(global.visualViewport, 'resize', handleViewportResize);
 
-    this.ready = this._prepareFonts().then(() => {
+    this._prepareFonts();
+    this.ready = Promise.resolve().then(() => {
       if (this.disposed || !container.isConnected) return;
-      this.rendererPrepared = true;
-      if (this.visible) this._connect();
+      if (this.visible && !this.ws) this._connect();
     });
   }
 
@@ -486,22 +489,27 @@ export class SeamWindowSession {
     this.cleanups.push(() => element?.removeEventListener(name, handler, options));
   }
 
+  _applyReadyFont() {
+    this.fontReady = true;
+    if (!this.panes.size) return;
+    let changed = false;
+    for (const pane of this.panes.values()) {
+      if (!pane.term || pane.term.options.fontFamily === FONT_FAMILY) continue;
+      pane.term.options.fontFamily = FONT_FAMILY;
+      pane.term.clearTextureAtlas?.();
+      changed = true;
+    }
+    if (changed) this.fit();
+  }
+
   async _prepareFonts() {
     try {
       const loaded = await (this.global.TerminalFonts?.coreReady(1500) || Promise.resolve(false));
       if (this.disposed) return;
-      if (loaded === true) this.fontReady = true;
+      if (loaded === true) this._applyReadyFont();
       else if (loaded === null) {
         this.global.TerminalFonts.coreReady(0).then((late) => {
-          if (late && !this.disposed) {
-            this.fontReady = true;
-            for (const pane of this.panes.values()) {
-              if (!pane.term) continue;
-              pane.term.options.fontFamily = FONT_FAMILY;
-              pane.term.clearTextureAtlas?.();
-            }
-            this.fit();
-          }
+          if (late && !this.disposed) this._applyReadyFont();
         }).catch(() => {});
       }
     } catch { /* fallback monospace */ }
@@ -1126,16 +1134,53 @@ export class SeamWindowSession {
     cleanups.push(() => term.element?.removeEventListener('mouseup', onMouseUp));
     this._installTouchSelection(entry);
 
-    if (global.WebglAddon && this.panes.size <= MAX_WEBGL_PANES) {
-      try {
-        const addon = new global.WebglAddon.WebglAddon();
-        addon.onContextLoss(() => { addon.dispose(); if (!this.disposed) term.refresh?.(0, term.rows - 1); });
-        term.loadAddon(addon);
-        entry.webglAddon = addon;
-      } catch { /* canvas fallback */ }
+    if (entry.paneId === this.activePaneId || this.panes.size <= 1) {
+      this._attachWebglAddon(entry);
+    } else {
+      this._scheduleWebglAddons();
     }
-    term.clearTextureAtlas?.();
     this._attachPaneLinkProvider(entry);
+  }
+
+  _attachWebglAddon(entry) {
+    if (this.disposed || this.parked || !this.global.WebglAddon || this.panes.size > MAX_WEBGL_PANES || !entry?.term || entry.isRich || entry.webglAddon) {
+      return;
+    }
+    try {
+      const addon = new this.global.WebglAddon.WebglAddon();
+      addon.onContextLoss(() => { addon.dispose(); if (entry.webglAddon === addon) entry.webglAddon = null; if (!this.disposed) entry.term?.refresh?.(0, entry.term.rows - 1); });
+      entry.term.loadAddon(addon);
+      entry.webglAddon = addon;
+    } catch { /* canvas fallback */ }
+  }
+
+  _cancelWebglAttach() {
+    if (this._webglAttachHandle == null) return;
+    this.global.clearTimeout(this._webglAttachHandle);
+    this._webglAttachHandle = null;
+  }
+
+  _releaseWebglAddons() {
+    this._cancelWebglAttach();
+    for (const pane of this.panes.values()) {
+      if (!pane.webglAddon) continue;
+      pane.webglAddon.dispose?.();
+      pane.webglAddon = null;
+    }
+  }
+
+  _scheduleWebglAddons() {
+    if (this.disposed || this.parked || !this.global.WebglAddon || this.panes.size > MAX_WEBGL_PANES) return;
+    if (this._webglAttachHandle != null) return;
+    this._webglAttachHandle = this.global.setTimeout(() => {
+      this._webglAttachHandle = null;
+      if (this.disposed || this.parked || !this.visible || !this.global.WebglAddon || this.panes.size > MAX_WEBGL_PANES) return;
+      const active = this.activePaneId && this.panes.get(this.activePaneId);
+      if (active) this._attachWebglAddon(active);
+      for (const pane of this.panes.values()) {
+        if (pane !== active) this._attachWebglAddon(pane);
+      }
+    }, 0);
   }
 
   _attachPaneLinkProvider(entry) {
@@ -2427,7 +2472,7 @@ export class SeamWindowSession {
   }
 
   fit() {
-    if (this.disposed || !this.visible || !this.treeHost.isConnected || this.sizeLease !== 'owner' || this._layoutSyncPending) {
+    if (this.disposed || this.parked || !this.visible || !this.treeHost.isConnected || this.sizeLease !== 'owner' || this._layoutSyncPending) {
       this._cancelResizeTimer();
       return;
     }
@@ -2479,7 +2524,7 @@ export class SeamWindowSession {
     this._cancelResizeTimer();
     this.resizeTimer = this.global.setTimeout(() => {
       this.resizeTimer = null;
-      if (this.disposed || !this.visible || this.status !== 'live' || this.sizeLease !== 'owner' || this._layoutSyncPending) return;
+      if (this.disposed || this.parked || !this.visible || this.status !== 'live' || this.sizeLease !== 'owner' || this._layoutSyncPending) return;
       if (this._send({ type: 'resize-window', cols, rows })) {
         this.lastRequestedSize = key;
         this._resizeHistory.add(key);
@@ -2487,13 +2532,40 @@ export class SeamWindowSession {
     }, 80);
   }
 
+  setParked(parked) {
+    const next = Boolean(parked);
+    if (this.disposed || this.parked === next) return;
+    this.parked = next;
+    if (next) {
+      this._cancelResizeTimer();
+      this._releaseWebglAddons();
+      if (this.ws?.readyState === 1 && this.visible) {
+        this._send({ type: 'visibility', visible: true, background: true });
+      }
+      return;
+    }
+    if (this.ws?.readyState === 1 && this.visible) {
+      this._send({ type: 'visibility', visible: true, background: false });
+    }
+    for (const pane of this.panes.values()) {
+      if (!pane.isRich && pane.term) {
+        pane.term.refresh?.(0, Math.max(0, pane.term.rows - 1));
+      }
+    }
+    this._scheduleWebglAddons();
+    this.fit();
+    if (!this.ws && this.visible && this.rendererPrepared && !this.retryTimer && !['detached', 'exited', 'invalid'].includes(this.status)) {
+      this._connect();
+    }
+  }
+
   setVisible(visible) {
     if (this.visible === visible) return;
     this.visible = visible;
     if (this.ws?.readyState === 1) {
-      this._send({ type: 'visibility', visible });
+      this._send({ type: 'visibility', visible, ...(visible && this.parked ? { background: true } : {}) });
     }
-    if (visible) {
+    if (visible && !this.parked) {
       this.fit();
       if (!this.ws && this.rendererPrepared && !this.retryTimer) this._connect();
     }
@@ -2817,6 +2889,7 @@ export class SeamWindowSession {
   dispose() {
     if (this.disposed) return;
     this.disposed = true;
+    this._cancelWebglAttach();
     this._activeDragCleanup?.(false);
     this._disconnect();
     this.global.clearTimeout(this.wheelTimer);

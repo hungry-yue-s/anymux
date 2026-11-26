@@ -85,17 +85,24 @@ export function registerWorkbenchShell(global, api) {
     async mount({ route, serverId, view, isCurrent }) {
       const viewId = route.params.viewId, key = serverId + '\u0000' + viewId;
       if (mountKey === key && mountedHost?.isConnected && view.contains(mountedHost)) return;
-      api.unmount(); mountKey = null;
-      global.TerminalTarget.set({ serverId, viewId, provider: 'tmux' });
-      if (global.state) global.state.currentTab = 'terminal';
-      view.classList.add('terminal-mode');
-      view.innerHTML = '<section class="section terminal-stage" id="ms-workbench-host"></section>';
-      const host = view.firstElementChild, saved = api.get(viewId);
+      const saved = api.get(viewId);
       if (!saved || saved.serverId !== serverId) {
+        api.unmount(); mountKey = null;
+        global.TerminalTarget.set({ serverId, viewId, provider: 'tmux' });
+        if (global.state) global.state.currentTab = 'terminal';
+        view.classList.add('terminal-mode');
+        view.innerHTML = '<section class="section terminal-stage" id="ms-workbench-host"></section>';
+        const host = view.firstElementChild;
         global.FilePreview?.switchDockContext(null, null);
         host.textContent = '此原生工作台不存在。旧版布局数据仍保留，请从现有窗口打开工作台。';
         return;
       }
+      mountKey = null;
+      global.TerminalTarget.set({ serverId, viewId, provider: 'tmux' });
+      if (global.state) global.state.currentTab = 'terminal';
+      view.classList.add('terminal-mode');
+      view.innerHTML = '<section class="section terminal-stage" id="ms-workbench-host"></section>';
+      const host = view.firstElementChild;
       if (!global.AppShell.workspace(serverId)) global.MsApp.refreshWorkspace(serverId, { shared: true });
       global.AppShell.setHeader(global.AppShell.server(serverId)?.name || serverId, saved.title || '工作台', '');
       // Reserve restored dock width before xterm measures its first grid.

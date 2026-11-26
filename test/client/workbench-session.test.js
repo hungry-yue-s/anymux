@@ -1493,4 +1493,60 @@ describe('SeamWindowSession multi-pane workbench session', () => {
     session.dispose();
     f.close();
   });
+
+  it('connects without waiting for fonts, defers secondary WebGL addons, and releases/re-attaches WebGL on setParked', async () => {
+    const f = fixture();
+    let resolveLateFont;
+    f.win.TerminalFonts = {
+      coreReady: (ms) => ms === 0 ? new Promise((r) => { resolveLateFont = r; }) : Promise.resolve(null),
+      ensure: () => Promise.resolve(false),
+    };
+    const webglAddons = [];
+    f.win.WebglAddon = {
+      WebglAddon: class {
+        constructor() { this.disposed = false; webglAddons.push(this); }
+        onContextLoss() {}
+        dispose() { this.disposed = true; }
+      },
+    };
+
+    const session = new SeamWindowSession(f.win, { container: f.host, target: { ...target } });
+    // ready resolves before font finishes -> WebSocket opens immediately without blocking behind fonts!
+    await session.ready;
+    expect(f.sockets).toHaveLength(1);
+    const socket = f.sockets[0];
+    hydrateWindow(socket);
+
+    // Active pane %1 gets WebGL synchronously; secondary pane %2 is deferred one tick!
+    expect(webglAddons).toHaveLength(1);
+    expect(session.panes.get('%1').webglAddon).toBe(webglAddons[0]);
+    expect(session.panes.get('%2').webglAddon).toBeNull();
+    await new Promise((r) => setTimeout(r, 10));
+    expect(webglAddons).toHaveLength(2);
+    expect(session.panes.get('%2').webglAddon).toBe(webglAddons[1]);
+
+    // Late font resolves -> updates fontFamily and clears atlas cleanly
+    resolveLateFont(true);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(session.fontReady).toBe(true);
+    expect(f.terminals[0].options.fontFamily).toContain('Anymux Mono');
+
+    // Parking releases WebGL contexts and sends background visibility
+    session.setParked(true);
+    expect(webglAddons.every((a) => a.disposed)).toBe(true);
+    expect(session.panes.get('%1').webglAddon).toBeNull();
+    expect(session.panes.get('%2').webglAddon).toBeNull();
+    expect(socket.sent.at(-1)).toEqual({ type: 'visibility', visible: true, background: true });
+
+    // Unparking restores foreground visibility and schedules WebGL re-attach
+    session.setParked(false);
+    expect(socket.sent.at(-1)).toEqual({ type: 'visibility', visible: true, background: false });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(webglAddons).toHaveLength(4);
+    expect(session.panes.get('%1').webglAddon).not.toBeNull();
+    expect(session.panes.get('%2').webglAddon).not.toBeNull();
+
+    session.dispose();
+    f.close();
+  });
 });

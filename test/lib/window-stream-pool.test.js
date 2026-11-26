@@ -429,4 +429,81 @@ describe('ControlPool multi-pane window-stream', () => {
     lease.close();
     pool.dispose();
   });
+
+  it('caches positive capabilities across concurrent calls and supports fast base64 snapshot validation', async () => {
+    let displayCalls = 0;
+    const pool = new ControlPool({
+      tmux: {
+        run: async argv => {
+          if (argv[0] === 'display-message') {
+            displayCalls++;
+            await new Promise(r => setTimeout(r, 10));
+            return '1|1';
+          }
+          throw new Error(`unexpected: ${argv.join(' ')}`);
+        },
+      },
+      workspace: {},
+    });
+
+    const [capA, capB, winCap] = await Promise.all([
+      pool.capability(),
+      pool.capability(),
+      pool.windowStreamCapability(),
+    ]);
+    expect(displayCalls).toBe(1);
+    expect(capA).toEqual({ available: true, protocol: 1, snapshotVersion: 1 });
+    expect(capB).toEqual(capA);
+    expect(winCap).toEqual({ available: true, protocol: 1, snapshotVersion: 1, binary: true, richPane: true });
+
+    // Cached hit makes 0 additional tmux subprocess calls.
+    expect(await pool.capability()).toEqual(capA);
+    expect(displayCalls).toBe(1);
+
+    const { decodeSnapshot } = await import('../../lib/terminal/control-pool.js');
+    for (const raw of ['', 'YQ==', 'YWI=', 'YWJj', Buffer.from('\x1bcHELLO_WORLD!').toString('base64')]) {
+      const parsed = decodeSnapshot(Buffer.from(JSON.stringify({
+        version: 1, instanceId: '99:100', windowId: '@2', paneId: '%3', cols: 80, rows: 24, dataBase64: raw,
+      })));
+      expect(parsed.dataBase64).toBe(raw);
+    }
+    for (const bad of ['abc', 'ab=d', 'ab_d', '====']) {
+      expect(() => decodeSnapshot(Buffer.from(JSON.stringify({
+        version: 1, instanceId: '99:100', windowId: '@2', paneId: '%3', cols: 80, rows: 24, dataBase64: bad,
+      })))).toThrow();
+    }
+
+    pool.dispose();
+  });
+
+  it('keeps background parked subscribers warm without stealing owner lease or re-snapshotting on foreground restore', async () => {
+    const { pool, controls, target } = makeFixture();
+    const firstFrames = [];
+    const secondFrames = [];
+
+    const first = await pool.subscribeWindow(target, f => firstFrames.push(Buffer.isBuffer(f) ? decodeBinaryFrame(f) : f));
+    const snapsAfterFirst = controls[0].commands.filter(c => c.startsWith('capture-pane')).length;
+
+    // Parking first subscriber sends visibility(true, { background: true }) — keeps streaming 0x01 without re-snapshot.
+    await first.visibility(true, { background: true });
+    expect(controls[0].commands.filter(c => c.startsWith('capture-pane')).length).toBe(snapsAfterFirst);
+
+    // Second subscriber in another client becomes owner; first remains warm in background and keeps receiving 0x01.
+    const second = await pool.subscribeWindow(target, f => secondFrames.push(Buffer.isBuffer(f) ? decodeBinaryFrame(f) : f));
+    controls[0].emit('output', '%3', Buffer.from('warm-msg'));
+    expect(firstFrames.filter(f => f.kind === 'output').at(-1)?.data.toString()).toBe('warm-msg');
+    expect(secondFrames.filter(f => f.kind === 'output').at(-1)?.data.toString()).toBe('warm-msg');
+    expect(await first.input('%3', 'no')).toBe(false);
+
+    // Restoring first to foreground (visible=true, background=false) reclaims owner WITHOUT any capture-pane re-snapshot!
+    const snapsBeforeForeground = controls[0].commands.filter(c => c.startsWith('capture-pane')).length;
+    await first.visibility(true, { background: false });
+    expect(controls[0].commands.filter(c => c.startsWith('capture-pane')).length).toBe(snapsBeforeForeground);
+    expect(await first.input('%3', 'ok')).toBe(true);
+    expect(await second.input('%3', 'no')).toBe(false);
+
+    first.close();
+    second.close();
+    pool.dispose();
+  });
 });

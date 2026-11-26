@@ -93,9 +93,18 @@ export default class ClientService extends Service {
       ctx.http.get(pattern, ({ req, res, url }) => this._sendFile(req, res, url));
     }
 
-    // Composed pages carry the import map and the boot script.
+    // Composed pages carry the import map, inline manifest, modulepreload links, and boot script.
     ctx.inject(['ui'], (ctx) => {
-      ctx.ui.part('head', 1, async () => `<script type="importmap">${JSON.stringify(await this.importMap()).replace(/</g, '\\u003c')}</script>`);
+      ctx.ui.part('head', 1, async () => {
+        const importMap = await this.importMap();
+        const manifest = this.manifest();
+        const bootHref = importMap.imports[BOOT] || await this.hashedUrl(BOOT);
+        const preloadUrls = [bootHref, ...manifest.entries.map((entry) => importMap.imports[entry.url] || entry.url)];
+        const preloads = preloadUrls.map((href) => `<link rel="modulepreload" href="${String(href).replace(/"/g, '&quot;')}">`).join('');
+        return `<script type="importmap">${JSON.stringify(importMap).replace(/</g, '\\u003c')}</script>`
+          + `<script>window.__ANYMUX_CLIENT_MANIFEST__=${JSON.stringify(manifest).replace(/</g, '\\u003c')};</script>`
+          + preloads;
+      });
       ctx.ui.part('body', 1000, async () => `<script type="module" src="${await this.hashedUrl(BOOT)}"></script>`);
     });
   }

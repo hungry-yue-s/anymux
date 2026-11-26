@@ -24,16 +24,23 @@ ctx.plugin(Timer);
 globalThis.anymux = ctx;
 
 async function start() {
-  const response = await fetch('/client/manifest.json', { headers: { Accept: 'application/json' } });
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  const manifest = await response.json();
-  for (const entry of manifest.entries) {
+  const inline = globalThis.__ANYMUX_CLIENT_MANIFEST__;
+  let manifest = inline && Array.isArray(inline.entries) ? inline : null;
+  if (!manifest) {
+    const response = await fetch('/client/manifest.json', { headers: { Accept: 'application/json' } });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    manifest = await response.json();
+  }
+  const loaded = await Promise.all(manifest.entries.map(async (entry) => {
     try {
-      const mod = await import(entry.url);
-      ctx.plugin(mod.default ?? mod, entry.config ?? undefined);
+      return { entry, mod: await import(entry.url), error: null };
     } catch (error) {
-      ctx.logger('boot').error('cannot load %s: %s', entry.url, error?.message ?? error);
+      return { entry, mod: null, error };
     }
+  }));
+  for (const { entry, mod, error } of loaded) {
+    if (error) ctx.logger('boot').error('cannot load %s: %s', entry.url, error?.message ?? error);
+    else ctx.plugin(mod.default ?? mod, entry.config ?? undefined);
   }
 }
 
