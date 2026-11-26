@@ -14,8 +14,8 @@ function encodeSnapshotBinary({ paneId, seq, cols, rows, text, historyTotal = 0,
   view.setUint32(5, seq, false);
   view.setUint16(9, cols, false);
   view.setUint16(11, rows, false);
-  view.setUint32(13, historyTotal, false);
-  view.setUint32(17, historyLines, false);
+  view.setUint32(13, historyLines, false);
+  view.setUint32(17, historyTotal, false);
   new Uint8Array(buf, 21).set(payload);
   return buf;
 }
@@ -1379,7 +1379,7 @@ describe('SeamWindowSession multi-pane workbench session', () => {
     f.close();
   });
 
-  it('skips synchronous term.reset() for RIS snapshots, wraps DEC 2026 sync update, and binds allowTransparency to non-zero transparency', async () => {
+  it('places DEC 2026 sync update after RIS, skips term.reset() for RIS, skips initial refresh SIGWINCH within padding tolerance, and binds allowTransparency to non-zero transparency', async () => {
     const f = fixture();
     let transparency = 0;
     f.win.Theme.getTransparency = () => transparency;
@@ -1390,16 +1390,52 @@ describe('SeamWindowSession multi-pane workbench session', () => {
 
     expect(f.terminals[0].options.allowTransparency).toBe(false);
     const resetsBefore = f.terminals[0].resets;
-    socket.onmessage({ data: encodeSnapshotBinary({ paneId: '%1', seq: 1, cols: 60, rows: 36, text: '\x1bcUPDATED' }) });
+    socket.onmessage({ data: encodeSnapshotBinary({ paneId: '%1', seq: 1, cols: 60, rows: 36, historyLines: 20, historyTotal: 90, text: '\x1bcUPDATED' }) });
     expect(f.terminals[0].resets).toBe(resetsBefore);
-    const lastWrite = new TextDecoder().decode(f.terminals[0].writes.at(-1));
-    expect(lastWrite).toBe('\x1b[?2026h\x1bcUPDATED\x1b[?2026l');
+    expect(session.panes.get('%1').historyLines).toBe(20);
+    expect(session.panes.get('%1').historyTotal).toBe(90);
+    const risWrite = new TextDecoder().decode(f.terminals[0].writes.at(-1));
+    expect(risWrite).toBe('\x1bc\x1b[?2026hUPDATED\x1b[?2026l');
+
+    socket.onmessage({ data: encodeSnapshotBinary({ paneId: '%1', seq: 2, cols: 60, rows: 36, text: 'PLAIN' }) });
+    expect(f.terminals[0].resets).toBe(resetsBefore + 1);
+    const plainWrite = new TextDecoder().decode(f.terminals[0].writes.at(-1));
+    expect(plainWrite).toBe('PLAIN');
 
     transparency = 0.25;
     f.win.document.dispatchEvent(new f.win.Event('tmux-theme-change'));
     expect(f.terminals[0].options.allowTransparency).toBe(true);
     session.dispose();
     f.close();
+
+    // Fresh page load / refresh where windowCols=200 fits [idealCols(199) - 2, maxCols(200)]: ZERO resize-window sent!
+    vi.useFakeTimers();
+    const fRefresh = fixture();
+    Object.defineProperties(fRefresh.host, { clientWidth: { configurable: true, value: 200 * 8 + 10 }, clientHeight: { configurable: true, value: 40 * 18 + 38 } });
+    const sRefresh = new SeamWindowSession(fRefresh.win, { container: fRefresh.host, target: { ...target } });
+    await sRefresh.ready;
+    const sockRefresh = fRefresh.sockets[0];
+    sockRefresh.readyState = 1;
+    sockRefresh.onopen?.();
+    sockRefresh.onmessage({ data: JSON.stringify({
+      type: 'ready', protocol: 1, instanceId: '42:123', sessionId: '$1', windowId: '@1',
+      windowCols: 200, windowRows: 40, zoomed: false, sizeLease: 'owner', inputAllowed: true, foreignClient: false,
+    }) });
+    sendLayout(sockRefresh, {
+      windowCols: 200, windowRows: 40, activePaneId: '%1',
+      panes: [
+        { id: '%1', index: 0, active: true, width: 100, height: 39, command: 'agy' },
+        { id: '%2', index: 1, active: false, width: 99, height: 39, command: 'zsh' },
+      ],
+      tree: { type: 'split', dir: 'row', width: 200, height: 40, children: [{ type: 'pane', paneId: '%1', width: 100, height: 40 }, { type: 'pane', paneId: '%2', width: 99, height: 40 }] },
+    });
+    sockRefresh.onmessage({ data: encodeSnapshotBinary({ paneId: '%1', seq: 0, cols: 100, rows: 39, text: '\x1bcA' }) });
+    sockRefresh.onmessage({ data: encodeSnapshotBinary({ paneId: '%2', seq: 0, cols: 99, rows: 39, text: '\x1bcB' }) });
+    await vi.advanceTimersByTimeAsync(150);
+    expect(sockRefresh.sent.filter((m) => m.type === 'resize-window')).toHaveLength(0);
+    sRefresh.dispose();
+    fRefresh.close();
+    vi.useRealTimers();
 
     const f2 = fixture();
     f2.win.Theme.getTransparency = () => 0.3;

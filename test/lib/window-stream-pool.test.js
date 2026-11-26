@@ -408,6 +408,24 @@ describe('ControlPool multi-pane window-stream', () => {
     await lease.resizePaneBatch([{ paneId: '%4', cols: 70 }]);
     const resizedSnap = frames.filter(f => f.kind === 'snapshot' && f.paneId === '%4').at(-1);
     expect(resizedSnap.historyLines).toBe(10);
+
+    // Post-resize SIGWINCH redraw storm (\x1b[2J\x1b[3J\x1b[H + 60KB burst) is coalesced into a single compacted 0x02 snapshot with 0 bytes of flooded 0x01 output.
+    const outputsBeforeBurst = frames.filter(f => f.kind === 'output' && f.paneId === '%4').length;
+    const snapsBeforeBurst = frames.filter(f => f.kind === 'snapshot' && f.paneId === '%4').length;
+    control.emit('output', '%4', Buffer.from('\x1b[2J\x1b[3J\x1b[H' + 'TURN_REPLAY\r\n'.repeat(4500)));
+    expect(frames.filter(f => f.kind === 'output' && f.paneId === '%4')).toHaveLength(outputsBeforeBurst);
+    await new Promise(r => setTimeout(r, 150));
+    const snapsAfterBurst = frames.filter(f => f.kind === 'snapshot' && f.paneId === '%4');
+    expect(snapsAfterBurst).toHaveLength(snapsBeforeBurst + 1);
+    expect(snapsAfterBurst.at(-1).historyLines).toBe(10);
+
+    // Normal small live output still streams immediately as binary 0x01 after burst settles.
+    control.emit('output', '%4', Buffer.from('small-live-line\r\n'));
+    await new Promise(r => setTimeout(r, 15));
+    const tailOutputs = frames.filter(f => f.kind === 'output' && f.paneId === '%4');
+    expect(tailOutputs.length).toBeGreaterThan(outputsBeforeBurst);
+    expect(tailOutputs.at(-1).data.toString('utf8')).toBe('small-live-line\r\n');
+
     lease.close();
     pool.dispose();
   });

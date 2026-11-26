@@ -84,8 +84,8 @@ export function decodeWindowBinaryFrame(raw) {
       seq,
       cols: view.getUint16(9, false),
       rows: view.getUint16(11, false),
-      historyTotal: view.getUint32(13, false),
-      historyLines: view.getUint32(17, false),
+      historyLines: view.getUint32(13, false),
+      historyTotal: view.getUint32(17, false),
       data: bytes.subarray(21),
     };
   }
@@ -746,10 +746,13 @@ export class SeamWindowSession {
     if (frame.data.byteLength === 0) {
       finishRestore();
     } else if (hasRis) {
-      const wrapped = new Uint8Array(SYNC_UPDATE_START.byteLength + frame.data.byteLength + SYNC_UPDATE_END.byteLength);
-      wrapped.set(SYNC_UPDATE_START, 0);
-      wrapped.set(frame.data, SYNC_UPDATE_START.byteLength);
-      wrapped.set(SYNC_UPDATE_END, SYNC_UPDATE_START.byteLength + frame.data.byteLength);
+      const body = frame.data.subarray(2);
+      const wrapped = new Uint8Array(2 + SYNC_UPDATE_START.byteLength + body.byteLength + SYNC_UPDATE_END.byteLength);
+      wrapped[0] = 0x1b;
+      wrapped[1] = 0x63;
+      wrapped.set(SYNC_UPDATE_START, 2);
+      wrapped.set(body, 2 + SYNC_UPDATE_START.byteLength);
+      wrapped.set(SYNC_UPDATE_END, 2 + SYNC_UPDATE_START.byteLength + body.byteLength);
       entry.term.write(wrapped, finishRestore);
     } else {
       entry.term.write(frame.data, finishRestore);
@@ -2325,6 +2328,24 @@ export class SeamWindowSession {
     return this._viewportEnvelopeKey(cell) + '|' + (this._layoutTopologyKey() || '');
   }
 
+  _hasMeasuredCellMetrics() {
+    let hasTerminal = false;
+    for (const entry of this.panes.values()) {
+      if (!entry?.term || entry.isRich) continue;
+      hasTerminal = true;
+      const dims = entry.term?._core?._renderService?.dimensions?.css?.cell;
+      if (dims?.width > 2 && dims?.height > 4) return true;
+      if (entry.body?.isConnected) {
+        const screen = entry.body.querySelector?.('.xterm-screen');
+        const rect = screen?.getBoundingClientRect?.();
+        if (rect?.width > 0 && rect?.height > 0 && entry.term.cols > 0 && entry.term.rows > 0) {
+          return true;
+        }
+      }
+    }
+    return !hasTerminal;
+  }
+
   _cellMetrics() {
     const active = this.activePaneId && this.panes.get(this.activePaneId);
     const ordered = active ? [active, ...this.panes.values()] : [...this.panes.values()];
@@ -2410,6 +2431,10 @@ export class SeamWindowSession {
       this._cancelResizeTimer();
       return;
     }
+    if (!this._hasMeasuredCellMetrics()) {
+      this._cancelResizeTimer();
+      return;
+    }
     const cell = this._cellMetrics();
     const { cols: idealCols, rows: idealRows } = this._measureWindowGrid();
     if (this.status !== 'live' || idealCols < 2 || idealRows < 2) {
@@ -2419,9 +2444,9 @@ export class SeamWindowSession {
     const viewportEnv = this._viewportEnvelopeKey(cell);
     let cols = idealCols;
     let rows = idealRows;
-    // After a viewport has settled, avoid shrinking unrelated panes on a local
-    // split unless the added pane chrome would clip terminal cells.
-    if (!this._isMobileSinglePane() && !this.zoomed && this.layoutTree && this._settledViewportEnv === viewportEnv) {
+    // Preserve an already-fitting tmux window within compressible padding on
+    // initial mount/refresh and local splits unless a real viewport change occurs.
+    if (!this._isMobileSinglePane() && !this.zoomed && this.layoutTree && (!this._settledViewportEnv || this._settledViewportEnv === viewportEnv)) {
       const metrics = measureLayoutMetrics(this.layoutTree, this.panes, cell, this._isMobile() ? MOBILE_PANE_RAIL_PX : PANE_RAIL_PX);
       const maxCols = Math.max(2, Math.floor(Math.max(cell.width * 2, this.treeHost.clientWidth - metrics.minNetWidthPx) / cell.width));
       const maxRows = Math.max(2, Math.floor(Math.max(cell.height * 2, this.treeHost.clientHeight - metrics.minNetHeightPx) / cell.height));
