@@ -24,4 +24,5 @@ done
 
 # -D keeps the server in the foreground for launchd and disables exit-empty.
 # tmux explicitly forbids combining -D with a command such as start-server.
+printf '%s run-tmux-server: exec %s -D (pid=%s)\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$TMUX_BIN" "$$" >&2
 exec "$TMUX_BIN" -D

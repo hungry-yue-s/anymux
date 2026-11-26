@@ -41,6 +41,8 @@ describe('native workbench UI', () => {
     notice.querySelector('.terminal-status-secondary').click();
     expect(notice.classList.contains('is-collapsed')).toBe(true);
     expect(session.refresh).not.toHaveBeenCalled();
+    notice.querySelector('.terminal-status-copy strong').click();
+    expect(notice.classList.contains('is-collapsed')).toBe(false);
     notice.querySelector('.terminal-status-primary').click();
     expect(session.refresh).toHaveBeenCalledOnce(); f.close();
   });

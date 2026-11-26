@@ -262,4 +262,34 @@ describe('ControlPool multi-pane window-stream', () => {
     lease.close();
     pool.dispose();
   });
+
+  it('demotes earlier window subscribers to observer, lets observer reclaim ownership via takeover(), and restores remaining subscriber on close', async () => {
+    const { pool, target } = makeFixture();
+    const desktopFrames = [];
+    const mobileFrames = [];
+
+    const desktop = await pool.subscribeWindow(target, f => desktopFrames.push(Buffer.isBuffer(f) ? decodeBinaryFrame(f) : f));
+    expect(desktopFrames.find(f => f.type === 'ready')).toMatchObject({ sizeLease: 'owner', inputAllowed: true });
+
+    const mobile = await pool.subscribeWindow(target, f => mobileFrames.push(Buffer.isBuffer(f) ? decodeBinaryFrame(f) : f));
+    expect(mobileFrames.find(f => f.type === 'ready')).toMatchObject({ sizeLease: 'owner', inputAllowed: true });
+    expect(desktopFrames.filter(f => f.type === 'ready').at(-1)).toMatchObject({ sizeLease: 'observer', inputAllowed: false });
+    expect(await desktop.input('%3', 'ls')).toBe(false);
+
+    // Demoted observer reclaims ownership via takeover(), demoting mobile to observer.
+    expect(await desktop.takeover()).toBe(true);
+    expect(desktopFrames.filter(f => f.type === 'ready').at(-1)).toMatchObject({ sizeLease: 'owner', inputAllowed: true });
+    expect(mobileFrames.filter(f => f.type === 'ready').at(-1)).toMatchObject({ sizeLease: 'observer', inputAllowed: false });
+    expect(await desktop.input('%3', 'ls')).toBe(true);
+    expect(await mobile.input('%3', 'ls')).toBe(false);
+    expect(await desktop.resizeWindow(140, 40)).toBe(true);
+
+    // When desktop closes, mobile automatically regains owner lease.
+    desktop.close();
+    await new Promise(r => setTimeout(r, 10));
+    expect(mobileFrames.filter(f => f.type === 'ready').at(-1)).toMatchObject({ sizeLease: 'owner', inputAllowed: true });
+
+    mobile.close();
+    pool.dispose();
+  });
 });

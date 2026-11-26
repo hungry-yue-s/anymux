@@ -203,6 +203,8 @@ describe('reconnecting a terminal', () => {
     notice.querySelector('.terminal-status-secondary').click();
     expect(notice.classList.contains('is-collapsed')).toBe(true);
     expect(sockets).toHaveLength(1);
+    notice.querySelector('.terminal-status-copy strong').click();
+    expect(notice.classList.contains('is-collapsed')).toBe(false);
     notice.querySelector('.terminal-status-primary').click();
     expect(sockets).toHaveLength(2);
     win.close();

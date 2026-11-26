@@ -1,0 +1,135 @@
+--- a/control.c	2026-11-26 10:40:39
++++ b/control.c	2026-11-26 10:40:39
+@@ -592,6 +592,7 @@
+ 
+ ignore:
+ 	log_debug("%s: %s: ignoring pane %%%u", __func__, c->name, wp->id);
++	control_discard_pane(c, cp);
+ 	window_pane_update_used_data(wp, &cp->offset, SIZE_MAX);
+ 	window_pane_update_used_data(wp, &cp->queued, SIZE_MAX);
+ }
+@@ -760,9 +761,33 @@
+ 			evbuffer_add_printf(message, "%%output %%%u ", wp->id);
+ 	}
+ 
++	if (cp->offset.used < wp->base_offset) {
++		fprintf(stderr,
++		    "tmux[%ld]: control output underflow: %%%u used=%zu base=%zu want=%zu\n",
++		    (long)getpid(), wp->id, cp->offset.used, wp->base_offset,
++		    size);
++		fflush(stderr);
++		evbuffer_free(message);
++		if (c->exit_message == NULL)
++			c->exit_message = xstrdup("control output desync");
++		c->flags |= CLIENT_EXIT;
++		control_discard(c);
++		return (NULL);
++	}
+ 	new_data = window_pane_get_new_data(wp, &cp->offset, &new_size);
+-	if (new_size < size)
+-		fatalx("not enough data: %zu < %zu", new_size, size);
++	if (new_size < size) {
++		fprintf(stderr,
++		    "tmux[%ld]: control output desync: %%%u avail=%zu want=%zu used=%zu base=%zu\n",
++		    (long)getpid(), wp->id, new_size, size, cp->offset.used,
++		    wp->base_offset);
++		fflush(stderr);
++		evbuffer_free(message);
++		if (c->exit_message == NULL)
++			c->exit_message = xstrdup("control output desync");
++		c->flags |= CLIENT_EXIT;
++		control_discard(c);
++		return (NULL);
++	}
+ 	for (i = 0; i < size; i++) {
+ 		u_char ch = new_data[i];
+ 		if (ch < ' ' || ch == '\\') {
+@@ -814,7 +839,9 @@
+ 	uint64_t		 age, t = get_timer();
+ 
+ 	wp = control_window_pane(c, cp->pane);
+-	if (wp == NULL || wp->fd == -1) {
++	if (wp == NULL || wp->fd == -1 ||
++	    (c->flags & (CONTROL_IGNORE_FLAGS|CLIENT_EXIT)) ||
++	    (cp->flags & (CONTROL_PANE_OFF|CONTROL_PANE_PAUSED))) {
+ 		TAILQ_FOREACH_SAFE(cb, &cp->blocks, entry, cb1) {
+ 			TAILQ_REMOVE(&cp->blocks, cb, entry);
+ 			control_free_block(cs, cb);
+@@ -846,6 +873,8 @@
+ 		used += size;
+ 
+ 		message = control_append_data(c, cp, age, message, wp, size);
++		if (message == NULL)
++			break;
+ 
+ 		cb->size -= size;
+ 		if (cb->size == 0) {
+--- a/log.c	2026-08-13 13:55:59
++++ b/log.c	2026-11-26 10:40:39
+@@ -22,6 +22,7 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
++#include <time.h>
+ #include <unistd.h>
+ 
+ #include "tmux.h"
+@@ -135,6 +136,26 @@
+ 	va_end(ap);
+ }
+ 
++static void
++log_stderr_prefix(const char *prefix)
++{
++	struct timeval	 tv;
++	struct tm	 tm;
++	time_t		 sec;
++	char		 buf[32];
++
++	gettimeofday(&tv, NULL);
++	sec = tv.tv_sec;
++	if (gmtime_r(&sec, &tm) != NULL &&
++	    strftime(buf, sizeof buf, "%Y-%m-%dT%H:%M:%S", &tm) != 0)
++		fprintf(stderr, "%s.%03dZ tmux[%ld]: %s", buf,
++		    (int)(tv.tv_usec / 1000), (long)getpid(), prefix);
++	else
++		fprintf(stderr, "%lld.%06d tmux[%ld]: %s",
++		    (long long)tv.tv_sec, (int)tv.tv_usec, (long)getpid(),
++		    prefix);
++}
++
+ /* Log a critical error with error string and die. */
+ __dead void
+ fatal(const char *msg, ...)
+@@ -146,7 +167,14 @@
+ 		exit(1);
+ 
+ 	va_start(ap, msg);
+-	log_vwrite(msg, ap, tmp);
++	if (log_file != NULL)
++		log_vwrite(msg, ap, tmp);
++	else {
++		log_stderr_prefix(tmp);
++		vfprintf(stderr, msg, ap);
++		fputc('\n', stderr);
++		fflush(stderr);
++	}
+ 	va_end(ap);
+ 
+ 	exit(1);
+@@ -159,7 +187,14 @@
+ 	va_list	 ap;
+ 
+ 	va_start(ap, msg);
+-	log_vwrite(msg, ap, "fatal: ");
++	if (log_file != NULL)
++		log_vwrite(msg, ap, "fatal: ");
++	else {
++		log_stderr_prefix("fatal: ");
++		vfprintf(stderr, msg, ap);
++		fputc('\n', stderr);
++		fflush(stderr);
++	}
+ 	va_end(ap);
+ 
+ 	exit(1);

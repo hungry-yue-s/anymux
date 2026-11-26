@@ -2224,17 +2224,30 @@ function _showTerminalStatus(term, paneId, nozoom, reason, errorMessage) {
   notice.setAttribute('role', takenOver ? 'alert' : 'status');
   var card = document.createElement('div');
   card.className = 'terminal-status-card';
+  var iconWrap = document.createElement('div');
+  iconWrap.className = 'terminal-status-icon';
+  iconWrap.innerHTML = takenOver
+    ? '<svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="2.5" width="10" height="19" rx="2.2"/><path d="M11 18h2"/></svg>'
+    : '<svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16h.01"/></svg>';
+  var main = document.createElement('div');
+  main.className = 'terminal-status-main';
   var copy = document.createElement('div');
   copy.className = 'terminal-status-copy';
   var title = document.createElement('strong');
   title.textContent = takenOver ? '会话已被其他端接管' : ended ? '会话已结束' : reason === 'rejected' ? '无法连接此终端' : '终端连接已结束';
+  title.addEventListener('click', function () {
+    if (!notice.classList.contains('is-collapsed')) return;
+    notice.classList.remove('is-collapsed');
+    notice.setAttribute('role', takenOver ? 'alert' : 'status');
+  });
   var detail = document.createElement('span');
   detail.textContent = takenOver ? '画面已暂停更新，终端任务继续运行。' : ended ? '已保留最后画面，可查看和复制。' : errorMessage || '画面已暂停更新，可尝试重新连接。';
-  copy.append(title, detail); card.appendChild(copy);
+  copy.append(title, detail); main.appendChild(copy);
+  var button = null;
   if (!ended && reason !== 'rejected') {
     var actions = document.createElement('div');
     actions.className = 'terminal-status-actions';
-    var button = document.createElement('button');
+    button = document.createElement('button');
     button.type = 'button';
     button.className = 'terminal-status-primary';
     button.textContent = takenOver ? '重新接管' : '重新连接';
@@ -2250,21 +2263,24 @@ function _showTerminalStatus(term, paneId, nozoom, reason, errorMessage) {
       terminalState.pendingWs = ws;
     });
     actions.appendChild(button);
-    if (takenOver) {
-      var inspect = document.createElement('button');
-      inspect.type = 'button';
-      inspect.className = 'terminal-status-secondary';
-      inspect.textContent = '查看最后画面';
-      inspect.addEventListener('click', function (event) {
-        event.stopPropagation();
-        if (terminalState.term !== term || !notice.isConnected) return;
-        notice.classList.add('is-collapsed');
-        notice.setAttribute('role', 'status');
-        button.focus({ preventScroll: true });
-      });
-      actions.appendChild(inspect);
-    }
-    card.appendChild(actions);
+    main.appendChild(actions);
+  }
+  card.append(iconWrap, main);
+  if (takenOver && button) {
+    var minimize = document.createElement('button');
+    minimize.type = 'button';
+    minimize.className = 'terminal-status-secondary is-minimize';
+    minimize.title = '最小化查看最后画面';
+    minimize.setAttribute('aria-label', '最小化查看最后画面');
+    minimize.innerHTML = '<svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 12h12"/></svg>';
+    minimize.addEventListener('click', function (event) {
+      event.stopPropagation();
+      if (terminalState.term !== term || !notice.isConnected) return;
+      notice.classList.add('is-collapsed');
+      notice.setAttribute('role', 'status');
+      button.focus({ preventScroll: true });
+    });
+    card.appendChild(minimize);
   }
   notice.appendChild(card);
   term._statusNotice = notice;

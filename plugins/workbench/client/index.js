@@ -273,18 +273,34 @@ export function createWorkbench(global, options = {}) {
         owner.message.classList.remove('is-collapsed');
         owner.message.setAttribute('role', status === 'detached' ? 'alert' : 'status');
         if (status === 'detached') {
-          const card = element('div', 'terminal-status-card'), copy = element('div', 'terminal-status-copy');
-          copy.append(element('strong', '', '此窗口已暂停'), element('span', '', owner.message.textContent));
+          const takenOver = reason === 'taken_over' || reason === 'detached';
+          const detailText = owner.message.textContent;
+          const card = element('div', 'terminal-status-card');
+          const iconWrap = element('div', 'terminal-status-icon');
+          iconWrap.innerHTML = '<svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="2.5" width="10" height="19" rx="2.2"/><path d="M11 18h2"/></svg>';
+          const main = element('div', 'terminal-status-main');
+          const copy = element('div', 'terminal-status-copy');
+          const titleEl = element('strong', '', takenOver ? '会话已被其他端接管' : '此窗口已暂停');
+          titleEl.addEventListener('click', () => {
+            if (!owner.message.classList.contains('is-collapsed')) return;
+            owner.message.classList.remove('is-collapsed');
+            owner.message.setAttribute('role', 'alert');
+          });
+          copy.append(titleEl, element('span', '', detailText));
           const actions = element('div', 'terminal-status-actions');
-          const resume = button('重新连接', '在此窗口恢复终端连接', () => {
+          const resume = button(takenOver ? '重新接管' : '重新连接', '在此窗口恢复终端连接', () => {
             if (mounted === owner && owner.session?.status === 'detached') owner.session.refresh();
           }, 'terminal-status-primary');
-          actions.append(resume, button('查看最后画面', '查看保留的终端画面，不重新连接', () => {
+          actions.append(resume);
+          main.append(copy, actions);
+          const minimize = button('', '最小化查看最后画面', () => {
             if (mounted !== owner || owner.session?.status !== 'detached') return;
             owner.message.classList.add('is-collapsed'); owner.message.setAttribute('role', 'status');
             resume.focus({ preventScroll: true });
-          }, 'terminal-status-secondary'));
-          card.append(copy, actions); owner.message.replaceChildren(card);
+          }, 'terminal-status-secondary is-minimize');
+          minimize.innerHTML = '<svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 12h12"/></svg>';
+          card.append(iconWrap, main, minimize);
+          owner.message.replaceChildren(card);
         }
         announceFocus();
         if (status === 'exited' && reason === 'window_closed' && global.MsApp && global.Router) {

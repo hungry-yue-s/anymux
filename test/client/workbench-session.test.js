@@ -858,4 +858,523 @@ describe('SeamWindowSession multi-pane workbench session', () => {
     session.dispose();
     f.close();
   });
+
+  it('cancels stale resize timers across ready-before-layout updates and prevents mobile single-pane resize loops', async () => {
+    vi.useFakeTimers();
+    const f = fixture();
+    f.win.MobileUI = { isMobile: () => true };
+    const dims = { w: 390, h: 621 };
+    const session = new SeamWindowSession(f.win, { container: f.host, target });
+    Object.defineProperties(session.treeHost, {
+      clientWidth: { configurable: true, get: () => dims.w },
+      clientHeight: { configurable: true, get: () => dims.h },
+    });
+    await session.ready;
+
+    const socket = f.sockets[0];
+    socket.readyState = 1;
+    socket.onopen?.();
+    // Initial uneven 2-pane horizontal split (202x90, pane-border-status top => layout height 90, content 89)
+    const initialPanes = [
+      { id: '%1', index: 0, active: false, width: 96, height: 89, command: 'fish' },
+      { id: '%2', index: 1, active: true, width: 105, height: 89, command: 'bash' },
+    ];
+    const initialTree = {
+      type: 'split', dir: 'row', width: 202, height: 90,
+      children: [
+        { type: 'pane', paneId: '%1', width: 96, height: 90 },
+        { type: 'pane', paneId: '%2', width: 105, height: 90 },
+      ],
+    };
+    socket.onmessage({ data: JSON.stringify({
+      type: 'ready', protocol: 1, instanceId: '42:123', sessionId: '$1', windowId: '@1',
+      windowCols: 202, windowRows: 90, zoomed: false, sizeLease: 'owner', inputAllowed: true, foreignClient: false,
+    }) });
+    sendLayout(socket, { windowCols: 202, windowRows: 90, activePaneId: '%2', panes: initialPanes, tree: initialTree });
+    for (const t of f.terminals) {
+      t._core._renderService.dimensions.css.cell = { width: 7.66, height: 17 };
+    }
+    socket.onmessage({ data: encodeSnapshotBinary({ paneId: '%1', seq: 0, cols: 96, rows: 89, text: 'p1' }) });
+    socket.onmessage({ data: encodeSnapshotBinary({ paneId: '%2', seq: 0, cols: 105, rows: 89, text: 'p2' }) });
+
+    // Wait 80ms -> computes fixed-overhead mobile target (targetCols=48, share=105/201 -> 93x34)
+    socket.sent.length = 0;
+    await vi.advanceTimersByTimeAsync(100);
+    expect(socket.sent.filter((m) => m.type === 'resize-window')).toEqual([
+      { type: 'resize-window', cols: 93, rows: 34 },
+    ]);
+
+    // Case A: ready(88x34) arrives BEFORE layout(88x34, %2=48x33).
+    // Even if delayed >80ms or immediately followed by layout, no bogus resize against stale %2=105x89 is scheduled/fired.
+    socket.sent.length = 0;
+    socket.onmessage({ data: JSON.stringify({
+      type: 'ready', protocol: 1, instanceId: '42:123', sessionId: '$1', windowId: '@1',
+      windowCols: 88, windowRows: 34, zoomed: false, sizeLease: 'owner', inputAllowed: true, foreignClient: false,
+    }) });
+    await vi.advanceTimersByTimeAsync(100);
+    expect(socket.sent.filter((m) => m.type === 'resize-window')).toHaveLength(0);
+
+    // Matching layout confirms %2 is already exact (48x33) -> zero further resizes
+    sendLayout(socket, {
+      windowCols: 88, windowRows: 34, activePaneId: '%2',
+      panes: [
+        { id: '%1', index: 0, active: false, width: 39, height: 33, command: 'fish' },
+        { id: '%2', index: 1, active: true, width: 48, height: 33, command: 'bash' },
+      ],
+      tree: {
+        type: 'split', dir: 'row', width: 88, height: 34,
+        children: [
+          { type: 'pane', paneId: '%1', width: 39, height: 34 },
+          { type: 'pane', paneId: '%2', width: 48, height: 34 },
+        ],
+      },
+    });
+    await vi.advanceTimersByTimeAsync(200);
+    expect(socket.sent.filter((m) => m.type === 'resize-window')).toHaveLength(0);
+
+    // Case B: If a resize timer IS armed and a subsequent fit() converges (cols === windowCols && rows === windowRows), cancel timer
+    sendLayout(socket, {
+      windowCols: 92, windowRows: 34, activePaneId: '%2',
+      panes: [
+        { id: '%1', index: 0, active: false, width: 41, height: 33, command: 'fish' },
+        { id: '%2', index: 1, active: true, width: 50, height: 33, command: 'bash' },
+      ],
+      tree: {
+        type: 'split', dir: 'row', width: 92, height: 34,
+        children: [
+          { type: 'pane', paneId: '%1', width: 41, height: 34 },
+          { type: 'pane', paneId: '%2', width: 50, height: 34 },
+        ],
+      },
+    });
+    expect(session.resizeTimer).not.toBeNull();
+    // Before 80ms elapses, tmux settles at 88x34 (%2=48x33) -> must cancel the pending resizeTimer
+    socket.onmessage({ data: JSON.stringify({
+      type: 'ready', protocol: 1, instanceId: '42:123', sessionId: '$1', windowId: '@1',
+      windowCols: 88, windowRows: 34, zoomed: false, sizeLease: 'owner', inputAllowed: true, foreignClient: false,
+    }) });
+    sendLayout(socket, {
+      windowCols: 88, windowRows: 34, activePaneId: '%2',
+      panes: [
+        { id: '%1', index: 0, active: false, width: 39, height: 33, command: 'fish' },
+        { id: '%2', index: 1, active: true, width: 48, height: 33, command: 'bash' },
+      ],
+      tree: {
+        type: 'split', dir: 'row', width: 88, height: 34,
+        children: [
+          { type: 'pane', paneId: '%1', width: 39, height: 34 },
+          { type: 'pane', paneId: '%2', width: 48, height: 34 },
+        ],
+      },
+    });
+    await vi.advanceTimersByTimeAsync(200);
+    expect(socket.sent.filter((m) => m.type === 'resize-window')).toHaveLength(0);
+
+    // Case C: Cycle guard prevents A -> B -> A oscillation even on adversarial rounding, while pane switch unlocks fresh resize
+    socket.sent.length = 0;
+    // Switch active pane to %1 (smaller share 39 vs 48) -> triggers fresh resize for %1
+    f.host.querySelectorAll('.seam-mobile-pane-tab')[0].click();
+    await vi.advanceTimersByTimeAsync(100);
+    const afterSwitchResizes = socket.sent.filter((m) => m.type === 'resize-window');
+    expect(afterSwitchResizes).toHaveLength(1);
+    const req1 = afterSwitchResizes[0];
+    // Feed back a layout where tmux rounds back & forth; max 3 unique requests per envelope, never repeating req1
+    for (let step = 0; step < 6; step++) {
+      const cols = step % 2 === 0 ? 102 : req1.cols - 4;
+      sendLayout(socket, {
+        windowCols: cols, windowRows: 34, activePaneId: '%1',
+        panes: [
+          { id: '%1', index: 0, active: true, width: Math.floor(cols * 0.44), height: 33, command: 'fish' },
+          { id: '%2', index: 1, active: false, width: cols - 1 - Math.floor(cols * 0.44), height: 33, command: 'bash' },
+        ],
+        tree: {
+          type: 'split', dir: 'row', width: cols, height: 34,
+          children: [
+            { type: 'pane', paneId: '%1', width: Math.floor(cols * 0.44), height: 34 },
+            { type: 'pane', paneId: '%2', width: cols - 1 - Math.floor(cols * 0.44), height: 34 },
+          ],
+        },
+      });
+      await vi.advanceTimersByTimeAsync(100);
+    }
+    const cycleResizes = socket.sent.filter((m) => m.type === 'resize-window').map((m) => `${m.cols}:${m.rows}`);
+    expect(cycleResizes.length).toBeLessThanOrEqual(3);
+    expect(new Set(cycleResizes).size).toBe(cycleResizes.length);
+
+    session.dispose();
+    f.close();
+  });
+
+  it('renders Orca-style takeover overlay card & collapsible corner chip on observer lease and reclaims ownership', async () => {
+    const f = fixture();
+    const session = new SeamWindowSession(f.win, { container: f.host, target });
+    await session.ready;
+    const socket = f.sockets[0];
+    hydrateWindow(socket, { sizeLease: 'observer', foreignClient: false });
+    socket.onmessage({ data: JSON.stringify({ type: 'ready', protocol: 1, instanceId: '42:123', sessionId: '$1', windowId: '@1', windowCols: 48, windowRows: 33, zoomed: false, sizeLease: 'observer', inputAllowed: false, foreignClient: false }) });
+
+    // Non-blocking centered floating overlay card
+    expect(session.leaseBar.hidden).toBe(false);
+    expect(session.leaseBar.classList.contains('is-overlay')).toBe(true);
+    expect(session.leaseBar.classList.contains('is-driving')).toBe(true);
+    expect(session.leaseBar.textContent).toContain('其他端正在控制此窗口');
+    expect(f.terminals[0].options.disableStdin).toBe(true);
+    expect(session.send('ls\r')).toBe(false);
+
+    // Minimize into top-right corner chip, then expand back
+    session.leaseBar.querySelector('.seam-takeover-min').click();
+    expect(session.leaseBar.classList.contains('is-chip')).toBe(true);
+    expect(session.leaseBar.textContent).toContain('其他端控制中');
+    session.leaseBar.querySelector('.seam-chip-expand').click();
+    expect(session.leaseBar.classList.contains('is-overlay')).toBe(true);
+
+    // Click Take back -> sends takeover and enters pending state
+    socket.sent.length = 0;
+    const btn = session.leaseBar.querySelector('.seam-lease-btn');
+    btn.click();
+    expect(socket.sent.at(-1)).toEqual({ type: 'takeover' });
+    expect(session.leaseBar.querySelector('.seam-lease-btn').disabled).toBe(true);
+    expect(session.leaseBar.querySelector('.seam-lease-btn').textContent).toBe('正在接管…');
+
+    // Ownership restored -> overlay hides, input enabled, collapsed state reset for future takeovers
+    socket.onmessage({ data: JSON.stringify({ type: 'ready', protocol: 1, instanceId: '42:123', sessionId: '$1', windowId: '@1', windowCols: 120, windowRows: 36, zoomed: false, sizeLease: 'owner', inputAllowed: true, foreignClient: false }) });
+    expect(session.leaseBar.hidden).toBe(true);
+    expect(session.send('pwd\r')).toBe(true);
+
+    // Collapse then lose control again -> card re-surfaces expanded
+    socket.onmessage({ data: JSON.stringify({ type: 'ready', protocol: 1, instanceId: '42:123', sessionId: '$1', windowId: '@1', windowCols: 48, windowRows: 33, zoomed: false, sizeLease: 'observer', inputAllowed: false, foreignClient: false }) });
+    session.leaseBar.querySelector('.seam-takeover-min').click();
+    expect(session.leaseBar.classList.contains('is-chip')).toBe(true);
+    socket.onmessage({ data: JSON.stringify({ type: 'ready', protocol: 1, instanceId: '42:123', sessionId: '$1', windowId: '@1', windowCols: 120, windowRows: 36, zoomed: false, sizeLease: 'owner', inputAllowed: true, foreignClient: false }) });
+    socket.onmessage({ data: JSON.stringify({ type: 'ready', protocol: 1, instanceId: '42:123', sessionId: '$1', windowId: '@1', windowCols: 48, windowRows: 33, zoomed: false, sizeLease: 'observer', inputAllowed: false, foreignClient: false }) });
+    expect(session.leaseBar.classList.contains('is-overlay')).toBe(true);
+
+    session.dispose();
+    f.close();
+  });
+
+  it('reconciles split/close DOM in place without detaching unchanged sibling panes and preserves reused dividers', async () => {
+    const f = fixture();
+    const session = new SeamWindowSession(f.win, { container: f.host, target });
+    await session.ready;
+    const socket = f.sockets[0];
+    hydrateWindow(socket);
+
+    const pane1 = f.host.querySelector('.seam-pane[data-pane-id="%1"]');
+    const branch1 = pane1.closest('.seam-branch');
+    let pane1Removals = 0;
+    const observer = new f.win.MutationObserver((mutations) => {
+      for (const m of mutations) {
+        for (const node of m.removedNodes) {
+          if (node === pane1 || node === branch1 || node.contains?.(pane1)) pane1Removals++;
+        }
+      }
+    });
+    observer.observe(session.treeHost, { childList: true, subtree: true });
+
+    const resetsBefore = f.terminals[0].resets;
+
+    // 1. Split %2 vertically -> R(%1, C(%2, %3))
+    sendLayout(socket, {
+      windowCols: 120, windowRows: 36, activePaneId: '%3',
+      panes: [
+        { id: '%1', index: 0, active: false, width: 60, height: 36, command: 'claude' },
+        { id: '%2', index: 1, active: false, width: 59, height: 18, command: 'bash' },
+        { id: '%3', index: 2, active: true, width: 59, height: 17, command: 'zsh' },
+      ],
+      tree: {
+        type: 'split', dir: 'row', width: 120, height: 36,
+        children: [
+          { type: 'pane', paneId: '%1', width: 60, height: 36 },
+          {
+            type: 'split', dir: 'col', width: 59, height: 36,
+            children: [
+              { type: 'pane', paneId: '%2', width: 59, height: 18 },
+              { type: 'pane', paneId: '%3', width: 59, height: 17 },
+            ],
+          },
+        ],
+      },
+    });
+    expect(pane1Removals).toBe(0);
+    expect(f.host.querySelector('.seam-pane[data-pane-id="%1"]')).toBe(pane1);
+    expect(pane1.closest('.seam-branch')).toBe(branch1);
+    expect(f.terminals[0].resets).toBe(resetsBefore);
+
+    const pane2 = f.host.querySelector('.seam-pane[data-pane-id="%2"]');
+    const branch2 = pane2.closest('.seam-branch');
+    let pane2Removals = 0;
+    const observer2 = new f.win.MutationObserver((mutations) => {
+      for (const m of mutations) {
+        for (const node of m.removedNodes) {
+          if (node === pane2 || node === branch2 || node.contains?.(pane2)) pane2Removals++;
+        }
+      }
+    });
+    observer2.observe(session.treeHost, { childList: true, subtree: true });
+
+    // 2. Split %3 horizontally -> R(%1, C(%2, R(%3, %4)))
+    sendLayout(socket, {
+      windowCols: 120, windowRows: 36, activePaneId: '%4',
+      panes: [
+        { id: '%1', index: 0, active: false, width: 60, height: 36, command: 'claude' },
+        { id: '%2', index: 1, active: false, width: 59, height: 18, command: 'bash' },
+        { id: '%3', index: 2, active: false, width: 29, height: 17, command: 'zsh' },
+        { id: '%4', index: 3, active: true, width: 29, height: 17, command: 'fish' },
+      ],
+      tree: {
+        type: 'split', dir: 'row', width: 120, height: 36,
+        children: [
+          { type: 'pane', paneId: '%1', width: 60, height: 36 },
+          {
+            type: 'split', dir: 'col', width: 59, height: 36,
+            children: [
+              { type: 'pane', paneId: '%2', width: 59, height: 18 },
+              {
+                type: 'split', dir: 'row', width: 59, height: 17,
+                children: [
+                  { type: 'pane', paneId: '%3', width: 29, height: 17 },
+                  { type: 'pane', paneId: '%4', width: 29, height: 17 },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    });
+    expect(pane1Removals).toBe(0);
+    expect(pane2Removals).toBe(0);
+    expect(f.host.querySelector('.seam-pane[data-pane-id="%1"]')).toBe(pane1);
+    expect(f.host.querySelector('.seam-pane[data-pane-id="%2"]')).toBe(pane2);
+
+    // 3. Close %4 -> back to R(%1, C(%2, %3)), unchanged siblings remain undisturbed
+    sendLayout(socket, {
+      windowCols: 120, windowRows: 36, activePaneId: '%3',
+      panes: [
+        { id: '%1', index: 0, active: false, width: 60, height: 36, command: 'claude' },
+        { id: '%2', index: 1, active: false, width: 59, height: 18, command: 'bash' },
+        { id: '%3', index: 2, active: true, width: 59, height: 17, command: 'zsh' },
+      ],
+      tree: {
+        type: 'split', dir: 'row', width: 120, height: 36,
+        children: [
+          { type: 'pane', paneId: '%1', width: 60, height: 36 },
+          {
+            type: 'split', dir: 'col', width: 59, height: 36,
+            children: [
+              { type: 'pane', paneId: '%2', width: 59, height: 18 },
+              { type: 'pane', paneId: '%3', width: 59, height: 17 },
+            ],
+          },
+        ],
+      },
+    });
+    expect(pane1Removals).toBe(0);
+    expect(pane2Removals).toBe(0);
+
+    // Reused outer divider still drags and sends accurate resize-pane-size against live branches/nodes
+    socket.sent.length = 0;
+    const outerDivider = f.host.querySelector('.seam-divider[data-left-pane="%1"]');
+    expect(outerDivider).not.toBeNull();
+    outerDivider.dispatchEvent(new f.win.MouseEvent('pointerdown', { button: 0, clientX: 400, bubbles: true }));
+    f.win.dispatchEvent(new f.win.MouseEvent('pointerup', { button: 0, clientX: 440, bubbles: true }));
+    expect(socket.sent.filter((m) => m.type === 'resize-pane-size')).toEqual([
+      { type: 'resize-pane-size', paneId: '%1', cols: 65 },
+    ]);
+
+    // 4. Parallel middle insertion R(%1, %2) -> R(%1, %3, %2) keeps both %1 and %2 in place
+    sendLayout(socket, {
+      windowCols: 120, windowRows: 36, activePaneId: '%1',
+      panes: [
+        { id: '%1', index: 0, active: true, width: 60, height: 36, command: 'claude' },
+        { id: '%2', index: 1, active: false, width: 59, height: 36, command: 'bash' },
+      ],
+      tree: {
+        type: 'split', dir: 'row', width: 120, height: 36,
+        children: [
+          { type: 'pane', paneId: '%1', width: 60, height: 36 },
+          { type: 'pane', paneId: '%2', width: 59, height: 36 },
+        ],
+      },
+    });
+    pane1Removals = 0;
+    pane2Removals = 0;
+    sendLayout(socket, {
+      windowCols: 120, windowRows: 36, activePaneId: '%1',
+      panes: [
+        { id: '%1', index: 0, active: true, width: 40, height: 36, command: 'claude' },
+        { id: '%3', index: 1, active: false, width: 39, height: 36, command: 'zsh' },
+        { id: '%2', index: 2, active: false, width: 39, height: 36, command: 'bash' },
+      ],
+      tree: {
+        type: 'split', dir: 'row', width: 120, height: 36,
+        children: [
+          { type: 'pane', paneId: '%1', width: 40, height: 36 },
+          { type: 'pane', paneId: '%3', width: 39, height: 36 },
+          { type: 'pane', paneId: '%2', width: 39, height: 36 },
+        ],
+      },
+    });
+    expect(pane1Removals).toBe(0);
+    expect(pane2Removals).toBe(0);
+
+    observer.disconnect();
+    observer2.disconnect();
+    session.dispose();
+    f.close();
+  });
+
+  it('avoids gratuitous resize-window when splitting on a settled PC viewport unless text would clip or viewport resizes', async () => {
+    vi.useFakeTimers();
+    const f = fixture();
+    // Exact fit for 2-pane horizontal split (200x40 with pane-border-status top => layoutH = 40, contentH = 39)
+    // w = 199*8 + 32 = 1624 -> netW = 16+16+(1-8) = 25 -> floor((1624-25)/8) = 199 cols (with border=0 -> 200 cols? Let's match exact px: 200*8 + 25 = 1625)
+    // h = 39*18 + (28+10) = 740 -> netH = 38 - 18 = 20 -> floor((740-20)/18) = 40 rows
+    const dims = { w: 200 * 8 + 25, h: 39 * 18 + 38 };
+    const session = new SeamWindowSession(f.win, { container: f.host, target });
+    Object.defineProperties(session.treeHost, {
+      clientWidth: { configurable: true, get: () => dims.w },
+      clientHeight: { configurable: true, get: () => dims.h },
+    });
+    await session.ready;
+    const socket = f.sockets[0];
+    socket.readyState = 1;
+    socket.onopen?.();
+    socket.onmessage({ data: JSON.stringify({
+      type: 'ready', protocol: 1, instanceId: '42:123', sessionId: '$1', windowId: '@1',
+      windowCols: 200, windowRows: 40, zoomed: false, sizeLease: 'owner', inputAllowed: true, foreignClient: false,
+    }) });
+    sendLayout(socket, {
+      windowCols: 200, windowRows: 40, activePaneId: '%2',
+      panes: [
+        { id: '%1', index: 0, active: false, width: 100, height: 39, command: 'fish' },
+        { id: '%2', index: 1, active: true, width: 99, height: 39, command: 'bash' },
+      ],
+      tree: {
+        type: 'split', dir: 'row', width: 200, height: 40,
+        children: [
+          { type: 'pane', paneId: '%1', width: 100, height: 40 },
+          { type: 'pane', paneId: '%2', width: 99, height: 40 },
+        ],
+      },
+    });
+    socket.onmessage({ data: encodeSnapshotBinary({ paneId: '%1', seq: 0, cols: 100, rows: 39, text: 'p1' }) });
+    socket.onmessage({ data: encodeSnapshotBinary({ paneId: '%2', seq: 0, cols: 99, rows: 39, text: 'p2' }) });
+    await vi.advanceTimersByTimeAsync(120);
+    socket.sent.length = 0;
+
+    // Split %2 vertically (R(%1, C(%2, %3))) with pane-border-status top -> idealRows drops 40->39 due to padding,
+    // but compressible breathing padding (minNetHeightPx) still fits all 40 window rows cleanly -> NO resize-window!
+    sendLayout(socket, {
+      windowCols: 200, windowRows: 40, activePaneId: '%3',
+      panes: [
+        { id: '%1', index: 0, active: false, width: 100, height: 39, command: 'fish' },
+        { id: '%2', index: 1, active: false, width: 99, height: 19, command: 'bash' },
+        { id: '%3', index: 2, active: true, width: 99, height: 18, command: 'zsh' },
+      ],
+      tree: {
+        type: 'split', dir: 'row', width: 200, height: 40,
+        children: [
+          { type: 'pane', paneId: '%1', width: 100, height: 40 },
+          {
+            type: 'split', dir: 'col', width: 99, height: 40,
+            children: [
+              { type: 'pane', paneId: '%2', width: 99, height: 20 },
+              { type: 'pane', paneId: '%3', width: 99, height: 19 },
+            ],
+          },
+        ],
+      },
+    });
+    socket.onmessage({ data: encodeSnapshotBinary({ paneId: '%3', seq: 0, cols: 99, rows: 18, text: 'p3' }) });
+    await vi.advanceTimersByTimeAsync(150);
+    expect(socket.sent.filter((m) => m.type === 'resize-window')).toHaveLength(0);
+
+    // Split %3 horizontally (R(%1, C(%2, R(%3, %4)))) -> idealCols drops 200->199 due to padding,
+    // still fits minNetWidthPx cleanly -> STILL NO resize-window!
+    sendLayout(socket, {
+      windowCols: 200, windowRows: 40, activePaneId: '%4',
+      panes: [
+        { id: '%1', index: 0, active: false, width: 100, height: 39, command: 'fish' },
+        { id: '%2', index: 1, active: false, width: 99, height: 19, command: 'bash' },
+        { id: '%3', index: 2, active: false, width: 49, height: 18, command: 'zsh' },
+        { id: '%4', index: 3, active: true, width: 49, height: 18, command: 'fish' },
+      ],
+      tree: {
+        type: 'split', dir: 'row', width: 200, height: 40,
+        children: [
+          { type: 'pane', paneId: '%1', width: 100, height: 40 },
+          {
+            type: 'split', dir: 'col', width: 99, height: 40,
+            children: [
+              { type: 'pane', paneId: '%2', width: 99, height: 20 },
+              {
+                type: 'split', dir: 'row', width: 99, height: 19,
+                children: [
+                  { type: 'pane', paneId: '%3', width: 49, height: 19 },
+                  { type: 'pane', paneId: '%4', width: 49, height: 19 },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    });
+    socket.onmessage({ data: encodeSnapshotBinary({ paneId: '%4', seq: 0, cols: 49, rows: 18, text: 'p4' }) });
+    await vi.advanceTimersByTimeAsync(150);
+    expect(socket.sent.filter((m) => m.type === 'resize-window')).toHaveLength(0);
+
+    // Actual browser viewport resize invalidates _settledViewportEnv -> resize-window IS sent
+    dims.w = 180 * 8 + 34;
+    session.fit();
+    await vi.advanceTimersByTimeAsync(120);
+    expect(socket.sent.filter((m) => m.type === 'resize-window')).toEqual([
+      { type: 'resize-window', cols: 180, rows: 39 },
+    ]);
+
+    // Deep vertical stack with border=off exceeding minNetHeightPx -> resize-window IS sent to prevent clipping
+    dims.w = 200 * 8 + 16;
+    dims.h = 40 * 18 + 38;
+    socket.onmessage({ data: JSON.stringify({
+      type: 'ready', protocol: 1, instanceId: '42:123', sessionId: '$1', windowId: '@1',
+      windowCols: 200, windowRows: 40, zoomed: false, sizeLease: 'owner', inputAllowed: true, foreignClient: false,
+    }) });
+    sendLayout(socket, {
+      windowCols: 200, windowRows: 40, activePaneId: '%1',
+      panes: [{ id: '%1', index: 0, active: true, width: 200, height: 40, command: 'fish' }],
+      tree: { type: 'pane', paneId: '%1', width: 200, height: 40 },
+    });
+    await vi.advanceTimersByTimeAsync(120);
+    socket.sent.length = 0;
+
+    // 4 stacked panes with border=off (layoutH === pane.height) -> minNetHeightPx adds 3*(32-17) = 45px+ > 1 row slack
+    sendLayout(socket, {
+      windowCols: 200, windowRows: 40, activePaneId: '%4',
+      panes: [
+        { id: '%1', index: 0, active: false, width: 200, height: 10, command: 'fish' },
+        { id: '%2', index: 1, active: false, width: 200, height: 9, command: 'bash' },
+        { id: '%3', index: 2, active: false, width: 200, height: 9, command: 'zsh' },
+        { id: '%4', index: 3, active: true, width: 200, height: 9, command: 'sh' },
+      ],
+      tree: {
+        type: 'split', dir: 'col', width: 200, height: 40,
+        children: [
+          { type: 'pane', paneId: '%1', width: 200, height: 10 },
+          { type: 'pane', paneId: '%2', width: 200, height: 9 },
+          { type: 'pane', paneId: '%3', width: 200, height: 9 },
+          { type: 'pane', paneId: '%4', width: 200, height: 9 },
+        ],
+      },
+    });
+    for (const id of ['%2', '%3', '%4']) {
+      socket.onmessage({ data: encodeSnapshotBinary({ paneId: id, seq: 0, cols: 200, rows: 9, text: id }) });
+    }
+    await vi.advanceTimersByTimeAsync(120);
+    const clipResizes = socket.sent.filter((m) => m.type === 'resize-window');
+    expect(clipResizes).toHaveLength(1);
+    expect(clipResizes[0].rows).toBeLessThan(40);
+
+    session.dispose();
+    f.close();
+  });
 });
