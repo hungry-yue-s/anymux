@@ -7,6 +7,246 @@ const MAX_RENDER_BACKLOG = 16 * 1024 * 1024;
 const INPUT_CHUNK_BYTES = 32768;
 const SYNC_UPDATE_START = new Uint8Array([0x1b, 0x5b, 0x3f, 0x32, 0x30, 0x32, 0x36, 0x68]);
 const SYNC_UPDATE_END = new Uint8Array([0x1b, 0x5b, 0x3f, 0x32, 0x30, 0x32, 0x36, 0x6c]);
+const SGR_HOVER_MOVE_RE = /^\x1b\[<(?:35|39|43|47|51|55|59|63);\d+;\d+[Mm]$/;
+
+const DOM_DELTA_PIXEL = 0;
+const DOM_DELTA_LINE = 1;
+const DOM_DELTA_PAGE = 2;
+const TRACKPAD_WHEEL_DELTA_THRESHOLD = 100;
+const DISCRETE_WHEEL_DELTA_UNIT = 120;
+const CONTINUOUS_GESTURE_GAP_MS = 300;
+const WHEEL_DELTA_RATIOS = [3, 1];
+const WHEEL_DELTA_TOLERANCE = 3;
+const DEFAULT_CELL_HEIGHT = 16;
+const LOG_ACCEL = 1.6;
+const FAST_STREAK_MIN_GAP_MS = 16;
+const FAST_STREAK_MAX_GAP_MS = 45;
+const FAST_STREAK_MAX_BONUS = 3;
+const FAST_STREAK_STEPS = 4;
+const FAST_STREAK_DECAY_RATIO = 0.85;
+const MAX_BASE_ROWS = 6;
+const MAX_DISCRETE_ROWS = 9;
+const MAX_REPORTS_PER_FLUSH = 24;
+const REPLAYED_WHEEL_FLAG = '__anymuxReplayedWheelEvent';
+
+function readWheelDeltaY(event) {
+  if (typeof event.wheelDeltaY === 'number' && Number.isFinite(event.wheelDeltaY)) return event.wheelDeltaY;
+  if (typeof event.wheelDelta === 'number' && Number.isFinite(event.wheelDelta)) return event.wheelDelta;
+  return null;
+}
+
+function isContinuousGesture(event, state) {
+  if ((event.deltaMode ?? DOM_DELTA_PIXEL) !== DOM_DELTA_PIXEL) {
+    state.continuousGestureAt = null;
+    return false;
+  }
+  const ts = typeof event.timeStamp === 'number' && Number.isFinite(event.timeStamp) ? event.timeStamp : null;
+  const rawWheel = readWheelDeltaY(event);
+  const ratioMatch = rawWheel !== null && WHEEL_DELTA_RATIOS.some(
+    (ratio) => Math.abs(Math.abs(event.deltaY) * ratio - Math.abs(rawWheel)) <= WHEEL_DELTA_TOLERANCE,
+  );
+  const continuous = rawWheel === null
+    || Math.abs(rawWheel) < TRACKPAD_WHEEL_DELTA_THRESHOLD
+    || (ts !== null && state.continuousGestureAt !== null && ts >= state.continuousGestureAt
+      && ts - state.continuousGestureAt <= CONTINUOUS_GESTURE_GAP_MS && ratioMatch);
+  state.continuousGestureAt = continuous ? ts : null;
+  return continuous;
+}
+
+function readCellHeight(term) {
+  const coreH = term?._core?._renderService?.dimensions?.css?.cell?.height;
+  if (typeof coreH === 'number' && Number.isFinite(coreH) && coreH > 0) return coreH;
+  const rect = term?.element?.querySelector?.('.xterm-screen')?.getBoundingClientRect?.();
+  if (rect && rect.height > 0 && term.rows > 0) return rect.height / term.rows;
+  return DEFAULT_CELL_HEIGHT;
+}
+
+/**
+ * Smooths trackpad & discrete wheel events for mouse-tracking TUIs (Orca MIT pattern),
+ * avoiding xterm's 0.3x trackpad attenuation and coalescing multi-row reports per microtask.
+ */
+export function installTuiWheelHandler(term, {
+  onBeforeDrain,
+  onAfterDrain,
+  multiplier = 1,
+  global: hostGlobal = null,
+} = {}) {
+  if (typeof term?.attachCustomWheelEventHandler !== 'function') return () => {};
+  const win = hostGlobal || term.element?.ownerDocument?.defaultView || globalThis;
+  const scheduleMicrotask = typeof win.queueMicrotask === 'function'
+    ? (fn) => win.queueMicrotask(fn)
+    : (fn) => Promise.resolve().then(fn);
+  const mult = typeof multiplier === 'number' && Number.isFinite(multiplier)
+    ? Math.round(Math.min(10, Math.max(1, multiplier)))
+    : 1;
+  const state = {
+    continuousGestureAt: null,
+    fastStreak: 0,
+    lastDistanceRows: null,
+    lastInputAt: null,
+    pendingDirection: 0,
+    pendingRows: 0,
+    pendingReports: 0,
+    pendingEvent: null,
+    pendingTarget: null,
+    drainScheduled: false,
+  };
+  let disposed = false;
+
+  const drain = () => {
+    state.drainScheduled = false;
+    if (disposed || !state.pendingTarget || !state.pendingEvent || state.pendingReports <= 0) {
+      state.pendingReports = 0;
+      state.pendingEvent = null;
+      state.pendingTarget = null;
+      return;
+    }
+    if (!term.modes?.mouseTrackingMode || term.modes.mouseTrackingMode === 'none') {
+      state.pendingReports = 0;
+      state.pendingDirection = 0;
+      state.pendingEvent = null;
+      state.pendingTarget = null;
+      return;
+    }
+    const target = state.pendingTarget;
+    const src = state.pendingEvent;
+    const count = Math.min(MAX_REPORTS_PER_FLUSH, state.pendingReports);
+    state.pendingReports = 0;
+    state.pendingEvent = null;
+    state.pendingTarget = null;
+    const WheelEventCtor = win.WheelEvent || globalThis.WheelEvent;
+    if (typeof WheelEventCtor !== 'function') return;
+    const dirY = src.deltaY < 0 ? -1 : 1;
+    onBeforeDrain?.();
+    try {
+      for (let i = 0; i < count; i++) {
+        const replay = new WheelEventCtor(src.type || 'wheel', {
+          bubbles: src.bubbles !== false,
+          cancelable: src.cancelable !== false,
+          composed: src.composed !== false,
+          view: src.view,
+          detail: src.detail,
+          screenX: src.screenX,
+          screenY: src.screenY,
+          clientX: src.clientX,
+          clientY: src.clientY,
+          ctrlKey: src.ctrlKey,
+          altKey: src.altKey,
+          shiftKey: src.shiftKey,
+          metaKey: src.metaKey,
+          button: src.button,
+          buttons: src.buttons,
+          relatedTarget: src.relatedTarget,
+          deltaX: 0,
+          deltaY: dirY,
+          deltaZ: 0,
+          deltaMode: DOM_DELTA_LINE,
+        });
+        Object.defineProperty(replay, REPLAYED_WHEEL_FLAG, { configurable: true, value: true });
+        target.dispatchEvent(replay);
+      }
+    } finally {
+      onAfterDrain?.();
+    }
+  };
+
+  term.attachCustomWheelEventHandler((event) => {
+    if (disposed || !event || event[REPLAYED_WHEEL_FLAG] === true) return true;
+    const modeName = term.modes?.mouseTrackingMode;
+    if (!modeName || modeName === 'none' || event.deltaY === 0 || event.shiftKey || event.ctrlKey || event.metaKey) {
+      return true;
+    }
+
+    const dir = event.deltaY < 0 ? -1 : 1;
+    if (state.pendingDirection !== 0 && state.pendingDirection !== dir) {
+      state.fastStreak = 0;
+      state.lastDistanceRows = null;
+      state.lastInputAt = null;
+      state.pendingRows = 0;
+      state.pendingReports = 0;
+    }
+    state.pendingDirection = dir;
+
+    const continuous = isContinuousGesture(event, state);
+    const cellHeight = readCellHeight(term);
+    const deltaMode = event.deltaMode ?? DOM_DELTA_PIXEL;
+    const absY = Math.abs(event.deltaY);
+    const rawRows = deltaMode === DOM_DELTA_LINE
+      ? absY
+      : deltaMode === DOM_DELTA_PAGE
+        ? absY * Math.max(1, term.rows || 24)
+        : absY / cellHeight;
+
+    let wholeRows;
+    if (continuous) {
+      state.fastStreak = 0;
+      state.lastDistanceRows = null;
+      state.lastInputAt = null;
+      const acc = state.pendingRows + rawRows;
+      wholeRows = Math.trunc(acc);
+      state.pendingRows = acc - wholeRows;
+    } else {
+      const rawWheel = readWheelDeltaY(event);
+      const wheelRows = rawWheel === null ? 0 : Math.abs(rawWheel) / DISCRETE_WHEEL_DELTA_UNIT;
+      const dist = Math.max(1, rawRows, wheelRows);
+      const base = dist <= 1 ? dist : Math.min(MAX_BASE_ROWS, 1 + Math.log2(dist) * LOG_ACCEL);
+      let bonus = 0;
+      const ts = typeof event.timeStamp === 'number' && Number.isFinite(event.timeStamp) ? event.timeStamp : null;
+      if (ts !== null) {
+        const gap = state.lastInputAt === null ? null : ts - state.lastInputAt;
+        const decayed = state.lastDistanceRows !== null && dist < state.lastDistanceRows * FAST_STREAK_DECAY_RATIO;
+        state.lastDistanceRows = dist;
+        state.lastInputAt = ts;
+        if (decayed || gap === null || gap < 0 || gap > FAST_STREAK_MAX_GAP_MS) {
+          state.fastStreak = 0;
+        } else {
+          const factor = gap <= FAST_STREAK_MIN_GAP_MS
+            ? 1
+            : (FAST_STREAK_MAX_GAP_MS - gap) / (FAST_STREAK_MAX_GAP_MS - FAST_STREAK_MIN_GAP_MS);
+          state.fastStreak = Math.min(FAST_STREAK_STEPS, state.fastStreak + 1);
+          bonus = FAST_STREAK_MAX_BONUS * factor * (state.fastStreak / FAST_STREAK_STEPS);
+        }
+      } else {
+        state.fastStreak = 0;
+        state.lastDistanceRows = null;
+        state.lastInputAt = null;
+      }
+      const scaled = Math.min(MAX_DISCRETE_ROWS, base + bonus) * mult;
+      const acc = state.pendingRows + scaled;
+      wholeRows = Math.trunc(acc);
+      state.pendingRows = acc - wholeRows;
+    }
+
+    event.preventDefault?.();
+    if (wholeRows > 0) {
+      const EventTargetCtor = win.EventTarget;
+      const target = (typeof EventTargetCtor === 'function' && event.currentTarget instanceof EventTargetCtor)
+        ? event.currentTarget
+        : (event.currentTarget || term.element);
+      if (!target || typeof target.dispatchEvent !== 'function') return false;
+      state.pendingReports += wholeRows;
+      state.pendingEvent = event;
+      state.pendingTarget = target;
+      if (!state.drainScheduled) {
+        state.drainScheduled = true;
+        scheduleMicrotask(drain);
+      }
+    }
+    return false;
+  });
+
+  return () => {
+    if (disposed) return;
+    disposed = true;
+    state.pendingReports = 0;
+    state.pendingRows = 0;
+    state.pendingDirection = 0;
+    state.pendingEvent = null;
+    state.pendingTarget = null;
+    state.drainScheduled = false;
+    term.attachCustomWheelEventHandler(() => true);
+  };
+}
 
 const SVG_NS = '<svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true">';
 const PANE_ICONS = {
@@ -777,9 +1017,9 @@ export class SeamWindowSession {
     entry.liveChunks.push(bytes);
     if (entry.flushScheduled) return;
     entry.flushScheduled = true;
-    const schedule = typeof this.global.requestAnimationFrame === 'function'
-      ? (fn) => this.global.requestAnimationFrame(fn)
-      : (fn) => this.global.queueMicrotask(fn);
+    const schedule = typeof this.global.queueMicrotask === 'function'
+      ? (fn) => this.global.queueMicrotask(fn)
+      : (fn) => Promise.resolve().then(fn);
     schedule(() => {
       entry.flushScheduled = false;
       if (this.disposed || epoch !== this.epoch || entry.restoring || !this.panes.has(entry.paneId)) return;
@@ -824,8 +1064,10 @@ export class SeamWindowSession {
       fontSize: this.fontSize,
       cursorBlink: true,
       scrollback: 5000,
+      scrollSensitivity: 1.15,
+      fastScrollSensitivity: 5,
       overviewRuler: { width: 0 },
-      rescaleOverlappingGlyphs: true,
+      rescaleOverlappingGlyphs: false,
       macOptionClickForcesSelection: mobile,
       convertEol: false,
       allowProposedApi: true,
@@ -837,6 +1079,10 @@ export class SeamWindowSession {
   }
 
   _teardownPaneRenderer(entry) {
+    this._clearHoverTimer(entry);
+    entry.inputBatchActive = false;
+    entry.inputBatchBuf = '';
+    entry.pointerType = null;
     for (const cleanup of entry.cleanups) {
       if (typeof cleanup === 'function') cleanup();
       else cleanup?.dispose?.();
@@ -1040,6 +1286,11 @@ export class SeamWindowSession {
       liveChunks: [],
       liveBytes: 0,
       flushScheduled: false,
+      pointerType: null,
+      inputBatchActive: false,
+      inputBatchBuf: '',
+      pendingHoverSeq: null,
+      hoverTimer: null,
       historyTotal: 0,
       historyLines: 0,
     };
@@ -1118,11 +1369,20 @@ export class SeamWindowSession {
       const handler = () => {
         if (type === 'mousedown' || type === 'wheel') this.inputVersion++;
         entry.pointerDispatch = true;
-        global.queueMicrotask(() => { entry.pointerDispatch = false; });
+        entry.pointerType = type;
+        global.queueMicrotask(() => {
+          entry.pointerDispatch = false;
+          entry.pointerType = null;
+        });
       };
       body.addEventListener(type, handler, true);
       cleanups.push(() => body.removeEventListener(type, handler, true));
     }
+    cleanups.push(installTuiWheelHandler(term, {
+      global,
+      onBeforeDrain: () => this._beginInputBatch(entry),
+      onAfterDrain: () => this._flushInputBatch(entry),
+    }));
     this._installCompositionGuard(entry);
     const onMouseUp = () => {
       if (!global.MobileUI?.isMobile()) {
@@ -2257,7 +2517,33 @@ export class SeamWindowSession {
     return false;
   }
 
-  _sendInput(paneId, data, binary = false) {
+  _beginInputBatch(entry) {
+    if (!entry) return;
+    entry.inputBatchActive = true;
+    entry.inputBatchBuf = '';
+  }
+
+  _flushInputBatch(entry) {
+    if (!entry) return;
+    entry.inputBatchActive = false;
+    const data = entry.inputBatchBuf;
+    entry.inputBatchBuf = '';
+    if (data && !this.disposed && this.status === 'live' && this.inputAllowed && entry.hydrated && !entry.restoring) {
+      this.inputVersion++;
+      this._sendInput(entry.paneId, data, false);
+    }
+  }
+
+  _clearHoverTimer(entry) {
+    if (!entry) return;
+    if (entry.hoverTimer != null) {
+      this.global.clearTimeout(entry.hoverTimer);
+      entry.hoverTimer = null;
+    }
+    entry.pendingHoverSeq = null;
+  }
+
+  _sendInputImmediate(paneId, data, binary = false) {
     if (this.disposed || typeof data !== 'string' || !paneId) return false;
     if (!binary) {
       for (let start = 0; start < data.length; start += INPUT_CHUNK_BYTES) {
@@ -2272,6 +2558,32 @@ export class SeamWindowSession {
       if (!this._send({ type: 'input', paneId, encoding: 'base64', data: this.global.btoa(raw) })) return false;
     }
     return true;
+  }
+
+  _sendInput(paneId, data, binary = false) {
+    if (this.disposed || typeof data !== 'string' || !paneId) return false;
+    if (binary) return this._sendInputImmediate(paneId, data, true);
+    const entry = this.panes.get(paneId);
+    if (entry?.inputBatchActive) {
+      entry.inputBatchBuf += data;
+      return true;
+    }
+    if (entry && entry.pointerType === 'mousemove' && SGR_HOVER_MOVE_RE.test(data)) {
+      entry.pendingHoverSeq = data;
+      if (entry.hoverTimer == null) {
+        entry.hoverTimer = this.global.setTimeout(() => {
+          entry.hoverTimer = null;
+          const pending = entry.pendingHoverSeq;
+          entry.pendingHoverSeq = null;
+          if (pending && !this.disposed && this.status === 'live' && this.inputAllowed && entry.hydrated && !entry.restoring) {
+            this._sendInputImmediate(paneId, pending, false);
+          }
+        }, 16);
+      }
+      return true;
+    }
+    if (entry) this._clearHoverTimer(entry);
+    return this._sendInputImmediate(paneId, data, false);
   }
 
   send(data, trackIntent = true, paneId = this.activePaneId) {

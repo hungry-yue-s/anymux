@@ -65,7 +65,7 @@ export function createWorkbench(global, options = {}) {
   let storage; try { storage = global.localStorage; } catch { /* memory-only */ }
   const store = createViewStore(storage, options.storageScope || 'local');
   const Session = options.Session || SeamWindowSession;
-  const maxWarmViews = Number.isInteger(options.maxWarmViews) && options.maxWarmViews >= 0 ? options.maxWarmViews : 4;
+  const maxWarmViews = Number.isInteger(options.maxWarmViews) && options.maxWarmViews >= 0 ? options.maxWarmViews : 12;
   const tab = tabIdentity(global), pending = new Map(), warmCache = new Map(), supportedCache = new Map();
   let mounted = null, generation = 0, pendingFocusPane = null;
   const mobile = () => global.MobileUI?.isMobile() ?? global.innerWidth < 768;
@@ -530,7 +530,6 @@ export function createWorkbench(global, options = {}) {
           owner.hideTimer = null;
           if (mounted === owner && doc.hidden) {
             owner.session?.setVisible(false);
-            clearWarmCache();
           }
         }, VISIBILITY_HIDE_DELAY_MS);
       };

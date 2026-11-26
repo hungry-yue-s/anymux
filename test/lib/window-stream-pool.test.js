@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { ControlPool } from '../../lib/terminal/control-pool.js';
 import { tmuxLayoutChecksum } from '../../lib/terminal/tmux-layout.js';
 import { compactNativeSnapshot, decodeBinaryFrame } from '../../lib/terminal/window-protocol.js';
@@ -505,5 +505,51 @@ describe('ControlPool multi-pane window-stream', () => {
     first.close();
     second.close();
     pool.dispose();
+  });
+
+  it('keeps non-resize TUI clear-screen scrolling live across 120ms tumbling windows and coalesces concurrent input writes', async () => {
+    vi.useFakeTimers();
+    try {
+      const { pool, controls, target } = makeFixture();
+      const pendingSendKeys = [];
+      const frames = [];
+      const lease = await pool.subscribeWindow(target, f => frames.push(Buffer.isBuffer(f) ? decodeBinaryFrame(f) : f));
+      const origCommand = controls[0].command.bind(controls[0]);
+      controls[0].command = async (line, opts) => {
+        if (line.startsWith('send-keys -H ')) {
+          controls[0].commands.push(line);
+          return await new Promise((resolve, reject) => pendingSendKeys.push({ line, resolve, reject }));
+        }
+        return await origCommand(line, opts);
+      };
+      const snapsBeforeScroll = frames.filter(f => f.kind === 'snapshot').length;
+
+      // Three ~55KB clear+redraw bursts spaced 130ms apart reset cleanly on tumbling 120ms window (<128KB threshold).
+      for (let i = 0; i < 3; i++) {
+        controls[0].emit('output', '%3', Buffer.from('\x1b[2J\x1b[H' + 'CODEX_ROW_\r\n'.repeat(4500)));
+        await vi.advanceTimersByTimeAsync(130);
+      }
+      expect(frames.filter(f => f.kind === 'snapshot').length).toBe(snapsBeforeScroll);
+      expect(frames.filter(f => f.kind === 'output').length).toBeGreaterThanOrEqual(3);
+
+      // Concurrent lease.input calls while one send-keys -H is in flight coalesce into a single follow-up command.
+      const p1 = lease.input('%3', 'A');
+      const p2 = lease.input('%3', '\x1b[<65;5;5M');
+      const p3 = lease.input('%3', '\x1b[<65;5;5M');
+      expect(pendingSendKeys).toHaveLength(1);
+      pendingSendKeys.shift().resolve('');
+      await vi.advanceTimersByTimeAsync(0);
+      expect(pendingSendKeys).toHaveLength(1);
+      expect(pendingSendKeys[0].line).toBe(
+        'send-keys -H -t %3 1b 5b 3c 36 35 3b 35 3b 35 4d 1b 5b 3c 36 35 3b 35 3b 35 4d',
+      );
+      pendingSendKeys.shift().resolve('');
+      expect(await Promise.all([p1, p2, p3])).toEqual([true, true, true]);
+
+      lease.close();
+      pool.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

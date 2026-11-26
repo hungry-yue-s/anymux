@@ -310,14 +310,18 @@ describe('native workbench UI', () => {
     f.close();
   });
 
-  it('debounces visibilitychange hiding for 10s so quick tab switches avoid re-snapshotting', async () => {
+  it('debounces visibilitychange hiding for 10s without evicting warm-cached views', async () => {
     const f = fixture();
     let hidden = false;
     Object.defineProperty(f.win.document, 'hidden', { configurable: true, get: () => hidden });
-    const view = await f.api.create({ serverId: 'dev', ...remote });
-    await f.api.render('dev', view.id, { container: f.host });
-    const session = f.sessions[0];
+    const v1 = await f.api.create({ serverId: 'dev', ...remote });
+    const v2 = await f.api.create({ serverId: 'dev', instanceId: '42:123', sessionId: '$1', windowId: '@2', paneId: '%2' });
+    await f.api.render('dev', v1.id, { container: f.host });
+    f.sessions[0].setParked = vi.fn();
+    await f.api.render('dev', v2.id, { container: f.host });
+    const session = f.sessions[1];
     session.setVisible = vi.fn();
+    session.setParked = vi.fn();
 
     vi.useFakeTimers();
     try {
@@ -333,12 +337,15 @@ describe('native workbench UI', () => {
       expect(session.setVisible).not.toHaveBeenCalledWith(false);
       expect(session.setVisible).toHaveBeenCalledWith(true);
 
-      // Staying hidden >= 10s notifies session.setVisible(false).
+      // Staying hidden >= 10s notifies active session.setVisible(false) while keeping warm-cached @1 intact.
       session.setVisible.mockClear();
       hidden = true;
       f.win.document.dispatchEvent(new f.win.Event('visibilitychange'));
       await vi.advanceTimersByTimeAsync(10000);
       expect(session.setVisible).toHaveBeenCalledWith(false);
+      await f.api.render('dev', v1.id, { container: f.host });
+      expect(f.sessions).toHaveLength(2);
+      expect(f.sessions[0].setParked).toHaveBeenLastCalledWith(false);
     } finally {
       vi.useRealTimers();
       f.close();

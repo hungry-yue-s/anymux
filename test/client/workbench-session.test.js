@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { JSDOM } from 'jsdom';
-import { SeamWindowSession, decodeWindowBinaryFrame } from '../../plugins/workbench/client/seam-window-session.js';
+import { SeamWindowSession, decodeWindowBinaryFrame, installTuiWheelHandler } from '../../plugins/workbench/client/seam-window-session.js';
 
 const target = { serverId: 'dev', instanceId: '42:123', sessionId: '$1', windowId: '@1', clientId: 'c-test' };
 
@@ -117,6 +117,7 @@ export function fixture({ runScripts = false } = {}) {
       host.append(this.element);
     }
     loadAddon() {}
+    attachCustomWheelEventHandler(fn) { this._customWheelHandler = fn; }
     onData(fn) { this.listeners.data = fn; return { dispose() {} }; }
     onBinary(fn) { this.listeners.binary = fn; return { dispose() {} }; }
     onTitleChange(fn) { this.listeners.title = fn; return { dispose() {} }; }
@@ -1545,6 +1546,94 @@ describe('SeamWindowSession multi-pane workbench session', () => {
     expect(webglAddons).toHaveLength(4);
     expect(session.panes.get('%1').webglAddon).not.toBeNull();
     expect(session.panes.get('%2').webglAddon).not.toBeNull();
+
+    session.dispose();
+    f.close();
+  });
+
+  it('uses Orca TUI wheel smoothing, batches replayed wheel input, throttles hover mousemove, and flushes live output via microtask', async () => {
+    const f = fixture();
+    const rafSpy = vi.fn(() => 999);
+    f.win.requestAnimationFrame = rafSpy;
+
+    const session = new SeamWindowSession(f.win, { container: f.host, target: { ...target } });
+    await session.ready;
+    const socket = f.sockets[0];
+    hydrateWindow(socket);
+
+    const term = f.terminals[0];
+    // Terminal rendering options aligned with Orca
+    expect(term.options.rescaleOverlappingGlyphs).toBe(false);
+    expect(term.options.scrollSensitivity).toBe(1.15);
+    expect(term.options.fastScrollSensitivity).toBe(5);
+
+    // Live output flushes via microtask without waiting for requestAnimationFrame
+    rafSpy.mockClear();
+    socket.onmessage({ data: encodeOutputBinary({ paneId: '%1', seq: 1, text: 'fast-frame' }) });
+    await Promise.resolve();
+    expect(new TextDecoder().decode(term.writes.at(-1))).toBe('fast-frame');
+    expect(rafSpy).not.toHaveBeenCalled();
+
+    // Emulate xterm's DOM wheel listener forwarding replayed DOM_DELTA_LINE events
+    term.modes.mouseTrackingMode = 'sgr';
+    term.element.addEventListener('wheel', (event) => {
+      if (event.__anymuxReplayedWheelEvent && event.deltaMode === 1 && event.deltaY !== 0) {
+        const btn = event.deltaY < 0 ? 64 : 65;
+        term._core.coreService.triggerDataEvent(`\x1b[<${btn};10;10M`, true);
+      }
+    });
+
+    socket.sent.length = 0;
+    // Small trackpad pixel scroll (<50px, 36px / 18px cellHeight = 2 rows) should NOT suffer 0.3x attenuation
+    const wheelDown = new f.win.WheelEvent('wheel', {
+      deltaY: 36, deltaMode: 0, bubbles: true, cancelable: true, clientX: 40, clientY: 40,
+    });
+    Object.defineProperty(wheelDown, 'currentTarget', { value: term.element });
+    expect(term._customWheelHandler(wheelDown)).toBe(false);
+    expect(wheelDown.defaultPrevented).toBe(true);
+    await Promise.resolve();
+    expect(socket.sent.filter((m) => m.type === 'input')).toEqual([
+      { type: 'input', paneId: '%1', data: '\x1b[<65;10;10M\x1b[<65;10;10M' },
+    ]);
+
+    // Direction reversal clears fractional/queued accumulators and scrolls opposite immediately
+    socket.sent.length = 0;
+    const wheelUp = new f.win.WheelEvent('wheel', {
+      deltaY: -18, deltaMode: 0, bubbles: true, cancelable: true, clientX: 40, clientY: 40,
+    });
+    Object.defineProperty(wheelUp, 'currentTarget', { value: term.element });
+    expect(term._customWheelHandler(wheelUp)).toBe(false);
+    await Promise.resolve();
+    expect(socket.sent.filter((m) => m.type === 'input')).toEqual([
+      { type: 'input', paneId: '%1', data: '\x1b[<64;10;10M' },
+    ]);
+
+    // ?1003h hover mousemove throttles/coalesces to latest coordinate every 16ms while clicks stay synchronous
+    vi.useFakeTimers();
+    socket.sent.length = 0;
+    const entry = session.panes.get('%1');
+    for (const seq of ['\x1b[<35;1;1M', '\x1b[<35;2;2M', '\x1b[<35;8;9M']) {
+      entry.body.dispatchEvent(new f.win.MouseEvent('mousemove', { bubbles: true }));
+      term._core.coreService.triggerDataEvent(seq, true);
+      await Promise.resolve();
+    }
+    expect(socket.sent.filter((m) => m.type === 'input')).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(16);
+    expect(socket.sent.filter((m) => m.type === 'input')).toEqual([
+      { type: 'input', paneId: '%1', data: '\x1b[<35;8;9M' },
+    ]);
+
+    socket.sent.length = 0;
+    entry.body.dispatchEvent(new f.win.MouseEvent('mousedown', { bubbles: true }));
+    term._core.coreService.triggerDataEvent('\x1b[<0;8;9M', true);
+    expect(socket.sent.filter((m) => m.type === 'input')).toEqual([
+      { type: 'input', paneId: '%1', data: '\x1b[<0;8;9M' },
+    ]);
+
+    // Standalone installTuiWheelHandler cleanup restores default handler
+    const cleanup = installTuiWheelHandler(term, { global: f.win });
+    cleanup();
+    expect(term._customWheelHandler(wheelUp)).toBe(true);
 
     session.dispose();
     f.close();
