@@ -357,6 +357,12 @@
       var tree = sessions.map(function (session) {
         var expanded = global.Store.isSessionExpanded(serverId, session.id) || params.sessionId === session.id;
         var isActive = params.sessionId === session.id;
+        var sessionAgent = global.AgentStatus && typeof global.AgentStatus.getSession === 'function'
+          ? global.AgentStatus.getSession(serverId, session)
+          : null;
+        var sessionStatusHtml = sessionAgent && sessionAgent.status && global.AgentIcons
+          ? global.AgentIcons.statusIcon(sessionAgent.status, sessionAgent.unread)
+          : '';
         return '<div class="tree-session-group ' + (isActive ? 'active' : '') + '">'
           + '<div class="tree-session-row ' + (isActive ? 'active' : '') + '"'
           + ' data-sidebar-entity="session" data-server-id="' + esc(serverId) + '"'
@@ -368,6 +374,7 @@
           + ' aria-expanded="' + (expanded ? 'true' : 'false') + '">'
           + '<span>' + (expanded ? '▾' : '▸') + '</span>'
           + '<span>' + esc(session.name) + '</span>'
+          + (sessionStatusHtml ? '<span class="tree-session-status">' + sessionStatusHtml + '</span>' : '')
           + '<span class="cmd">' + (session.windows || []).length + ' 个窗口</span>'
           + '</button>'
           + terminalViews().map(function (entry) { return entry.renderSessionActions ? entry.renderSessionActions(serverId, session) : ''; }).join('')
@@ -386,6 +393,83 @@
       }).join('');
 
       return head + '<div class="tree">' + tree + '</div>';
+    },
+
+    _renderAgentRows: function (serverId, session, win, params, windowAction) {
+      if (!global.AgentStatus || typeof global.AgentStatus.getWindowAgentPanes !== 'function' || !global.AgentIcons) {
+        return '';
+      }
+      var agentPanes = global.AgentStatus.getWindowAgentPanes(serverId, win);
+      if (!agentPanes.length) return '';
+
+      var displayCommand = '';
+      var panes = win.panes || [];
+      var dp = panes.find(function (item) { return item.active; }) || panes[0];
+      if (dp) {
+        displayCommand = String(dp.command || dp.name || '').split(/[\\/]+/).filter(Boolean).pop() || '';
+        displayCommand = displayCommand.replace(/\.exe$/i, '');
+      }
+
+      var single = agentPanes[0];
+      var singleInfo = single && single.info;
+      var richSingle = agentPanes.length === 1 && Boolean(
+        singleInfo.shortModel
+        || singleInfo.prompt
+        || singleInfo.subagentCount > 0
+        || (singleInfo.status && singleInfo.status !== 'idle' && singleInfo.label && singleInfo.label !== displayCommand && singleInfo.label !== win.name)
+      );
+      if (agentPanes.length < 2 && !richSingle) return '';
+
+      var focused = global.Blocks?.ui?.selectedContext();
+      var activePaneId = (focused && focused.onTerminal && focused.serverId === serverId && focused.windowId === win.id && focused.paneId)
+        || (params.windowId === win.id ? params.paneId : null);
+
+      var rows = agentPanes.map(function (entry) {
+        var pane = entry.pane;
+        var info = entry.info;
+        var isPaneActive = Boolean(activePaneId && pane.id === activePaneId);
+        var stateClass = info.status === 'permission'
+          ? ' is-attention'
+          : (info.status === 'failed' ? ' is-failed' : (info.status === 'done' && info.unread ? ' is-done-unread' : ''));
+        var titleText = info.prompt || info.label || global.AgentIcons.labelOf(info.agentType || info.appKind);
+        var relTime = info.updatedAt ? global.AgentIcons.formatRelativeTime(info.updatedAt) : '';
+        var modelText = info.shortModel || '';
+        var target = {
+          name: 'terminal',
+          params: {
+            serverId: serverId,
+            sessionId: session.id,
+            windowId: win.id,
+            paneId: pane.id,
+          },
+        };
+        var navAttrs = windowAction
+          ? ' data-action="' + esc(windowAction) + '" data-server-id="' + esc(serverId) + '" data-session="' + esc(session.id) + '" data-window="' + esc(win.id) + '" data-pane="' + esc(pane.id) + '"'
+          : ' data-route="' + esc(global.Router.serialize(target)) + '"';
+        var subagentHtml = info.subagentCount > 0
+          ? '<span class="agent-row-subagents" title="活跃子代理">×' + esc(String(info.subagentCount)) + '</span>'
+          : '';
+        var metaHtml = (modelText || relTime)
+          ? '<span class="agent-row-meta">'
+            + (modelText ? '<span class="agent-row-model">' + esc(modelText) + '</span>' : '')
+            + (relTime ? '<span class="agent-row-time" data-ts="' + esc(String(info.updatedAt || '')) + '">' + esc(relTime) + '</span>' : '')
+            + '</span>'
+          : '';
+
+        return '<div class="tree-agent-row' + stateClass + '" data-pane="' + esc(pane.id) + '" data-window="' + esc(win.id) + '" data-server-id="' + esc(serverId) + '">'
+          + '<button type="button" class="tree-agent-btn ' + (isPaneActive ? 'active' : '') + '"'
+          + navAttrs
+          + ' title="' + esc(titleText) + '">'
+          + global.AgentIcons.statusIcon(info.status, info.unread)
+          + global.AgentIcons.appIcon(info.appKind || info.agentType || 'shell')
+          + '<span class="agent-row-title">' + esc(titleText) + '</span>'
+          + subagentHtml
+          + metaHtml
+          + '</button>'
+          + '</div>';
+      }).join('');
+
+      return '<div class="tree-agent-list" data-window="' + esc(win.id) + '">' + rows + '</div>';
     },
 
     _renderWindowRow: function (serverId, session, win, params) {
@@ -408,23 +492,42 @@
       var command = displayPane ? String(displayPane.command || displayPane.name || '').split(/[\\/]+/).filter(Boolean).pop() || '' : '';
       command = command.replace(/\.exe$/i, '');
       if (command === win.name) command = '';
+
+      var winAgent = global.AgentStatus && typeof global.AgentStatus.getWindow === 'function'
+        ? global.AgentStatus.getWindow(serverId, win)
+        : null;
+      var winStatusHtml = winAgent && winAgent.status && global.AgentIcons
+        ? global.AgentIcons.statusIcon(winAgent.status, winAgent.unread)
+        : '';
+      var appKind = (winAgent && winAgent.appKind)
+        || (global.AgentIcons && displayPane ? global.AgentIcons.resolveKind(displayPane.command || displayPane.name, displayPane.agentType) : '');
+      var winAppHtml = appKind && global.AgentIcons ? global.AgentIcons.appIcon(appKind) : '';
+      var stateCls = winAgent && winAgent.status === 'permission'
+        ? ' is-attention'
+        : (winAgent && winAgent.status === 'failed'
+            ? ' is-failed'
+            : (winAgent && winAgent.status === 'done' && winAgent.unread ? ' is-done-unread' : ''));
+
+      var childAgentRows = this._renderAgentRows(serverId, session, win, params, windowAction);
+
       return '<div class="tree-window-row" data-sidebar-entity="window"'
         + ' data-server-id="' + esc(serverId) + '" data-provider="' + esc(workspace.provider) + '"'
         + ' data-session="' + esc(session.id) + '" data-window="' + esc(win.id) + '"'
         + ' data-window-index="' + esc(String(win.index)) + '"'
         + ' data-entity-name="' + esc(win.name) + '">'
-        + '<button class="tree-item ' + (active ? 'active' : '') + '"'
+        + '<button class="tree-item ' + (active ? 'active' : '') + stateCls + '"'
         + (windowAction ? ' data-action="' + esc(windowAction) + '" data-server-id="' + esc(serverId) + '" data-session="' + esc(session.id) + '" data-window="' + esc(win.id) + '"' : ' data-route="' + esc(global.Router.serialize(target)) + '"')
         + ' title="' + esc(win.name) + '"'
         + (active ? ' aria-current="page"' : '')
-        + '><span class="tree-item-name">' + esc(win.name) + '</span>'
+        + '>' + winStatusHtml + winAppHtml + '<span class="tree-item-name">' + esc(win.name) + '</span>'
         + (command ? '<span class="cmd">' + esc(command) + '</span>' : '') + '</button>'
         + ((windowAction || actions.renameWindow || actions.closeWindow)
           ? '<button type="button" class="tree-add-button tree-menu-button" data-action="workspace-entity-menu"'
             + ' aria-label="' + esc(win.name) + ' 的窗口操作" aria-haspopup="menu" aria-expanded="false"'
             + ' aria-controls="ms-sidebar-context-menu">⋯</button>'
           : '')
-        + '</div>';
+        + '</div>'
+        + childAgentRows;
     },
 
     _renderWindows: function (serverId, session, params, mobile) {

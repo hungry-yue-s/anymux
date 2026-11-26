@@ -13,6 +13,7 @@
     { "order": 30, "script": "/js/theme.js?v=7" },
     { "order": 70, "script": "/js/router.js?v=4" },
     { "order": 80, "script": "/js/store.js?v=4" },
+    { "order": 85, "script": "/js/agent-status.js?v=1" },
     { "order": 90, "script": "/js/api.js?v=3" },
     { "order": 100, "script": "/js/terminal-target.js?v=5" },
     { "order": 175, "script": "/js/blocks-kit.js" },

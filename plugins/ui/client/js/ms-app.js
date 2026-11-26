@@ -56,6 +56,9 @@
       global.Store.loadUiPrefs();
       global.AppShell.applyUiPrefs();
       this._bindEvents();
+      if (global.AgentStatus && typeof global.AgentStatus.startRelativeTimeTick === 'function') {
+        global.AgentStatus.startRelativeTimeTick();
+      }
       // Loads alongside everything else, so it is there when the first terminal asks.
       if (global.TerminalFonts) global.TerminalFonts.coreReady(0);
 
@@ -472,6 +475,13 @@
       if (global.NotificationPanel && global.NotificationPanel._markReadByWindow) {
         global.NotificationPanel._markReadByWindow(session.name, win.index);
       }
+      if (global.AgentStatus && typeof global.AgentStatus.acknowledge === 'function') {
+        global.AgentStatus.acknowledge(serverId, {
+          windowId: win.id,
+          paneId: global.state.currentPane,
+          sessionId: session.id,
+        });
+      }
       // renderTerminal calls embedTerminalChrome itself, on every render. It mounts
       // the terminal asynchronously, so the dock below has taken its space by then.
       global.renderTerminal(host, this._knownPanes(serverId, workspace, win, params.paneId) || undefined);
@@ -884,6 +894,20 @@
 
     /** Single delegated listener for the whole shell. */
     _bindEvents() {
+      global.addEventListener('terminal-context-changed', (event) => {
+        const ctx = event && event.detail;
+        if (!ctx || !ctx.onTerminal) return;
+        if (global.AgentStatus && typeof global.AgentStatus.acknowledge === 'function') {
+          global.AgentStatus.acknowledge(ctx.serverId || 'local', {
+            windowId: ctx.windowId,
+            paneId: ctx.paneId,
+            sessionId: ctx.sessionId,
+          });
+        }
+        if (ctx.paneId && global.NotificationPanel && typeof global.NotificationPanel.markReadByPane === 'function') {
+          global.NotificationPanel.markReadByPane(ctx.paneId);
+        }
+      });
       global.addEventListener('terminal-views-changed', () => {
         global.AppShell.render();
         const route = global.Router.current();

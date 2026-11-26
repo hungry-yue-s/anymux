@@ -92,49 +92,46 @@ describe('macOS native notification bridge', () => {
   });
 });
 
-describe('sidebar notification breathing attention', () => {
-  function seedTree() {
-    const group = dom.window.document.createElement('div');
-    group.className = 'tree-session-group';
-    group.innerHTML = '<div class="tree-session-row" data-entity-name="work"></div>'
-      + '<div class="tree-window-list">'
-      + '<div class="tree-window-row" data-window-index="2"></div>'
-      + '<div class="tree-window-row" data-window-index="3"></div>'
-      + '</div>';
-    dom.window.document.body.appendChild(group);
-    return group;
-  }
+describe('agent-event semantic bridge and pane read cleanup', () => {
+  it('forwards readable semantic text for agent-event native notifications', () => {
+    const { postMessage, panel } = setup({
+      currentTab: 'windows',
+      currentSession: 'work',
+      currentWindow: '1',
+    });
 
-  it('breathes the emitting window row while the session is expanded', () => {
-    const { panel } = setup({ currentTab: 'windows' });
-    const group = seedTree();
+    panel.handleServerPush([{
+      id: 'notice-agent-1',
+      type: 'agent-event',
+      state: 'waiting_attention',
+      source: 'claude',
+      session: 'work',
+      windowIndex: 2,
+      windowName: 'dev',
+      paneId: '%9',
+      reason: 'Allow bash?',
+      timestamp: Date.now(),
+    }]);
 
-    panel.handleServerPush([{ id: 'n1', session: 'work', windowIndex: 2, command: 'done' }]);
-
-    const rows = group.querySelectorAll('.tree-window-row');
-    expect(rows[0].classList.contains('notify-breathe')).toBe(true);
-    expect(rows[1].classList.contains('notify-breathe')).toBe(false);
-    expect(group.querySelector('.tree-session-row').classList.contains('notify-breathe')).toBe(false);
+    expect(postMessage).toHaveBeenCalledOnce();
+    expect(postMessage).toHaveBeenCalledWith({
+      id: 'notice-agent-1',
+      session: 'work',
+      windowIndex: '2',
+      windowName: 'dev',
+      command: '等待交互 · claude · Allow bash?',
+    });
   });
 
-  it('breathes the session row when the session is collapsed', () => {
+  it('marks server notifications read by pane via markReadByPane without touching preview notices', () => {
     const { panel } = setup({ currentTab: 'windows' });
-    const group = seedTree();
-    panel.handleServerPush([{ id: 'n1', session: 'work', windowIndex: 2, command: 'done' }]);
+    panel.handleServerPush([
+      { id: 'n1', type: 'agent-event', state: 'waiting_attention', paneId: '%4', session: 'work', windowIndex: 2 },
+    ]);
+    expect(panel.unreadCount()).toBe(1);
 
-    group.querySelector('.tree-window-list').remove();
-    panel.syncAttention();
-
-    expect(group.querySelector('.tree-session-row').classList.contains('notify-breathe')).toBe(true);
-  });
-
-  it('clears the breathing once the window is marked read', () => {
-    const { panel } = setup({ currentTab: 'windows' });
-    const group = seedTree();
-    panel.handleServerPush([{ id: 'n1', session: 'work', windowIndex: 2, command: 'done' }]);
-    expect(group.querySelectorAll('.notify-breathe')).toHaveLength(1);
-
-    panel._markReadByWindow('work', 2);
-    expect(group.querySelectorAll('.notify-breathe')).toHaveLength(0);
+    panel.markReadByPane('%4');
+    expect(panel.unreadCount()).toBe(0);
+    expect(dom.window.api.post).toHaveBeenCalledWith('/api/notifications/n1/read');
   });
 });

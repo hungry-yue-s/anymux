@@ -60,7 +60,12 @@ final class NativeNotificationCenter: NSObject, UNUserNotificationCenterDelegate
         content.title = payload.windowName.isEmpty
             ? "\(payload.session) · window \(payload.windowIndex)"
             : "\(payload.session) · \(payload.windowIndex): \(payload.windowName)"
-        content.body = payload.command.isEmpty ? "命令已完成" : "命令完成：\(payload.command)"
+        let semanticPrefixes = ["等待", "Agent", "任务", "自动化"]
+        let isSemantic = payload.command.contains(" · ")
+            || semanticPrefixes.contains { payload.command.hasPrefix($0) }
+        content.body = payload.command.isEmpty
+            ? "命令已完成"
+            : (isSemantic ? payload.command : "命令完成：\(payload.command)")
         content.sound = .default
         content.userInfo = [
             "session": payload.session,

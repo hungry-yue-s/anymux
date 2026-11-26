@@ -115,6 +115,55 @@ describe('agent event normalization', () => {
     expect(store.notifications).toHaveLength(1);
     expect(store.notifications[0].state).toBe('session_ended');
   });
+
+  it('tracks realtime working lifecycle hooks, subagents, model, prompt, and auto-acknowledges pane notices', () => {
+    const markReadByPane = vi.fn(() => 1);
+    const store = { ...makeStore(), markReadByPane };
+    const service = new AgentEventService({ notificationStore: store, now: () => 5000 });
+
+    const start = service.ingest({
+      agent: 'claude-code',
+      event: 'UserPromptSubmit',
+      paneId: '%9',
+      windowId: '@3',
+      model: 'claude-opus-4-5',
+      prompt: 'Add sidebar icons',
+    });
+    expect(start.duplicate).toBe(false);
+    expect(start.notification).toBeNull();
+    expect(store.notifications).toHaveLength(0);
+    expect(markReadByPane).toHaveBeenCalledWith('%9');
+
+    service.ingest({ agent: 'claude', event: 'SubagentStart', paneId: '%9', agent_id: 'sub-1' });
+    service.ingest({ agent: 'claude', event: 'SubagentStart', paneId: '%9', agent_id: 'sub-2' });
+    expect(service.getPaneState('%9')).toMatchObject({
+      agentType: 'claude',
+      status: 'working',
+      model: 'claude-opus-4-5',
+      prompt: 'Add sidebar icons',
+      subagentCount: 2,
+    });
+
+    service.ingest({ agent: 'claude', event: 'SubagentStop', paneId: '%9', agent_id: 'sub-1' });
+    expect(service.getPaneState('%9').subagentCount).toBe(1);
+    expect(service.getPaneState('%9').status).toBe('working');
+
+    const stop = service.ingest({
+      agent: 'claude',
+      event: 'Stop',
+      paneId: '%9',
+      windowId: '@3',
+      last_assistant_message: 'Completed icons',
+    });
+    expect(stop.notification).not.toBeNull();
+    expect(service.getPaneState('%9')).toMatchObject({
+      status: 'done',
+      model: 'claude-opus-4-5',
+      prompt: 'Add sidebar icons',
+      lastMessage: 'Completed icons',
+      subagentCount: 0,
+    });
+  });
 });
 
 describe('agent events API', () => {

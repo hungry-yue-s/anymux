@@ -12,12 +12,22 @@ const PROJECT_ROOT = resolve(__dirname, '..');
 const ROUTER = join(PROJECT_ROOT, 'scripts', 'agent-event-router.js');
 const PANEL_URL = 'https://127.0.0.1:7681/api/agent-events';
 const MARKER_PREFIX = 'anymux-';
-// Hooks installed before the rename; installing replaces them, uninstalling removes them.
+// Hooks installed before the rename or legacy bell-only Claude hook.
 const LEGACY_MARKER_PREFIX = 'tmux-web-panel-';
+const LEGACY_CLAUDE_BELL_MARKER = "printf '\\a'";
 
-const AGENTS = {
+export const AGENTS = {
+  claude: {
+    get path() { return join(homedir(), '.claude', 'settings.json'); },
+    schemaClean: true,
+    root() { return {}; },
+    hooks(root) {
+      root.hooks = root.hooks || {};
+      return root.hooks;
+    },
+  },
   qoder: {
-    path: join(homedir(), '.qoder', 'settings.json'),
+    get path() { return join(homedir(), '.qoder', 'settings.json'); },
     root() { return {}; },
     hooks(root) {
       root.hooks = root.hooks || {};
@@ -25,7 +35,7 @@ const AGENTS = {
     },
   },
   codex: {
-    path: join(homedir(), '.codex', 'hooks.json'),
+    get path() { return join(homedir(), '.codex', 'hooks.json'); },
     root() { return { description: 'Codex hooks.', hooks: {} }; },
     hooks(root) {
       root.hooks = root.hooks || {};
@@ -34,17 +44,22 @@ const AGENTS = {
   },
 };
 
-const EVENT_SPECS = [
+export const EVENT_SPECS = [
+  ['SessionStart', 'session_start', false],
+  ['UserPromptSubmit', 'user_prompt_submit', false],
+  ['PreToolUse', 'pre_tool_use', false],
+  ['PostToolUse', 'post_tool_use', false],
   ['Stop', 'agent_stop', true],
   ['PermissionRequest', 'permission_wait', true],
   ['Notification', 'notification', true],
   ['StopFailure', 'stop_failure', true],
   ['SessionEnd', 'session_end', false],
-  ['SubagentStop', 'agent_stop', false],
+  ['SubagentStart', 'subagent_start', false],
+  ['SubagentStop', 'subagent_stop', false],
 ];
 
 function usage() {
-  console.log('Usage: node scripts/install-agent-hooks.js [qoder|codex|all] [--uninstall]');
+  console.log('Usage: node scripts/install-agent-hooks.js [claude|qoder|codex|all] [--uninstall]');
 }
 
 async function readJson(file, fallback) {
@@ -64,15 +79,37 @@ async function backup(file) {
   return dest;
 }
 
-function hookFor(agent, hookEvent, eventName, bell) {
+function shellQuote(arg) {
+  if (/^[a-zA-Z0-9_./:-]+$/.test(arg)) return arg;
+  return JSON.stringify(arg);
+}
+
+function claudeCommandFor(eventName) {
+  return [
+    'node',
+    shellQuote(ROUTER),
+    '--agent', 'claude',
+    '--event', eventName,
+    '--panel-url', PANEL_URL,
+  ].join(' ');
+}
+
+function hookFor(agent, hookEvent, eventName) {
+  if (AGENTS[agent]?.schemaClean) {
+    return {
+      type: 'command',
+      command: claudeCommandFor(eventName),
+      async: true,
+      timeout: 5,
+    };
+  }
   return {
     type: 'command',
     command: ROUTER,
     args: [
-      '--agent', hookEvent === 'SubagentStop' ? `${agent}-subagent` : agent,
+      '--agent', agent,
       '--event', eventName,
       '--panel-url', PANEL_URL,
-      ...(bell ? [] : ['--no-bell']),
     ],
     name: `${MARKER_PREFIX}${agent}-${hookEvent}`,
     async: true,
@@ -86,16 +123,31 @@ function installedNames(agent, hookEvent, prefix = MARKER_PREFIX) {
   return names;
 }
 
-function installHooks(agent, root) {
+function isClaudeRouterHook(hook, eventName = null) {
+  if (!hook || typeof hook.command !== 'string') return false;
+  if (!hook.command.includes('agent-event-router.js')) return false;
+  if (!eventName) return true;
+  return new RegExp(`--event\\s+${eventName}(?:\\s|$)`).test(hook.command);
+}
+
+export function installHooks(agent, root) {
+  const spec = AGENTS[agent];
   const { removed: replaced } = uninstallHooks(agent, root, [LEGACY_MARKER_PREFIX]);
-  const hooks = AGENTS[agent].hooks(root);
+  const hooks = spec.hooks(root);
   let added = replaced;
-  for (const [hookEvent, eventName, bell] of EVENT_SPECS) {
+  for (const [hookEvent, eventName] of EVENT_SPECS) {
     const list = Array.isArray(hooks[hookEvent]) ? hooks[hookEvent] : [];
-    const names = installedNames(agent, hookEvent);
-    const exists = list.some((entry) => Array.isArray(entry.hooks) && entry.hooks.some((h) => h && names.includes(h.name)));
+    let exists = false;
+    if (spec.schemaClean) {
+      exists = list.some((entry) =>
+        Array.isArray(entry.hooks) && entry.hooks.some((h) => isClaudeRouterHook(h, eventName)));
+    } else {
+      const names = installedNames(agent, hookEvent);
+      exists = list.some((entry) =>
+        Array.isArray(entry.hooks) && entry.hooks.some((h) => h && names.includes(h.name)));
+    }
     if (!exists) {
-      list.push({ matcher: '*', hooks: [hookFor(agent, hookEvent, eventName, bell)] });
+      list.push({ matcher: '*', hooks: [hookFor(agent, hookEvent, eventName)] });
       added += 1;
     }
     hooks[hookEvent] = list;
@@ -103,9 +155,12 @@ function installHooks(agent, root) {
   return { added };
 }
 
-function uninstallHooks(agent, root, prefixes = [MARKER_PREFIX, LEGACY_MARKER_PREFIX]) {
-  const hooks = AGENTS[agent].hooks(root);
+export function uninstallHooks(agent, root, prefixes = [MARKER_PREFIX, LEGACY_MARKER_PREFIX]) {
+  const spec = AGENTS[agent];
+  const hooks = spec.hooks(root);
+  const fullRemoval = prefixes.includes(MARKER_PREFIX);
   let removed = 0;
+
   for (const hookEvent of Object.keys(hooks)) {
     const list = Array.isArray(hooks[hookEvent]) ? hooks[hookEvent] : [];
     const next = [];
@@ -116,9 +171,19 @@ function uninstallHooks(agent, root, prefixes = [MARKER_PREFIX, LEGACY_MARKER_PR
       }
       const before = entry.hooks.length;
       entry.hooks = entry.hooks.filter((h) => {
-        if (!(h && typeof h.name === 'string')) return true;
-        return !prefixes.some((prefix) => h.name.startsWith(`${prefix}${agent}-`)
-          || (agent === 'qoder' && installedNames(agent, hookEvent, prefix).includes(h.name)));
+        if (!h) return true;
+        if (typeof h.command === 'string' && h.command.includes(LEGACY_CLAUDE_BELL_MARKER)) {
+          return false;
+        }
+        if (spec.schemaClean && fullRemoval && isClaudeRouterHook(h)) {
+          return false;
+        }
+        if (typeof h.name === 'string') {
+          const matchesPrefix = prefixes.some((prefix) => h.name.startsWith(`${prefix}${agent}-`)
+            || (agent === 'qoder' && installedNames(agent, hookEvent, prefix).includes(h.name)));
+          if (matchesPrefix) return false;
+        }
+        return true;
       });
       removed += before - entry.hooks.length;
       if (entry.hooks.length > 0) next.push(entry);
@@ -129,7 +194,7 @@ function uninstallHooks(agent, root, prefixes = [MARKER_PREFIX, LEGACY_MARKER_PR
   return { removed };
 }
 
-async function update(agent, uninstall) {
+export async function update(agent, uninstall) {
   const spec = AGENTS[agent];
   const root = await readJson(spec.path, spec.root);
   const result = uninstall ? uninstallHooks(agent, root) : installHooks(agent, root);
@@ -141,16 +206,18 @@ async function update(agent, uninstall) {
   return { agent, path: spec.path, backup: backupPath, ...result };
 }
 
-const args = process.argv.slice(2);
-const uninstall = args.includes('--uninstall') || args.includes('--remove');
-const target = args.find((arg) => !arg.startsWith('--')) || 'all';
-if (!['qoder', 'codex', 'all'].includes(target)) {
-  usage();
-  process.exit(1);
-}
+if (process.argv[1] && resolve(process.argv[1]) === __filename) {
+  const args = process.argv.slice(2);
+  const uninstall = args.includes('--uninstall') || args.includes('--remove');
+  const target = args.find((arg) => !arg.startsWith('--')) || 'all';
+  if (!['claude', 'qoder', 'codex', 'all'].includes(target)) {
+    usage();
+    process.exit(1);
+  }
 
-const targets = target === 'all' ? ['qoder', 'codex'] : [target];
-const results = [];
-for (const agent of targets) results.push(await update(agent, uninstall));
-console.log(JSON.stringify({ ok: true, uninstall, results }, null, 2));
-console.log('No bearer token was written to agent configuration. The router uses ANYMUX_TOKEN or the local anymux token store.');
+  const targets = target === 'all' ? ['claude', 'qoder', 'codex'] : [target];
+  const results = [];
+  for (const agent of targets) results.push(await update(agent, uninstall));
+  console.log(JSON.stringify({ ok: true, uninstall, results }, null, 2));
+  console.log('No bearer token was written to agent configuration. The router uses ANYMUX_TOKEN or the local anymux token store.');
+}

@@ -6,13 +6,25 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
-const EVENTS = ['Stop', 'PermissionRequest', 'Notification', 'StopFailure', 'SessionEnd', 'SubagentStop'];
+const EVENTS = [
+  'SessionStart',
+  'UserPromptSubmit',
+  'PreToolUse',
+  'PostToolUse',
+  'Stop',
+  'PermissionRequest',
+  'Notification',
+  'StopFailure',
+  'SessionEnd',
+  'SubagentStart',
+  'SubagentStop',
+];
 
 async function runInstaller(home, ...args) {
   return execFileAsync('node', ['scripts/install-agent-hooks.js', ...args], {
     cwd: process.cwd(),
     // os.homedir() reads USERPROFILE on Windows: with HOME alone, the
-    // installer would write the real ~/.qoder and ~/.codex there.
+    // installer would write the real ~/.claude, ~/.qoder and ~/.codex there.
     env: { ...process.env, HOME: home, USERPROFILE: home },
   });
 }
@@ -22,10 +34,11 @@ async function readJson(path) {
 }
 
 describe('install-agent-hooks', () => {
-  it('installs Qoder and Codex hooks without writing panel tokens', async () => {
+  it('installs Claude, Qoder and Codex lifecycle hooks without writing panel tokens', async () => {
     const home = await mkdtemp(join(tmpdir(), 'agent-hooks-'));
     try {
       await runInstaller(home, 'all');
+      const claude = await readJson(join(home, '.claude', 'settings.json'));
       const qoder = await readJson(join(home, '.qoder', 'settings.json'));
       const codex = await readJson(join(home, '.codex', 'hooks.json'));
 
@@ -38,6 +51,32 @@ describe('install-agent-hooks', () => {
         }
         expect(JSON.stringify(config)).not.toContain('--panel-token');
       }
+
+      for (const event of EVENTS) {
+        const list = claude.hooks[event] || [];
+        expect(list.some((entry) => (entry.hooks || []).some((h) => h.command && h.command.includes('agent-event-router.js') && !h.name))).toBe(true);
+      }
+      expect(JSON.stringify(claude)).not.toContain('--panel-token');
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it('cleans legacy printf bell hook from Claude settings on install', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'agent-hooks-'));
+    try {
+      const claudeDir = join(home, '.claude');
+      await mkdir(claudeDir, { recursive: true });
+      await writeFile(join(claudeDir, 'settings.json'), JSON.stringify({
+        hooks: {
+          Stop: [{ hooks: [{ type: 'command', command: "printf '\\a' > /dev/ttys001", timeout: 5 }] }],
+        },
+      }));
+      await runInstaller(home, 'claude');
+      const claude = await readJson(join(claudeDir, 'settings.json'));
+      expect(JSON.stringify(claude)).not.toContain("printf '\\\\a'");
+      await runInstaller(home, 'claude', '--uninstall');
+      expect((await readJson(join(claudeDir, 'settings.json'))).hooks).toEqual({});
     } finally {
       await rm(home, { recursive: true, force: true });
     }
@@ -59,7 +98,7 @@ describe('install-agent-hooks', () => {
     } finally {
       await rm(home, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
   it('does not duplicate earlier manually-installed Qoder hook names', async () => {
     const home = await mkdtemp(join(tmpdir(), 'agent-hooks-'));

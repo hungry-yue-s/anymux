@@ -108,7 +108,9 @@ var NotificationPanel = (function () {
         session: String(notification.session || ''),
         windowIndex: String(notification.windowIndex ?? ''),
         windowName: String(notification.windowName || ''),
-        command: String(notification.command || notification.reason || notification.state || ''),
+        command: notification.type === 'agent-event'
+          ? String(_notificationText(notification) || notification.command || '')
+          : String(notification.command || notification.reason || notification.state || ''),
       });
     } catch (_err) {
       // Native notification delivery must never break the in-page panel.
@@ -183,11 +185,65 @@ var NotificationPanel = (function () {
   }
 
   function needsYou() {
-    return _notifications.filter(function (n) {
+    var activeServer = (window.Api && Api.activeServerId && Api.activeServerId()) || 'local';
+    var items = _notifications.filter(function (n) {
       if (n.read) return false;
-      return n.state === 'waiting_attention' || n.state === 'failed'
+      var isAttention = n.state === 'waiting_attention' || n.state === 'failed'
         || n.event === 'PermissionRequest' || n.event === 'Notification' || n.event === 'StopFailure';
+      if (!isAttention) return false;
+      if (n.paneId && window.AgentStatus && typeof AgentStatus.getPane === 'function') {
+        var live = AgentStatus.getPane(n.serverId || activeServer, n.paneId);
+        if (live && (live.status === 'working' || live.status === 'idle')) return false;
+      }
+      return true;
     });
+    if (window.AgentStatus && typeof AgentStatus.getAttentionPanes === 'function') {
+      var seenPanes = Object.create(null);
+      items.forEach(function (n) { if (n.paneId) seenPanes[n.paneId] = true; });
+      var livePanes = AgentStatus.getAttentionPanes(activeServer) || [];
+      livePanes.forEach(function (entry) {
+        if (!entry || !entry.paneId || seenPanes[entry.paneId]) return;
+        seenPanes[entry.paneId] = true;
+        items.push({
+          id: 'agent-status:' + (entry.serverId || activeServer) + ':' + entry.paneId,
+          type: 'agent-event',
+          state: entry.status === 'failed' ? 'failed' : 'waiting_attention',
+          source: entry.agentType || entry.appKind || 'agent',
+          session: entry.session || '',
+          windowIndex: entry.windowIndex ?? '',
+          windowId: entry.windowId || '',
+          windowName: entry.windowName || '',
+          paneId: entry.paneId,
+          serverId: entry.serverId || activeServer,
+          reason: entry.lastMessage || entry.prompt || entry.label || '',
+          timestamp: entry.updatedAt || Date.now(),
+          read: false,
+          _ephemeral: true,
+        });
+      });
+    }
+    return items;
+  }
+
+  function markReadByPane(paneId) {
+    if (!paneId) return;
+    var target = String(paneId);
+    var changed = false;
+    _notifications.forEach(function (n) {
+      if (isPreview(n)) return;
+      if (!n.read && n.paneId === target) {
+        n.read = true;
+        n.readAt = Date.now();
+        delete _attentionUntil[n.id];
+        _serverMarkRead(n.id);
+        changed = true;
+      }
+    });
+    if (changed) {
+      _updateBadge();
+      _syncAttention();
+      if (_isOpen) _rerenderPanel();
+    }
   }
 
   function _notifyChanged() {
@@ -643,25 +699,6 @@ var NotificationPanel = (function () {
         });
         return;
       }
-      (bySession[n.session] = bySession[n.session] || {}).unread = true;
-      ((bySession[n.session].windows = bySession[n.session].windows || {})[String(n.windowIndex)] = true);
-      if (_attentionUntil[n.id]) (bySession[n.session].pulse = bySession[n.session].pulse || {})[String(n.windowIndex)] = true;
-    });
-
-    sessionRows.forEach(function (row) {
-      var entry = bySession[row.dataset.entityName];
-      if (!entry) return;
-      var group = row.parentElement;
-      var windowList = group && group.querySelector('.tree-window-list');
-      if (!windowList) {
-        row.classList.add('notify-unread');
-        if (entry.pulse) pulseRows.add(row);
-        return;
-      }
-      windowList.querySelectorAll('.tree-window-row').forEach(function (wrow) {
-        if (entry.windows[wrow.dataset.windowIndex]) wrow.classList.add('notify-unread');
-        if (entry.pulse && entry.pulse[wrow.dataset.windowIndex]) pulseRows.add(wrow);
-      });
     });
     document.querySelectorAll('.preview-window-notice').forEach(function (card) {
       if (!rowNotices.has(card.parentElement)) card.remove();
@@ -676,6 +713,25 @@ var NotificationPanel = (function () {
   }
 
   document.addEventListener('visibilitychange', _syncAttention);
+  window.addEventListener('agent-status-changed', function () {
+    if (!window.AgentStatus || typeof AgentStatus.getPane !== 'function') return;
+    var activeServer = (window.Api && Api.activeServerId && Api.activeServerId()) || 'local';
+    var changed = false;
+    _notifications.forEach(function (n) {
+      if (isPreview(n) || n.read || !n.paneId) return;
+      var live = AgentStatus.getPane(n.serverId || activeServer, n.paneId);
+      if (live && live.status === 'working') {
+        n.read = true;
+        n.readAt = Date.now();
+        delete _attentionUntil[n.id];
+        changed = true;
+      }
+    });
+    if (changed || _notifications.some(function (n) { return !n.read; }) || (AgentStatus.getAttentionPanes && AgentStatus.getAttentionPanes(activeServer).length > 0)) {
+      _updateBadge();
+      if (_isOpen) _rerenderPanel();
+    }
+  });
 
   return {
     addDocument: addDocument,
@@ -683,6 +739,7 @@ var NotificationPanel = (function () {
     previewSnapshot: previewSnapshot,
     previewViewed: previewViewed,
     markRead: markRead,
+    markReadByPane: markReadByPane,
     _markReadByWindow: markReadByWindow,
     clearAll: clearAll,
     unreadCount: unreadCount,

@@ -9,11 +9,13 @@ import { adoptLegacyEnv, appDir } from '../lib/legacy-names.js';
 adoptLegacyEnv();
 
 function parseArgs(argv) {
-  const args = { bell: true };
+  const args = { bell: false };
   for (let i = 2; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--no-bell') {
       args.bell = false;
+    } else if (arg === '--bell') {
+      args.bell = true;
     } else if (arg.startsWith('--') && i + 1 < argv.length) {
       args[arg.slice(2)] = argv[++i];
     }
@@ -32,8 +34,22 @@ async function readStdin() {
   }
 }
 
+const BELL_EVENTS = new Set([
+  'Stop',
+  'agent_stop',
+  'agent_stopped',
+  'PermissionRequest',
+  'permission_wait',
+  'waiting_attention',
+  'Notification',
+  'notification',
+  'StopFailure',
+  'stop_failure',
+  'failed',
+]);
+
 function shouldBell(event) {
-  return !new Set(['session_end', 'session_ended', 'process_exit', 'process_exited']).has(event);
+  return BELL_EVENTS.has(event);
 }
 
 function localPanelToken() {
@@ -94,7 +110,7 @@ const payload = {
   session: args.session || input.session || input.tmux_session,
   windowIndex: args.windowIndex ?? args['window-index'] ?? input.windowIndex ?? input.window_index,
   windowId: args.windowId || args['window-id'] || input.windowId || input.window_id,
-  paneId: args.paneId || args['pane-id'] || input.paneId || input.pane_id,
+  paneId: args.paneId || args['pane-id'] || input.paneId || input.pane_id || process.env.TMUX_PANE || '',
   tty: args.tty || input.tty || process.env.TTY || '',
 };
 

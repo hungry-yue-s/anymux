@@ -7,6 +7,7 @@
 //   status/notifications (notifications)  new notices from agent events
 //   status/event (event)                  anything else for open pages (`anymux open`)
 
+import { Router } from 'express';
 import { StatusMonitor } from '../../lib/monitor.js';
 
 export const name = 'status';
@@ -28,6 +29,17 @@ export function apply(ctx) {
   ctx.on('status/server-status', (status) => monitor.broadcastServerStatus(status));
   ctx.on('status/notifications', (notifications) => monitor.broadcastNotifications(notifications));
   ctx.on('status/event', (event) => monitor.broadcastEvent(event));
+  ctx.on('status/agent-state', (ev) => monitor.handleAgentEvent(ev));
+
+  const router = Router();
+  router.get('/', (_req, res) => {
+    res.json({ success: true, data: monitor.getAgentStatus(), error: null });
+  });
+  router.post('/ack', (req, res) => {
+    monitor.acknowledgePane(req.body || {});
+    res.json({ success: true, data: null, error: null });
+  });
+  ctx.http.mount('/api/agent-status', router);
 
   const sockets = new Set();
   ctx.http.websocket('/ws/status', ({ ws }) => {

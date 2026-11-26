@@ -330,3 +330,163 @@ button { touch-action:manipulation; }
 @media (max-width:767px) {
   .status-standalone .ms-app .ms-content { padding:16px; }
 }
+
+/* Orca-style sidebar agent status indicators, app icons, and nested pane rows */
+:root {
+  --agent-claude: #d97757;
+  --agent-codex: #10a37f;
+  --agent-qoder: #6366f1;
+  --agent-gemini: #60a5fa;
+  --agent-cursor: #22d3ee;
+  --agent-aider: #34d399;
+  --agent-amp: #f59e0b;
+  --agent-working: #f59e0b;
+  --agent-permission: #f59e0b;
+  --agent-failed: #ef4444;
+  --agent-done: #22c55e;
+  --agent-monitoring: #38bdf8;
+}
+
+@keyframes agent-spin {
+  to { transform: rotate(360deg); }
+}
+
+.agent-state-ico {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 14px;
+  width: 14px;
+  height: 14px;
+  color: var(--workspace-muted);
+}
+.agent-state-ico > svg { width: 13px; height: 13px; display: block; }
+.agent-state-ico.is-working { color: var(--agent-working); }
+.agent-state-ico.is-working .agent-spinner { animation: agent-spin 0.9s linear infinite; transform-origin: center; }
+.agent-state-ico.is-permission { color: var(--agent-permission); }
+.agent-state-ico.is-failed { color: var(--agent-failed); }
+.agent-state-ico.is-done { color: var(--agent-done); }
+.agent-state-ico.is-done.is-unread { filter: drop-shadow(0 0 4px color-mix(in srgb, var(--agent-done) 55%, transparent)); }
+.agent-state-ico.is-monitoring { color: var(--agent-monitoring); }
+.agent-state-ico.is-interrupted { color: var(--workspace-muted); opacity: 0.8; }
+
+.agent-app-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 15px;
+  width: 15px;
+  height: 15px;
+  color: var(--workspace-muted);
+  opacity: 0.9;
+}
+.agent-app-icon > svg { width: 14px; height: 14px; display: block; }
+.agent-app-icon.is-kind-claude { color: var(--agent-claude); }
+.agent-app-icon.is-kind-codex { color: var(--agent-codex); }
+.agent-app-icon.is-kind-qoder { color: var(--agent-qoder); }
+.agent-app-icon.is-kind-gemini { color: var(--agent-gemini); }
+.agent-app-icon.is-kind-cursor { color: var(--agent-cursor); }
+.agent-app-icon.is-kind-aider { color: var(--agent-aider); }
+.agent-app-icon.is-kind-amp { color: var(--agent-amp); }
+.agent-app-icon.is-letter {
+  border-radius: 4px;
+  border: 1px solid color-mix(in srgb, currentColor 30%, transparent);
+  background: color-mix(in srgb, currentColor 10%, transparent);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+}
+.agent-app-icon.is-letter::after { content: attr(data-letter); }
+
+.ms-app .tree-session-row .tree-item { display: flex; align-items: center; }
+.tree-session-status { display: inline-flex; align-items: center; margin-right: 2px; }
+.tree-window-row > .tree-item.active .agent-app-icon,
+.tree-window-row > .tree-item.active .agent-state-ico { color: inherit; opacity: 1; }
+
+.ms-app .tree-window-row > .tree-item.is-attention {
+  color: var(--workspace-text);
+  background: color-mix(in srgb, var(--agent-permission) 9%, transparent);
+}
+.ms-app .tree-window-row > .tree-item.is-failed {
+  color: var(--workspace-text);
+  background: color-mix(in srgb, var(--agent-failed) 9%, transparent);
+}
+.ms-app .tree-window-row > .tree-item.is-done-unread .tree-item-name {
+  color: var(--workspace-text);
+  font-weight: 550;
+}
+
+.tree-agent-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 2px 0 4px 18px;
+}
+.tree-agent-row {
+  display: flex;
+  min-width: 0;
+}
+.tree-agent-row > .tree-agent-btn {
+  flex: 1;
+  min-width: 0;
+  min-height: 28px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--workspace-muted);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.tree-agent-row > .tree-agent-btn:hover { background: var(--workspace-hover); color: var(--workspace-text); }
+.tree-agent-row > .tree-agent-btn.active {
+  background: color-mix(in srgb, var(--workspace-accent) 16%, transparent);
+  color: var(--workspace-text);
+}
+.tree-agent-row.is-done-unread > .tree-agent-btn .agent-row-title { color: var(--workspace-text); font-weight: 550; }
+.tree-agent-row.is-attention > .tree-agent-btn { background: color-mix(in srgb, var(--agent-permission) 10%, transparent); color: var(--workspace-text); }
+.tree-agent-row.is-failed > .tree-agent-btn { background: color-mix(in srgb, var(--agent-failed) 10%, transparent); color: var(--workspace-text); }
+.agent-row-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agent-row-subagents {
+  flex: 0 0 auto;
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--agent-working) 16%, transparent);
+  color: var(--agent-working);
+}
+.agent-row-meta {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10.5px;
+  color: var(--workspace-muted);
+  opacity: 0.85;
+  white-space: nowrap;
+}
+.agent-row-model { max-width: 72px; overflow: hidden; text-overflow: ellipsis; }
+.agent-row-time { font-variant-numeric: tabular-nums; }
+
+.ms-app.sidebar-collapsed .tree-agent-list,
+.ms-app.sidebar-collapsed .tree-window-row .agent-state-ico {
+  display: none;
+}
+
+@media (max-width: 767px) {
+  .tree-agent-row > .tree-agent-btn { min-height: 38px; padding: 6px 10px; font-size: 12.5px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-state-ico.is-working .agent-spinner { animation: none; }
+}

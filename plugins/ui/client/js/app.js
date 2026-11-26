@@ -381,11 +381,20 @@ class StatusSocket {
       if (typeof NotificationPanel !== 'undefined' && NotificationPanel.refresh) {
         NotificationPanel.refresh();
       }
+      if (typeof AgentStatus !== 'undefined' && AgentStatus.fetch) {
+        AgentStatus.fetch(serverId);
+      }
     };
 
     this._ws.onmessage = function (event) {
       try {
         var data = JSON.parse(event.data);
+        if (data && data.type === 'agent-status') {
+          if (typeof AgentStatus !== 'undefined' && AgentStatus.setSnapshot) {
+            AgentStatus.setSnapshot(serverId, data.data);
+          }
+          return;
+        }
         if (data && data.type === 'notifications') {
           // Server-pushed notifications — forward to NotificationPanel
           if (typeof NotificationPanel !== 'undefined' && NotificationPanel.handleServerPush) {

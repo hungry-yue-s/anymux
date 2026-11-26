@@ -43,6 +43,10 @@ export function apply(ctx, options = {}) {
     onNotifications: (notifications) => ctx.emit('status/notifications', notifications),
     onEvent: async (result) => {
       const ev = result?.event;
+      if (!ev) return;
+      if (!result?.duplicate) {
+        ctx.emit('status/agent-state', ev);
+      }
       if (result?.duplicate || !ev?.cwd) return;
       if (ev.state !== 'agent_stopped' && ev.state !== 'waiting_attention') return;
       const dirty = await inspectWorktree(ev.cwd);
