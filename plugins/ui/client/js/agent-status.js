@@ -185,7 +185,7 @@
     shell: '终端',
   };
 
-  var SPINNER_RE = /[\u2800-\u28FF⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏◐◓◑◒◴◵◶◷⣾⣽⣻⢿⡿⣟⣯⣷✳✶✻✽✦✧✺✹✸✷✵✴]/u;
+  var SPINNER_RE = /[\u2801-\u28FF◐◓◑◒◴◵◶◷]/u;
   var ATTENTION_RE = /[⏸⚠❓✋🔔🔐]/u;
   var DONE_RE = /[✓✔✅]/u;
   var FAILED_RE = /[✗✘❌⨯]/u;

@@ -164,6 +164,61 @@ describe('agent event normalization', () => {
       subagentCount: 0,
     });
   });
+
+  it('maps SessionStart to idle without notification and normalizes Antigravity camelCase payloads', () => {
+    const store = makeStore();
+    const service = new AgentEventService({ notificationStore: store, now: () => 8000 });
+
+    const started = service.ingest({
+      agent: 'dsh',
+      event: 'SessionStart',
+      paneId: '%1',
+      windowId: '@0',
+    });
+    expect(started.notification).toBeNull();
+    expect(service.getPaneState('%1').status).toBe('idle');
+
+    const preInv = service.ingest({
+      agent: 'antigravity',
+      event: 'PreInvocation',
+      paneId: '%2',
+      windowId: '@0',
+      modelName: 'auto',
+      lastUserInput: 'Fix Windows status badge',
+    });
+    expect(preInv.notification).toBeNull();
+    expect(service.getPaneState('%2')).toMatchObject({
+      agentType: 'antigravity',
+      status: 'working',
+      model: '',
+      prompt: 'Fix Windows status badge',
+    });
+
+    const canceled = service.ingest({
+      agent: 'antigravity',
+      event: 'Stop',
+      paneId: '%2',
+      windowId: '@0',
+      terminationReason: 'USER_CANCELED',
+    });
+    expect(canceled.event.interrupted).toBe(true);
+    expect(service.getPaneState('%2').status).toBe('interrupted');
+
+    const failed = service.ingest({
+      agent: 'antigravity',
+      event: 'Stop',
+      paneId: '%3',
+      windowId: '@0',
+      terminationReason: 'ERROR',
+      error: 'RPC failure',
+    });
+    expect(failed.notification).not.toBeNull();
+    expect(failed.notification.reason).toBe('RPC failure');
+    expect(service.getPaneState('%3')).toMatchObject({
+      status: 'failed',
+      lastMessage: 'RPC failure',
+    });
+  });
 });
 
 describe('agent events API', () => {

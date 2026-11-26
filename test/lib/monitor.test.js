@@ -452,6 +452,42 @@ describe('StatusMonitor', () => {
       expect(sent(ws, 'agent-status')).toHaveLength(1);
     });
 
+    it('detects non-spinning agents (agy) via capturePaneTails, propagates pane label, and notifies on idle transition', async () => {
+      const store = recordingStore();
+      const agentEvents = new AgentEventService({ notificationStore: store });
+      let screenText = '⣽ Working...\n>\nesc to cancel · Orchestrator · Gemini 4 Neon · xhigh';
+      const capturePaneTails = vi.fn(async (ids) => new Map(ids.map((id) => [id, screenText])));
+      monitor = new StatusMonitor({
+        notificationStore: store,
+        agentEvents,
+        scanProcesses: async () => new Map(),
+        capturePaneTails,
+      });
+      const ws = createMockWs();
+      monitor.subscribe(ws);
+
+      await pollWith(windowsWith(false), [
+        { windowIndex: 0, paneId: '%2', command: 'agy', pid: 500, title: 'agy ~/w/d/windows', label: '自更新' },
+      ]);
+      expect(capturePaneTails).toHaveBeenCalledWith(['%2']);
+      const msgs1 = sent(ws, 'agent-status');
+      expect(msgs1[0].data.panes['%2']).toMatchObject({
+        agentType: 'antigravity',
+        status: 'working',
+        label: '自更新',
+        model: 'Gemini 4 Neon',
+      });
+
+      screenText = 'Summary complete\n>\n? for shortcuts · Orchestrator · Gemini 4 Neon · xhigh';
+      ws.send.mockClear();
+      await pollWith(windowsWith(false), [
+        { windowIndex: 0, paneId: '%2', command: 'agy', pid: 500, title: 'agy ~/w/d/windows', label: '自更新' },
+      ]);
+      expect(sent(ws, 'agent-status')[0].data.panes['%2']).toMatchObject({ status: 'done', unread: true, label: '自更新' });
+      expect(store.notifications).toHaveLength(1);
+      expect(store.notifications[0]).toMatchObject({ source: 'antigravity', state: 'agent_stopped', paneId: '%2' });
+    });
+
     it('does not broadcast when plain shell stays idle', async () => {
       monitor = new StatusMonitor({ scanProcesses: async () => new Map() });
       const ws = createMockWs();

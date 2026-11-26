@@ -53,7 +53,7 @@ describe('AgentHookManager', () => {
     const paths = await manager.refreshManagedScript();
     expect(paths.scriptPath).toBe(join(dataDir, 'agent-hooks', 'agent-event-router.mjs'));
     const script = await readFile(paths.scriptPath, 'utf8');
-    expect(script).toContain('anymux-managed-hook-router v2');
+    expect(script).toContain('anymux-managed-hook-router v3');
     if (process.platform !== 'win32') {
       const mode = (await stat(paths.scriptPath)).mode & 0o777;
       expect(mode & 0o100).toBe(0o100);
@@ -192,17 +192,19 @@ describe('AgentHookManager', () => {
       });
       const { scriptPath } = await manager.refreshManagedScript();
 
-      // Outside tmux -> exits 0 cleanly with 0 HTTP calls
-      await runNodeScript(scriptPath, ['--agent', 'claude', '--event', 'agent_stop'], {
-        env: { PATH: process.env.PATH },
+      // Outside tmux -> exits 0 cleanly with 0 HTTP calls, but honors --stdout-json for synchronous CLIs like agy
+      const outRes = await runNodeScript(scriptPath, ['--agent', 'antigravity', '--event', 'agent_stop', '--stdout-json', '{"decision":""}'], {
+        env: { PATH: process.env },
       });
+      expect(outRes.stdout.trim()).toBe('{"decision":""}');
       expect(received).toHaveLength(0);
 
       // Inside tmux -> reads hook-endpoint.json + tokens.json + stdin JSON and posts payload
-      await runNodeScript(scriptPath, ['--agent', 'claude', '--event', 'user_prompt_submit'], {
+      const inRes = await runNodeScript(scriptPath, ['--agent', 'claude', '--event', 'user_prompt_submit', '--stdout-json', '{}'], {
         env: { PATH: process.env.PATH, TMUX: '/tmp/tmux-test,1,0', TMUX_PANE: '%42' },
         stdinText: JSON.stringify({ model: 'claude-opus-4-5', prompt: 'Hello router' }),
       });
+      expect(inRes.stdout.trim()).toBe('{}');
       expect(received).toHaveLength(1);
       expect(received[0].auth).toBe('Bearer secret-test-token');
       expect(received[0].body).toMatchObject({
@@ -215,5 +217,86 @@ describe('AgentHookManager', () => {
     } finally {
       await new Promise((resolve) => server.close(resolve));
     }
+  });
+
+  it('installs, reconciles idempotently, and uninstalls Antigravity and DSH hooks while preserving third-party entries', async () => {
+    const root = await makeTemp();
+    const dataDir = join(root, 'data');
+    const configDir = join(root, 'config');
+    await mkdir(join(root, '.gemini', 'config'), { recursive: true });
+    await mkdir(join(root, '.dsh'), { recursive: true });
+
+    await writeFile(join(root, '.gemini', 'config', 'hooks.json'), JSON.stringify({
+      'claude-mem': { SessionStart: [{ type: 'command', command: '/opt/claude-mem' }] },
+      'orca-status': { Stop: [{ type: 'command', command: '/opt/orca/antigravity-hook.sh' }] },
+    }, null, 2));
+
+    await writeFile(join(root, '.dsh', 'cordis.patch.yml'), [
+      '# >>> orca-managed-dsh-hooks (managed by Orca; do not edit) >>>',
+      '- insert:',
+      '    - id: orca-agent-hooks',
+      "      name: '@deepseek-ai/dsh-hooks-claude-code'",
+      '# <<< orca-managed-dsh-hooks <<<',
+      '# >>> superpowers >>>',
+      '- insert:',
+      '    - id: superpowers-bootstrap',
+      '# <<< superpowers <<<',
+      '',
+    ].join('\n'));
+
+    const manager = new AgentHookManager({
+      userHome: root,
+      dataDir,
+      configDir,
+      detectCli: async (agent) => (agent === 'antigravity' || agent === 'dsh'
+        ? { found: true, path: `/usr/bin/${agent}` }
+        : { found: false, path: null }),
+    });
+
+    const first = await manager.reconcileOnStartup();
+    expect(first.results.map((r) => r.agent)).toEqual(['antigravity', 'dsh']);
+
+    const agyCfg = JSON.parse(await readFile(join(root, '.gemini', 'config', 'hooks.json'), 'utf8'));
+    expect(agyCfg['claude-mem']).toBeTruthy();
+    expect(agyCfg['orca-status']).toBeTruthy();
+    expect(agyCfg['anymux-status']).toBeTruthy();
+    expect(agyCfg['anymux-status'].PreInvocation[0].command).toContain("--stdout-json '{}'");
+    expect(agyCfg['anymux-status'].Stop[0].command).toContain('{"decision":""}');
+    expect(agyCfg['anymux-status'].PreToolUse[0].matcher).toBe('*');
+    expect(agyCfg['anymux-status'].PreToolUse[0].hooks[0].command).not.toContain('--stdout-json');
+
+    const dshYml = await readFile(join(root, '.dsh', 'cordis.patch.yml'), 'utf8');
+    expect(dshYml).toContain('orca-agent-hooks');
+    expect(dshYml).toContain('superpowers-bootstrap');
+    expect(dshYml).toContain('anymux-agent-hooks');
+    expect(dshYml).toContain(manager.dshHooksPath);
+
+    const dshJson = JSON.parse(await readFile(manager.dshHooksPath, 'utf8'));
+    expect(dshJson.hooks.SessionStart[0].hooks[0].command).toContain('--agent dsh --event session_start');
+    expect(dshJson.hooks.Stop[0].hooks[0].command).toContain('--agent dsh --event agent_stop');
+
+    const st = await manager.status();
+    expect(st.agents.find((a) => a.agent === 'antigravity')).toMatchObject({ state: 'installed', installedEvents: 5, totalEvents: 5 });
+    expect(st.agents.find((a) => a.agent === 'dsh')).toMatchObject({ state: 'installed', installedEvents: 7, totalEvents: 7 });
+
+    // Second reconcile makes zero changes and creates zero backups
+    const second = await manager.reconcileOnStartup();
+    expect(second.results.every((r) => r.added === 0 && r.backup === null)).toBe(true);
+    expect((await readdir(join(root, '.gemini', 'config'))).filter((n) => n.includes('.bak-'))).toHaveLength(1);
+    expect((await readdir(join(root, '.dsh'))).filter((n) => n.includes('.bak-'))).toHaveLength(1);
+
+    // Uninstall removes only Anymux entries and cleans dsh-hooks.json
+    await manager.uninstall('antigravity');
+    await manager.uninstall('dsh');
+    const agyAfter = JSON.parse(await readFile(join(root, '.gemini', 'config', 'hooks.json'), 'utf8'));
+    expect(agyAfter['anymux-status']).toBeUndefined();
+    expect(agyAfter['claude-mem']).toBeTruthy();
+    expect(agyAfter['orca-status']).toBeTruthy();
+
+    const dshAfter = await readFile(join(root, '.dsh', 'cordis.patch.yml'), 'utf8');
+    expect(dshAfter).not.toContain('anymux-agent-hooks');
+    expect(dshAfter).toContain('orca-agent-hooks');
+    expect(dshAfter).toContain('superpowers-bootstrap');
+    expect(await readdir(join(dataDir, 'agent-hooks'))).not.toContain('dsh-hooks.json');
   });
 });

@@ -308,6 +308,18 @@ describe('parsePaneCommands', () => {
       { windowIndex: 2, paneId: '%9', command: 'codex', path: `/tmp/a${SEP}b`, pid: 4321 },
     ]);
   });
+
+  it('merges title (T) and custom @pane_label (L) lines onto matching panes', () => {
+    const out = [
+      ['C', '0', '%3', 'agy', '/work', '700'].join(SEP),
+      ['T', '%3', 'agy ~/work'].join(SEP),
+      ['L', '%3', '自更新'].join(SEP),
+      ['L', '%4', ''].join(SEP),
+    ].join('\n');
+    expect(parsePaneCommands(out)).toEqual([
+      { windowIndex: 0, paneId: '%3', command: 'agy', path: '/work', pid: 700, title: 'agy ~/work', label: '自更新' },
+    ]);
+  });
 });
 
 describe('parsePaneAddress', () => {
@@ -369,5 +381,46 @@ describe('by-id tmux helpers', () => {
     expect(snap.paneCommandsBySession.get('$1')).toEqual([
       { windowIndex: 0, paneId: '%1', command: 'zsh', path: '/repo', pid: 1234, title: 'Title' },
     ]);
+  });
+
+  it('batches capturePaneTails into one tmux call and falls back per pane on partial error', async () => {
+    const { createTmuxApi } = await import('../../lib/tmux.js');
+    const calls = [];
+    const api = createTmuxApi({
+      exec: async (_cmd, args) => {
+        calls.push(args);
+        if (args.length > 5) {
+          return {
+            stdout: [
+              '===ANYMUX_PANE_TAIL:%0===',
+              'older line',
+              'esc to cancel   ',
+              '',
+              '===ANYMUX_PANE_TAIL:%2===',
+              'line 1',
+              '? for shortcuts',
+            ].join('\n'),
+            stderr: '',
+          };
+        }
+        return { stdout: '', stderr: '' };
+      },
+    });
+    const tails = await api.capturePaneTails(['%0', '%2', 'bad-id', '%0'], { lines: 1 });
+    expect(calls).toHaveLength(1);
+    expect(tails.get('%0')).toBe('esc to cancel');
+    expect(tails.get('%2')).toBe('? for shortcuts');
+    expect(tails.has('bad-id')).toBe(false);
+
+    const apiFallback = createTmuxApi({
+      exec: async (_cmd, args) => {
+        if (args.length > 5) throw new Error("can't find pane: %9");
+        if (args.includes('%2')) return { stdout: 'live line\n', stderr: '' };
+        throw new Error("can't find pane");
+      },
+    });
+    const recovered = await apiFallback.capturePaneTails(['%9', '%2']);
+    expect(recovered.get('%2')).toBe('live line');
+    expect(recovered.has('%9')).toBe(false);
   });
 });

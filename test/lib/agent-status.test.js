@@ -15,6 +15,7 @@ import {
   stripTitleDecorations,
   parseOsc9999Payload,
   detectAgentFromTitle,
+  detectAgentFromScreen,
   formatShortModel,
   fusePaneAgentStatus,
   buildAgentStatusSnapshot,
@@ -127,6 +128,11 @@ describe('agent-status core detection and fusion', () => {
     });
 
     expect(stripTitleDecorations('✳ Fixing tests')).toBe('Fixing tests');
+    expect(detectAgentFromTitle('✳ Claude Code', 'claude')).toMatchObject({
+      status: null,
+      agentType: 'claude',
+      label: 'Claude Code',
+    });
 
     const oscKv = parseOsc9999Payload('9999;state=working;agent=claude;model=claude-opus-4-5-20251101;subagents=2;prompt=Fix bug');
     expect(oscKv).toEqual({
@@ -146,10 +152,16 @@ describe('agent-status core detection and fusion', () => {
       source: 'osc',
     });
 
-    // Regression: astral emojis (surrogate pairs like 🐋, 🚀) must not false-match attention/permission or get half-stripped
+    // Regression: ✦ is an idle brand glyph (not a spinner); Braille spinner ⠐ is working; astral emoji (🐋, 🚀) must not false-match or get half-stripped
     expect(stripTitleDecorations('✦ 🐋 解释 MAS 的 HWID')).toBe('🐋 解释 MAS 的 HWID');
-    const dshTitle = detectAgentFromTitle('✦ 🐋 解释 MAS 的 HWID', 'dsh');
-    expect(dshTitle).toMatchObject({
+    const idleDshTitle = detectAgentFromTitle('✦ 🐋 解释 MAS 的 HWID', 'dsh');
+    expect(idleDshTitle).toMatchObject({
+      status: null,
+      agentType: 'dsh',
+      label: '🐋 解释 MAS 的 HWID',
+    });
+    const activeDshTitle = detectAgentFromTitle('⠐ 🐋 解释 MAS 的 HWID', 'dsh');
+    expect(activeDshTitle).toMatchObject({
       status: 'working',
       agentType: 'dsh',
       label: '🐋 解释 MAS 的 HWID',
@@ -160,6 +172,141 @@ describe('agent-status core detection and fusion', () => {
       agentType: 'claude',
       label: 'Approve bash',
     });
+  });
+
+  it('infers live agent state from viewport screen tail without false positives on scrollback text', () => {
+    expect(detectAgentFromScreen([
+      '⣽  0/5 steps · Running command... 10s',
+      '>',
+      'esc to cancel    auto · Orchestrator · Gemini 4 Neon · xhigh · 1 task(s) · /tasks',
+    ].join('\n'), 'antigravity')).toMatchObject({
+      status: 'working',
+      model: 'Gemini 4 Neon',
+      source: 'screen',
+    });
+
+    expect(detectAgentFromScreen([
+      '● Checked 1 task',
+      '⣽ Running command... 1s',
+      '>',
+      'Press up to edit queued messages   auto · Orchestrator · Gemini 4 Neon · xhigh',
+    ].join('\n'), 'antigravity')).toMatchObject({
+      status: 'working',
+      model: 'Gemini 4 Neon',
+    });
+
+    expect(detectAgentFromScreen([
+      'Summary ready.',
+      '>',
+      '● [14:01:50] 5m timer running',
+      '? for shortcuts   auto · Orchestrator · Gemini 4 Neon · xhigh · 1 task(s) · /tasks',
+    ].join('\n'), 'antigravity')).toMatchObject({
+      status: 'monitoring',
+      model: 'Gemini 4 Neon',
+    });
+
+    expect(detectAgentFromScreen([
+      'Finished check.',
+      '>',
+      '? for shortcuts   auto · Orchestrator · Gemini 4 Neon · xhigh',
+    ].join('\n'), 'antigravity')).toMatchObject({
+      status: 'idle',
+      model: 'Gemini 4 Neon',
+    });
+
+    expect(detectAgentFromScreen([
+      'Run shell command?',
+      '❯ 1. Allow once',
+      '  2. Deny',
+      'esc to cancel   auto · Orchestrator · Gemini 4 Neon · xhigh',
+    ].join('\n'), 'antigravity')).toMatchObject({
+      status: 'permission',
+    });
+
+    expect(detectAgentFromScreen([
+      'test result: FAILED. 31 passed; 1 failed',
+      '⌸ ❯ 自动',
+      'glm-5.3 · ● 1 · max',
+    ].join('\n'), 'dsh')).toMatchObject({
+      status: 'idle',
+    });
+
+    expect(detectAgentFromScreen([
+      'Working...',
+      '⌸ ❯ 自动',
+      'esc 中断',
+    ].join('\n'), 'dsh')).toMatchObject({
+      status: 'working',
+    });
+
+    expect(detectAgentFromScreen([
+      '› Ask Codex to do anything',
+      'GPT-6.2-Sol xhigh · ⚠ 3 warnings · f2 to view',
+    ].join('\n'), 'codex')).toMatchObject({
+      status: 'idle',
+    });
+
+    expect(detectAgentFromScreen([
+      '• Running tests (5s · esc to interrupt)',
+    ].join('\n'), 'codex')).toMatchObject({
+      status: 'working',
+    });
+
+    expect(detectAgentFromScreen('Running tool (esc to interrupt)', 'claude')).toMatchObject({
+      status: 'working',
+    });
+    expect(detectAgentFromScreen('Normal compiler error: FAILED test', 'claude')).toBeNull();
+  });
+
+  it('fuses screenMatch transitions, unread done preservation, and stale hook overrides', () => {
+    const now = 20_000;
+    const active = fusePaneAgentStatus({
+      pane: { id: '%2', command: 'agy', title: 'agy ~/w/d/windows' },
+      processMatch: { agentType: 'antigravity', pid: 100, command: 'agy' },
+      screenMatch: { status: 'working', model: 'Gemini 4 Neon', source: 'screen' },
+      now,
+    });
+    expect(active).toMatchObject({ status: 'working', model: 'Gemini 4 Neon', source: 'screen' });
+
+    const finished = fusePaneAgentStatus({
+      pane: { id: '%2', command: 'agy', title: 'agy ~/w/d/windows' },
+      processMatch: { agentType: 'antigravity', pid: 100, command: 'agy' },
+      screenMatch: { status: 'idle', model: 'Gemini 4 Neon', source: 'screen' },
+      prevStatus: active,
+      now: now + 2_000,
+    });
+    expect(finished).toMatchObject({ status: 'done', unread: true, source: 'screen' });
+
+    // Preserved until acknowledged
+    const preserved = fusePaneAgentStatus({
+      pane: { id: '%2', command: 'agy', title: 'agy ~/w/d/windows' },
+      processMatch: { agentType: 'antigravity', pid: 100, command: 'agy' },
+      screenMatch: { status: 'idle', model: 'Gemini 4 Neon', source: 'screen' },
+      prevStatus: finished,
+      now: now + 4_000,
+    });
+    expect(preserved).toMatchObject({ status: 'done', unread: true });
+
+    // Once acknowledged, settles cleanly to idle
+    const settled = fusePaneAgentStatus({
+      pane: { id: '%2', command: 'agy', title: 'agy ~/w/d/windows' },
+      processMatch: { agentType: 'antigravity', pid: 100, command: 'agy' },
+      screenMatch: { status: 'idle', model: 'Gemini 4 Neon', source: 'screen' },
+      prevStatus: { ...preserved, unread: false },
+      now: now + 6_000,
+    });
+    expect(settled).toMatchObject({ status: 'idle', unread: false });
+
+    // Stale working hook (>15s) overridden when screen returns to idle
+    const staleRecovery = fusePaneAgentStatus({
+      pane: { id: '%2', command: 'agy', title: 'agy ~/w/d/windows' },
+      processMatch: { agentType: 'antigravity', pid: 100, command: 'agy' },
+      hookState: { status: 'working', agentType: 'antigravity', updatedAt: now - 20_000 },
+      screenMatch: { status: 'idle', model: 'Gemini 4 Neon', source: 'screen' },
+      prevStatus: active,
+      now,
+    });
+    expect(staleRecovery).toMatchObject({ status: 'done', unread: true, source: 'screen' });
   });
 
   it('shortens model names cleanly', () => {

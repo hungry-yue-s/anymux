@@ -266,9 +266,15 @@ describe('AgentIcons & AgentStatus UI integration', () => {
     expect(grads).toHaveLength(2);
     expect(grads[0].id).not.toBe(grads[1].id);
 
-    // Client-side detectFromPane handles astral emoji without UTF-16 surrogate split
-    const detected = w.AgentIcons.detectFromPane({ id: '%1', command: 'node', title: '✦ 🐋 解释 MAS 的 HWID' });
-    expect(detected.status).toBe('working');
-    expect(detected.label).toBe('🐋 解释 MAS 的 HWID');
+    // Client-side detectFromPane treats ✦ as idle brand glyph (not spinner) and handles Braille spinner cleanly without splitting surrogate emoji
+    const idleDsh = w.AgentIcons.detectFromPane({ id: '%1', command: 'node', agentType: 'dsh', title: '✦ 🐋 解释 MAS 的 HWID' });
+    expect(idleDsh.status).toBe('idle');
+    expect(idleDsh.label).toBe('🐋 解释 MAS 的 HWID');
+    const noHint = w.AgentIcons.detectFromPane({ id: '%1', command: 'node', title: '✦ 🐋 解释 MAS 的 HWID' });
+    expect(noHint.status).toBeNull();
+    expect(noHint.label).toBe('🐋 解释 MAS 的 HWID');
+    const workingDsh = w.AgentIcons.detectFromPane({ id: '%1', command: 'node', agentType: 'dsh', title: '⠐ 🐋 解释 MAS 的 HWID' });
+    expect(workingDsh.status).toBe('working');
+    expect(workingDsh.label).toBe('🐋 解释 MAS 的 HWID');
   });
 });
