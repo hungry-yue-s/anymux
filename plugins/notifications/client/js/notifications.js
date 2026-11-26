@@ -41,7 +41,7 @@ var NotificationPanel = (function () {
     var key = previewKey(entry);
     var previous = _documents.find(function (n) { return previewKey(n) === key; });
     // Replayed commits stay acknowledged; an explicit file open can carry new content.
-    if (previous && entry.type === 'git' && previous.commit === entry.commit) {
+    if (previous && entry.type === 'git' && (previous.commit === entry.commit || (entry.commit === 'WORKTREE' && previous.reminderSeen))) {
       if (typeof open === 'function') _documentOpeners[previous.id] = open;
       return;
     }
@@ -630,6 +630,24 @@ var NotificationPanel = (function () {
     });
   }
 
+  function _dismissPreviewBatch(notice) {
+    if (!notice) return;
+    var changed = false;
+    _notifications.forEach(function (n) {
+      if (!isPreview(n)) return;
+      if (notice.target && n.target) {
+        if (n.serverId !== notice.serverId || n.target.instanceId !== notice.target.instanceId || n.target.windowId !== notice.target.windowId) return;
+      } else if (n.id !== notice.id) {
+        return;
+      }
+      if (!n.reminderSeen) changed = true;
+      n.reminderSeen = true;
+      delete _attentionUntil[n.id];
+    });
+    if (changed) _saveDocuments();
+    _syncAttention();
+  }
+
   function _previewReminder(row, notices) {
     var notice = notices[0];
     var card = row.querySelector('.preview-window-notice');
@@ -650,12 +668,23 @@ var NotificationPanel = (function () {
     var view = document.createElement('button');
     view.type = 'button'; view.className = 'preview-window-view'; view.textContent = '查看';
     view.setAttribute('aria-label', '查看' + (notice.type === 'git' ? '提交 ' + notice.commit : '文档 ' + notice.path.split('/').pop()));
-    view.addEventListener('click', function (event) {
+    function openFromCard(event) {
       event.stopPropagation();
       view.disabled = true;
       _openPreview(notice).finally(function () { view.disabled = false; });
+    }
+    card.addEventListener('click', openFromCard);
+    view.addEventListener('click', openFromCard);
+    var dismiss = document.createElement('button');
+    dismiss.type = 'button'; dismiss.className = 'preview-window-dismiss';
+    dismiss.textContent = '×';
+    dismiss.title = '关闭提醒';
+    dismiss.setAttribute('aria-label', '关闭提醒');
+    dismiss.addEventListener('click', function (event) {
+      event.stopPropagation();
+      _dismissPreviewBatch(notice);
     });
-    card.append(label, view);
+    card.append(label, view, dismiss);
     row.appendChild(card);
   }
 

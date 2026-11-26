@@ -215,6 +215,15 @@ describe('agent-status core detection and fusion', () => {
       now: now + 3000,
     });
     expect(ended).toBeNull();
+
+    // Custom tmux pane label takes priority over runtime title & hook prompt so sidebar matches pane header
+    const customNamed = fusePaneAgentStatus({
+      pane: { id: '%3', command: 'agy', title: 'agy ~/w/d/windows', label: '自更新' },
+      processMatch: { agentType: 'antigravity', pid: 502, command: 'agy' },
+      hookState: { status: 'working', agentType: 'antigravity', prompt: 'Should be secondary', updatedAt: now },
+      now,
+    });
+    expect(customNamed.label).toBe('自更新');
   });
 
   it('builds multi-session rolled-up snapshots respecting priority', () => {

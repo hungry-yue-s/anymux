@@ -541,7 +541,24 @@ export function createWorkbench(global, options = {}) {
       const current = context();
       const targetPane = paneId || current.paneId;
       if (!current.serverId || !targetPane) return;
-      return global.Api.patch(workspaceApiUrl(current.serverId, '/panes/' + encodeURIComponent(targetPane)), { label });
+      const result = await global.Api.patch(workspaceApiUrl(current.serverId, '/panes/' + encodeURIComponent(targetPane)), { label });
+      const trimmed = typeof label === 'string' ? label.trim() : '';
+      const ws = global.Store?.getState?.()?.entities?.workspaceByServerId?.[current.serverId];
+      if (ws && Array.isArray(ws.sessions)) {
+        for (const sess of ws.sessions) {
+          for (const win of sess.windows || []) {
+            for (const p of win.panes || []) {
+              if (p.id === targetPane) {
+                p.label = trimmed || null;
+                p.name = trimmed || p.command || 'shell';
+              }
+            }
+          }
+        }
+        global.AppShell?.render?.();
+      }
+      global.MsApp?.refreshWorkspace?.(current.serverId, { shared: true })?.catch?.(() => {});
+      return result;
     },
     async equalizeLayout(layout = 'tiled') {
       const current = context();

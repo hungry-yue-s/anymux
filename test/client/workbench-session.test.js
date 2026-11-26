@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { JSDOM } from 'jsdom';
 import { SeamWindowSession, decodeWindowBinaryFrame } from '../../plugins/workbench/client/seam-window-session.js';
 
@@ -79,8 +80,8 @@ function hydrateWindow(socket, { sizeLease = 'owner', foreignClient = false, act
   socket.onmessage({ data: encodeSnapshotBinary({ paneId: '%2', seq: 0, cols: 59, rows: 36, text: 'pane2' }) });
 }
 
-export function fixture() {
-  const dom = new JSDOM('<div id="host"></div>', { url: 'https://panel.test' });
+export function fixture({ runScripts = false } = {}) {
+  const dom = new JSDOM('<div id="host"></div>', { url: 'https://panel.test', ...(runScripts ? { runScripts: 'outside-only' } : {}) });
   const win = dom.window;
   const sockets = [];
   const terminals = [];
@@ -1408,5 +1409,52 @@ describe('SeamWindowSession multi-pane workbench session', () => {
     expect(f2.terminals[0].options.allowTransparency).toBe(true);
     s2.dispose();
     f2.close();
+  });
+
+  it('syncs Orca AgentIcons, live agent status indicator, and stripped titles onto pane top bars', async () => {
+    const f = fixture({ runScripts: true });
+    f.win.eval(readFileSync('plugins/ui/client/js/agent-icons-data.js', 'utf8'));
+    f.win.eval(readFileSync('plugins/ui/client/js/agent-status.js', 'utf8'));
+
+    const session = new SeamWindowSession(f.win, { container: f.host, target: { ...target } });
+    await session.ready;
+    const socket = f.sockets[0];
+    socket.readyState = 1;
+    socket.onopen?.();
+    socket.onmessage({ data: JSON.stringify({
+      type: 'ready', protocol: 1, instanceId: '42:123', sessionId: '$1', windowId: '@1',
+      windowCols: 120, windowRows: 36, zoomed: false, sizeLease: 'owner', inputAllowed: true,
+    }) });
+    sendLayout(socket, {
+      panes: [
+        { id: '%1', index: 0, active: true, width: 60, height: 36, cwd: '/srv/repo', command: 'node', title: '⠐ 🐋 解释 MAS 的 HWID' },
+        { id: '%2', index: 1, active: false, width: 59, height: 36, cwd: '/srv/repo', command: 'agy', label: '自更新', title: 'agy ~/srv/repo' },
+      ],
+    });
+
+    const pane1 = f.host.querySelector('.seam-pane[data-pane-id="%1"]');
+    const pane2 = f.host.querySelector('.seam-pane[data-pane-id="%2"]');
+    expect(pane2.querySelector('.pane-proc-ico .agent-app-icon.is-kind-antigravity img.agent-app-img')).not.toBeNull();
+    expect(pane2.querySelector('.pane-title').textContent).toBe('自更新');
+    expect(pane2.querySelector('.pane-agent-state').hidden).toBe(true);
+
+    // Inject backend snapshot classifying %1 as dsh (working)
+    f.win.AgentStatus.setSnapshot('dev', {
+      hasAgents: true,
+      panes: {
+        '%1': { paneId: '%1', agentType: 'dsh', appKind: 'dsh', status: 'working', unread: false },
+      },
+      windows: {},
+      sessions: {},
+    });
+
+    expect(pane1.querySelector('.pane-proc-ico .agent-app-icon.is-kind-dsh img.agent-app-img')).not.toBeNull();
+    expect(pane1.querySelector('.pane-agent-state').hidden).toBe(false);
+    expect(pane1.querySelector('.pane-agent-state .agent-state-ico.is-working')).not.toBeNull();
+    expect(pane1.querySelector('.pane-title').textContent).toBe('🐋 解释 MAS 的 HWID');
+    expect(pane1.querySelector('.pane-cmd-chip').textContent).toBe('DeepSeek Harness');
+
+    session.dispose();
+    f.close();
   });
 });

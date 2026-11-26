@@ -450,7 +450,17 @@ var Blocks = (function () {
     var wantedContext = [serverId, current.instanceId, current.windowId].join('\u0000');
     function stillWanted() {
       var route = window.Router && Router.current && Router.current();
-      return !route || (route.name === 'terminal' && route.params.serverId === serverId && route.params.windowId === current.windowId);
+      if (!route) return true;
+      if (route.name === 'terminal') {
+        return route.params.serverId === serverId && (!route.params.windowId || route.params.windowId === current.windowId);
+      }
+      if (route.name === 'workbench' && route.params.serverId === serverId) {
+        var ctx = window.FilePreview && FilePreview.blockDock && FilePreview.blockDock.context && FilePreview.blockDock.context();
+        if (ctx === wantedContext) return true;
+        var view = window.Workbench && typeof window.Workbench.get === 'function' ? window.Workbench.get(route.params.viewId) : null;
+        return !view || !view.windowId || view.windowId === current.windowId;
+      }
+      return false;
     }
     return new Promise(function (resolve) {
       function reveal() {

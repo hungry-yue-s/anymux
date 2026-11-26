@@ -432,7 +432,12 @@
         var stateClass = info.status === 'permission'
           ? ' is-attention'
           : (info.status === 'failed' ? ' is-failed' : (info.status === 'done' && info.unread ? ' is-done-unread' : ''));
-        var titleText = info.prompt || info.label || global.AgentIcons.labelOf(info.agentType || info.appKind);
+        var customPaneName = pane && pane.label && String(pane.label).trim();
+        var detailText = info.prompt || info.label || (pane && pane.title && global.AgentIcons.stripTitle ? global.AgentIcons.stripTitle(pane.title) : '');
+        var titleText = customPaneName || detailText || global.AgentIcons.labelOf(info.agentType || info.appKind);
+        var tooltipText = customPaneName && detailText && detailText !== customPaneName
+          ? (customPaneName + ' · ' + detailText)
+          : titleText;
         var relTime = info.updatedAt ? global.AgentIcons.formatRelativeTime(info.updatedAt) : '';
         var modelText = info.shortModel || '';
         var target = {
@@ -460,7 +465,7 @@
         return '<div class="tree-agent-row' + stateClass + '" data-pane="' + esc(pane.id) + '" data-window="' + esc(win.id) + '" data-server-id="' + esc(serverId) + '">'
           + '<button type="button" class="tree-agent-btn ' + (isPaneActive ? 'active' : '') + '"'
           + navAttrs
-          + ' title="' + esc(titleText) + '">'
+          + ' title="' + esc(tooltipText) + '">'
           + global.AgentIcons.statusIcon(info.status, info.unread)
           + global.AgentIcons.appIcon(info.appKind || info.agentType || 'shell')
           + '<span class="agent-row-title">' + esc(titleText) + '</span>'
@@ -494,6 +499,7 @@
       command = command.replace(/\.exe$/i, '');
       if (command === win.name) command = '';
 
+      var childAgentRows = this._renderAgentRows(serverId, session, win, params, windowAction);
       var winAgent = global.AgentStatus && typeof global.AgentStatus.getWindow === 'function'
         ? global.AgentStatus.getWindow(serverId, win)
         : null;
@@ -502,14 +508,12 @@
         : '';
       var appKind = (winAgent && winAgent.appKind)
         || (global.AgentIcons && displayPane ? global.AgentIcons.resolveKind(displayPane.command || displayPane.name, displayPane.agentType) : '');
-      var winAppHtml = appKind && global.AgentIcons ? global.AgentIcons.appIcon(appKind) : '';
+      var winAppHtml = (!childAgentRows && appKind && global.AgentIcons) ? global.AgentIcons.appIcon(appKind) : '';
       var stateCls = winAgent && winAgent.status === 'permission'
         ? ' is-attention'
         : (winAgent && winAgent.status === 'failed'
             ? ' is-failed'
             : (winAgent && winAgent.status === 'done' && winAgent.unread ? ' is-done-unread' : ''));
-
-      var childAgentRows = this._renderAgentRows(serverId, session, win, params, windowAction);
 
       return '<div class="tree-window-row" data-sidebar-entity="window"'
         + ' data-server-id="' + esc(serverId) + '" data-provider="' + esc(workspace.provider) + '"'

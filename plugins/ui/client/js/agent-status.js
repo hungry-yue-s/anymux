@@ -411,6 +411,11 @@
     return Math.floor(diffSec / 86400) + 'd';
   }
 
+  function stripTitle(title) {
+    if (!title || typeof title !== 'string') return '';
+    return title.replace(LEADING_DECORATION_RE, '').trim();
+  }
+
   function detectFromPane(pane) {
     if (!pane) return null;
     var command = pane.command || '';
@@ -433,13 +438,14 @@
       else if (INTERRUPTED_RE.test(title)) status = 'interrupted';
       else if (DONE_RE.test(title)) status = 'done';
     }
+    var customLabel = pane.label ? String(pane.label).trim() : '';
     var finalKind = agentType || kind;
     return {
       paneId: pane.id || '',
       agentType: agentType,
       appKind: finalKind,
       status: status || (agentType ? 'idle' : null),
-      label: title ? title.replace(LEADING_DECORATION_RE, '').trim() : (pane.label || command || ''),
+      label: customLabel || (title ? title.replace(LEADING_DECORATION_RE, '').trim() : '') || command || '',
       shortModel: formatShortModel(pane.model || ''),
       prompt: '',
       subagentCount: 0,
@@ -715,6 +721,7 @@
     appIcon: appIcon,
     statusIcon: statusIcon,
     labelOf: labelOf,
+    stripTitle: stripTitle,
     formatShortModel: formatShortModel,
     formatRelativeTime: formatRelativeTime,
     detectFromPane: detectFromPane,

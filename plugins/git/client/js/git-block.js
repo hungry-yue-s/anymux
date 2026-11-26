@@ -460,6 +460,7 @@
         syncCommitButton();
         if (pendingCommit) show('history');
         if (!historyView.hidden && (force || changed)) loadHistory();
+        if (!changesView.hidden) acknowledgeWorktree();
         if (diagnostic) diagnostic({ code: 'GIT_LOAD_OK', renderMs: performance.now() - renderAt, count: data.files.length });
       }).catch(function (err) {
         if (disposed) return;
@@ -1403,6 +1404,15 @@
       NotificationPanel.previewViewed({ type: 'git', path: target.path, commit: detail.__openCommit, contextKey: context });
     }
 
+    function acknowledgeWorktree() {
+      if (!window.NotificationPanel || !NotificationPanel.previewViewed || !api.isVisible()
+        || document.visibilityState === 'hidden' || changesView.hidden
+        || document.querySelector('.fp-overlay:not(.fp-dock), .blk-dialog-overlay')) return;
+      var context = window.FilePreview && FilePreview.blockDock.context();
+      if (!context || context.split('\u0000')[0] !== api.serverId || !status) return;
+      NotificationPanel.previewViewed({ type: 'git', path: target.path, commit: 'WORKTREE', contextKey: context });
+    }
+
     function show(which) {
       changesTab.classList.toggle('is-active', which === 'changes');
       historyTab.classList.toggle('is-active', which === 'history');
@@ -1411,6 +1421,7 @@
       if (!status) return;
       changesView.hidden = which !== 'changes';
       historyView.hidden = which !== 'history';
+      if (which === 'changes') acknowledgeWorktree();
       if (which === 'history' && !historyLoaded) loadHistory();
       if (which === 'history') acknowledgeCommit();
     }
@@ -1438,7 +1449,7 @@
     return {
       el: root,
       toolbar: right,
-      onShow: function () { acknowledgeCommit(); if (!firstLoad) load(false); },
+      onShow: function () { acknowledgeWorktree(); acknowledgeCommit(); if (!firstLoad) load(false); },
       update: function (params) {
         if (params && params.commit) {
           pendingCommit = params.commit;

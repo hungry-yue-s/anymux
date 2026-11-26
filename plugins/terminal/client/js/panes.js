@@ -107,7 +107,20 @@ function renderPanePills(container, panes, activePaneId, onPaneClick) {
     var label = document.createElement('span');
     label.className = 'pane-pill-label';
     label.textContent = p.label || p.command || '窗格';
-    pill.append(index, label);
+    if (window.AgentIcons && typeof window.AgentIcons.appIcon === 'function') {
+      var sid = (window.Api && typeof window.Api.activeServerId === 'function' && window.Api.activeServerId()) || 'local';
+      var liveInfo = window.AgentStatus && typeof window.AgentStatus.getPane === 'function'
+        ? window.AgentStatus.getPane(sid, p.id)
+        : null;
+      var kind = (liveInfo && (liveInfo.appKind || liveInfo.agentType))
+        || window.AgentIcons.resolveKind(p.command || p.name, p.agentType);
+      var iconWrap = document.createElement('span');
+      iconWrap.className = 'pane-pill-icon';
+      iconWrap.innerHTML = window.AgentIcons.appIcon(kind);
+      pill.append(index, iconWrap, label);
+    } else {
+      pill.append(index, label);
+    }
     pill.title = '窗格 ' + paneIndex + ' · ' + label.textContent;
     pill.setAttribute('aria-label', pill.title);
     pill.setAttribute('data-pane-id', p.id);

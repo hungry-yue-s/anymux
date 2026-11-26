@@ -227,6 +227,33 @@ describe('window preview feedback', () => {
     panel.addPreview(notice, async () => true);
     expect(win.document.querySelector('.tree-session-row .preview-window-view')).not.toBeNull();
   });
+
+  it('dismisses floating reminders with the × button without marking bell history read, and ignores WORKTREE ping-pong', () => {
+    const { win, panel, notice } = setup();
+    panel.addPreview(notice, async () => true);
+    const row = win.document.querySelector('#source');
+    const dismissBtn = row.querySelector('.preview-window-dismiss');
+    expect(dismissBtn).not.toBeNull();
+
+    dismissBtn.click();
+    expect(row.querySelector('.preview-window-notice')).toBeNull();
+    expect(panel.unreadCount()).toBe(1);
+    const saved = JSON.parse(win.localStorage.getItem('anymux_document_notifications_v1'));
+    expect(saved.every(n => n.reminderSeen)).toBe(true);
+
+    // Subsequent WORKTREE ping-pong does not resurrect an already-seen repo batch
+    panel.addPreview({ ...notice, id: 'git-worktree', commit: 'WORKTREE', message: '工作区有 1 处待审阅变更' });
+    expect(row.querySelector('.preview-window-notice')).toBeNull();
+
+    // New real commit brings a fresh reminder, clickable on the card body too
+    const openNewest = vi.fn(async () => true);
+    panel.addPreview({ ...notice, id: 'git-commit-2', commit: '99998888', message: '新提交' }, openNewest);
+    const nextCard = row.querySelector('.preview-window-notice');
+    expect(nextCard).not.toBeNull();
+    nextCard.click();
+    expect(openNewest).toHaveBeenCalledOnce();
+    expect(row.querySelector('.preview-window-notice')).toBeNull();
+  });
 });
 
 describe('notification viewport layout', () => {

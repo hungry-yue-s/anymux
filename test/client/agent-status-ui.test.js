@@ -48,6 +48,7 @@ describe('AgentIcons & AgentStatus UI integration', () => {
           windows: [
             { id: '@1', index: 0, name: 'dev', panes: [{ id: '%1', command: 'claude', title: '⠹ Fixing UI', active: true }] },
             { id: '@2', index: 1, name: 'docs', panes: [{ id: '%2', command: 'unknowncmd', active: true }] },
+            { id: '@3', index: 2, name: 'agy', panes: [{ id: '%3', command: 'agy', active: true }] },
           ],
         },
       ],
@@ -57,14 +58,17 @@ describe('AgentIcons & AgentStatus UI integration', () => {
     tree.innerHTML = w.AppShell._renderTree('local', { name: 'terminal', params: { serverId: 'local', sessionId: '$1', windowId: '@1' } });
 
     const rows = tree.querySelectorAll('.tree-window-row');
-    expect(rows).toHaveLength(2);
+    expect(rows).toHaveLength(3);
     // Keep textContent invariant expected by app-shell tests
     expect(rows[0].querySelector('.tree-item').textContent.startsWith('dev')).toBe(true);
     expect(rows[1].querySelector('.tree-item').textContent.startsWith('docs')).toBe(true);
 
-    // Claude working spinner + brand SVG on row 0
+    // Expanded window row keeps rolled-up status icon and suppresses redundant parent app icon
     expect(rows[0].querySelector('.agent-state-ico.is-working .agent-spinner')).not.toBeNull();
-    expect(rows[0].querySelector('.agent-app-icon.is-kind-claude svg')).not.toBeNull();
+    expect(rows[0].querySelector('.agent-app-icon')).toBeNull();
+    expect(tree.querySelector('.tree-agent-list[data-window="@1"] .agent-app-icon.is-kind-claude svg')).not.toBeNull();
+    // Single-pane unexpanded rows still show their app icon on the window row
+    expect(rows[2].querySelector('.agent-app-icon.is-kind-antigravity img.agent-app-img')).not.toBeNull();
     // Letter fallback uses data-letter CSS pseudo-element so textContent stays empty
     const letterIcon = rows[1].querySelector('.agent-app-icon.is-letter');
     expect(letterIcon).not.toBeNull();
@@ -146,6 +150,30 @@ describe('AgentIcons & AgentStatus UI integration', () => {
     expect(agentRows[0].querySelector('.agent-row-time').textContent).toBe('2m');
     expect(agentRows[1].classList.contains('is-done-unread')).toBe(true);
     expect(agentRows[1].querySelector('.agent-app-icon.is-kind-codex')).not.toBeNull();
+
+    // Custom pane label matches pane header name even when agent prompt/title exists
+    w.Store.setWorkspace('local', {
+      provider: 'tmux',
+      instanceId: '1:1',
+      actions: {},
+      sessions: [{
+        id: '$1',
+        name: 'orca-port',
+        windows: [{
+          id: '@1',
+          index: 0,
+          name: 'checkout',
+          panes: [
+            { id: '%1', index: 0, command: 'claude', label: '自更新', active: true },
+            { id: '%2', index: 1, command: 'codex', active: false },
+          ],
+        }],
+      }],
+    });
+    tree.innerHTML = w.AppShell._renderTree('local', { name: 'terminal', params: { serverId: 'local', sessionId: '$1', windowId: '@1' } });
+    const namedRow = tree.querySelector('.tree-agent-row[data-pane="%1"]');
+    expect(namedRow.querySelector('.agent-row-title').textContent).toBe('自更新');
+    expect(namedRow.querySelector('.tree-agent-btn').getAttribute('title')).toContain('Tighten validation');
 
     // Acknowledge finished pane clears done unread and posts ack
     w.AgentStatus.acknowledge('local', { windowId: '@1', paneId: '%2', sessionId: '$1' });

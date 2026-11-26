@@ -932,6 +932,9 @@ export class SeamWindowSession {
 
     const num = doc.createElement('span');
     num.className = 'pane-num';
+    const agentStateEl = doc.createElement('span');
+    agentStateEl.className = 'pane-agent-state';
+    agentStateEl.hidden = true;
     const ico = doc.createElement('span');
     ico.className = 'pane-proc-ico';
     const identity = doc.createElement('div');
@@ -983,7 +986,7 @@ export class SeamWindowSession {
     confirmNo.textContent = '取消';
     confirmBox.append(confirmLabel, confirmYes, confirmNo);
 
-    rail.append(num, ico, identity, actions, confirmBox);
+    rail.append(num, agentStateEl, ico, identity, actions, confirmBox);
 
     const body = doc.createElement('div');
     body.className = 'pane-body';
@@ -999,6 +1002,7 @@ export class SeamWindowSession {
       rail,
       body,
       num,
+      agentStateEl,
       ico,
       titleEl,
       cmdChip,
@@ -1150,29 +1154,77 @@ export class SeamWindowSession {
     entry.linkProvider = this.global.FilePreview.registerLinkProvider(entry.term, paneId, () => paneId, source, { panes });
   }
 
+  _resolvePaneAgentVisual(entry) {
+    const isRich = Boolean(entry.meta?.kind && entry.meta.kind !== 'terminal');
+    if (isRich) return { isRich: true, agentInfo: null, resolvedKind: entry.meta.kind };
+    const agentIcons = this.global.AgentIcons;
+    const agentInfo = this.global.AgentStatus?.getPane?.(this.target.serverId, entry.paneId)
+      || agentIcons?.detectFromPane?.(entry.meta)
+      || null;
+    const resolvedKind = agentIcons
+      ? ((agentInfo && (agentInfo.appKind || agentInfo.agentType))
+          || agentIcons.resolveKind(entry.meta?.command || entry.meta?.label || '', agentInfo?.agentType))
+      : commandKind(entry.meta?.command || entry.meta?.label);
+    return { isRich: false, agentInfo, resolvedKind };
+  }
+
   _updatePaneMeta(entry, meta) {
     const prevCwd = entry.meta?.cwd;
     entry.meta = { ...entry.meta, ...meta };
     const idx = Number.isInteger(entry.meta.index) ? entry.meta.index : Number(entry.paneId.slice(1)) || 0;
-    const isRich = Boolean(entry.meta.kind && entry.meta.kind !== 'terminal');
-    const kind = isRich ? entry.meta.kind : commandKind(entry.meta.command || entry.meta.label);
-    const icoKey = isRich ? (PANE_ICONS[kind] ? kind : 'rich') : (PANE_ICONS[kind] ? kind : 'shell');
+    const agentIcons = this.global.AgentIcons;
+    const { isRich, agentInfo, resolvedKind } = this._resolvePaneAgentVisual(entry);
+    const kind = resolvedKind;
+
     entry.num.textContent = String(idx);
     entry.ico.className = 'pane-proc-ico is-' + kind;
-    if (entry._icoKey !== icoKey) {
-      entry._icoKey = icoKey;
-      entry.ico.innerHTML = PANE_ICONS[icoKey] || PANE_ICONS.shell;
+    if (!isRich && agentIcons?.appIcon) {
+      const icoKey = 'agent:' + kind;
+      if (entry._icoKey !== icoKey) {
+        entry._icoKey = icoKey;
+        entry.ico.innerHTML = agentIcons.appIcon(kind);
+      }
+      const st = agentInfo?.status;
+      if (st && st !== 'idle' && st !== 'session_ended' && typeof agentIcons.statusIcon === 'function') {
+        const stateKey = st + ':' + Boolean(agentInfo.unread);
+        if (entry._agentStateKey !== stateKey) {
+          entry._agentStateKey = stateKey;
+          entry.agentStateEl.innerHTML = agentIcons.statusIcon(st, agentInfo.unread);
+        }
+        entry.agentStateEl.hidden = false;
+      } else {
+        entry._agentStateKey = '';
+        entry.agentStateEl.hidden = true;
+        entry.agentStateEl.innerHTML = '';
+      }
+    } else {
+      const icoKey = isRich ? (PANE_ICONS[kind] ? kind : 'rich') : (PANE_ICONS[kind] ? kind : 'shell');
+      if (entry._icoKey !== icoKey) {
+        entry._icoKey = icoKey;
+        entry.ico.innerHTML = PANE_ICONS[icoKey] || PANE_ICONS.shell;
+      }
+      entry._agentStateKey = '';
+      entry.agentStateEl.hidden = true;
+      entry.agentStateEl.innerHTML = '';
     }
+
     const parsedPayload = isRich ? parseTilePayload(entry.meta.payload) : null;
     const richFallbackTitle = isRich
       ? (kind === 'diff'
         ? (parsedPayload?.path && parsedPayload.path !== '.' ? 'Git · ' + basenameOf(parsedPayload.path) : 'Git 预览')
         : '[' + kind + '] ' + (parsedPayload?.url || parsedPayload?.path || kind))
       : '';
-    const primaryTitle = entry.meta.label || (isRich ? richFallbackTitle : (entry.meta.title || entry.meta.command || ('窗格 ' + idx)));
+    let fallbackTitle = entry.meta.title || entry.meta.command || ('窗格 ' + idx);
+    if (!isRich && !entry.meta.label && !entry.agentStateEl.hidden && agentIcons?.stripTitle && entry.meta.title) {
+      fallbackTitle = agentIcons.stripTitle(entry.meta.title) || fallbackTitle;
+    }
+    const primaryTitle = entry.meta.label || (isRich ? richFallbackTitle : fallbackTitle);
     entry.titleEl.textContent = primaryTitle;
-    const cmd = isRich ? '' : basenameOf(entry.meta.command);
-    entry.cmdChip.textContent = cmd && cmd !== primaryTitle ? cmd : '';
+    const rawCmd = isRich ? '' : basenameOf(entry.meta.command);
+    const chipCmd = (!isRich && agentInfo?.agentType && agentIcons?.labelOf && /^(?:node|nodejs|python\d?|bun|deno|agy)$/i.test(rawCmd))
+      ? agentIcons.labelOf(agentInfo.agentType)
+      : rawCmd;
+    entry.cmdChip.textContent = chipCmd && chipCmd !== primaryTitle ? chipCmd : '';
     entry.cmdChip.hidden = !entry.cmdChip.textContent;
     const cwdShort = basenameOf(entry.meta.cwd);
     entry.ctxEl.textContent = cwdShort || '';
@@ -1188,6 +1240,15 @@ export class SeamWindowSession {
     if (!isRich && entry.opened && prevCwd !== entry.meta.cwd) {
       this._attachPaneLinkProvider(entry);
     }
+  }
+
+  _syncAgentVisuals() {
+    if (this.disposed) return;
+    for (const entry of this.panes.values()) {
+      if (entry.titleEl.hidden) continue; // preserve active inline rename input
+      this._updatePaneMeta(entry, entry.meta);
+    }
+    this._renderMobilePaneBar();
   }
 
   _syncActivePaneState() {
@@ -1386,7 +1447,20 @@ export class SeamWindowSession {
       const name = doc.createElement('span');
       name.className = 'seam-mobile-pane-name';
       name.textContent = entry.titleEl?.textContent || entry.meta?.command || ('窗格 ' + num.textContent);
-      btn.append(num, name);
+      const agentIcons = this.global.AgentIcons;
+      const { isRich, agentInfo, resolvedKind } = this._resolvePaneAgentVisual(entry);
+      if (!isRich && agentIcons?.appIcon) {
+        const icoWrap = doc.createElement('span');
+        icoWrap.className = 'seam-mobile-pane-ico';
+        const st = agentInfo?.status;
+        const stHtml = (st && st !== 'idle' && st !== 'session_ended' && typeof agentIcons.statusIcon === 'function')
+          ? agentIcons.statusIcon(st, agentInfo.unread)
+          : '';
+        icoWrap.innerHTML = stHtml + agentIcons.appIcon(resolvedKind);
+        btn.append(num, icoWrap, name);
+      } else {
+        btn.append(num, name);
+      }
       if (entry.el.classList.contains('is-needs-you')) {
         const dot = doc.createElement('span');
         dot.className = 'seam-mobile-pane-dot';
@@ -2038,6 +2112,7 @@ export class SeamWindowSession {
 
     // Ensure pressing Escape inside rename input stays localized cleanly.
     this._listen(doc, 'notifications-changed', () => this.syncAttention());
+    this._listen(this.global, 'agent-status-changed', () => this._syncAgentVisuals());
   }
 
   startRenamePane(paneId) {
