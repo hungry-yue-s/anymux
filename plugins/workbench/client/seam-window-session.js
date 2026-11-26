@@ -780,9 +780,16 @@ export class SeamWindowSession {
     const windowLive = this.status === 'live';
     for (const pane of this.panes.values()) {
       if (!pane.term) continue;
-      const enabled = windowLive && this._isPaneInputAllowed(pane.paneId) && pane.hydrated && !pane.restoring;
-      pane.term.options.disableStdin = !enabled;
-      pane.term.options.cursorBlink = enabled && pane.paneId === this.activePaneId;
+      const allowed = windowLive && this._isPaneInputAllowed(pane.paneId);
+      const ready = allowed && pane.hydrated && !pane.restoring;
+      // Keep disableStdin false across in-place live resize/resync snapshots so mobile WebKit/Chrome
+      // does not dismiss an open soft keyboard when xterm's helper textarea momentarily toggles readOnly.
+      const keepStdin = allowed && (pane.hydrated || (pane.restoring && pane.everHydrated));
+      const disableStdin = !keepStdin;
+      if (pane.term.options.disableStdin !== disableStdin) {
+        pane.term.options.disableStdin = disableStdin;
+      }
+      pane.term.options.cursorBlink = ready && pane.paneId === this.activePaneId;
     }
   }
 
@@ -825,6 +832,7 @@ export class SeamWindowSession {
     this._resetResizeGuard();
     for (const pane of this.panes.values()) {
       pane.hydrated = Boolean(pane.isRich);
+      pane.everHydrated = Boolean(pane.isRich);
       pane.restoring = false;
       pane.lastSeq = null;
       pane.pendingWrites = [];
@@ -992,6 +1000,13 @@ export class SeamWindowSession {
     }
 
     // Snapshot fence (`0x02`): always authoritative over an ordered WebSocket.
+    const prevBuf = entry.everHydrated ? entry.term.buffer?.active : null;
+    const preserveScrollFromBottom = (
+      prevBuf
+      && prevBuf.type !== 'alternate'
+      && Number(prevBuf.baseY) > 0
+      && Number(prevBuf.viewportY) < Number(prevBuf.baseY)
+    ) ? (Number(prevBuf.baseY) - Number(prevBuf.viewportY)) : 0;
     entry.lastSeq = frame.seq;
     entry.historyTotal = frame.historyTotal;
     entry.historyLines = frame.historyLines;
@@ -1007,10 +1022,17 @@ export class SeamWindowSession {
     const finishRestore = () => {
       if (this.disposed || epoch !== this.epoch || snapEpoch !== entry.snapshotEpoch || !this.panes.has(entry.paneId)) return;
       entry.hydrated = true;
+      entry.everHydrated = true;
       entry.restoring = false;
       const queued = entry.pendingWrites.splice(0);
       entry.pendingBytes = 0;
       for (const chunk of queued) this._queueLiveWrite(entry, chunk, epoch);
+      if (preserveScrollFromBottom > 0) {
+        const nextBuf = entry.term.buffer?.active;
+        if (nextBuf && nextBuf.type !== 'alternate' && Number(nextBuf.baseY) > 0) {
+          entry.term.scrollToLine?.(Math.max(0, Number(nextBuf.baseY) - preserveScrollFromBottom));
+        }
+      }
       this._syncInputGates();
       this._syncMobileViewportTransform(entry);
       this._becameReady();
@@ -1166,6 +1188,7 @@ export class SeamWindowSession {
       entry.renderedKind = kind;
       entry.renderedPayload = payload;
       entry.hydrated = true;
+      entry.everHydrated = true;
       entry.restoring = false;
       entry.el.classList.add('is-rich');
       entry.tileHandle = registry.mount(kind, entry.body, {
@@ -1185,6 +1208,7 @@ export class SeamWindowSession {
     if (entry.isRich) {
       this._teardownPaneRenderer(entry);
       entry.hydrated = false;
+      entry.everHydrated = false;
     }
     entry.isRich = false;
     entry.renderedKind = 'terminal';
@@ -1324,6 +1348,7 @@ export class SeamWindowSession {
       cleanups: [],
       opened: false,
       hydrated: isRich,
+      everHydrated: isRich,
       restoring: false,
       lastSeq: null,
       pendingWrites: [],
@@ -1348,7 +1373,11 @@ export class SeamWindowSession {
     el.addEventListener('pointerdown', focusThisPane, true);
     rail.addEventListener('click', (event) => {
       const btn = event.target.closest('[data-pane-action]');
-      if (!btn) { focusThisPane(); entry.term?.focus(); return; }
+      if (!btn) {
+        focusThisPane();
+        if (!this._isMobile()) entry.term?.focus();
+        return;
+      }
       event.stopPropagation();
       const action = btn.dataset.paneAction;
       if (action === 'split-h') this.onAction('split', { paneId, direction: 'horizontal' });
@@ -3122,7 +3151,15 @@ export class SeamWindowSession {
   focus(paneId = this.activePaneId) {
     if (this.disposed) return;
     const target = (paneId && this.panes.get(paneId)) || this.panes.values().next().value;
-    target?.term?.focus();
+    if (!target?.term) return;
+    if (this._isMobile()) {
+      const doc = this.global.document;
+      const ta = target.term.textarea;
+      if (ta && doc?.activeElement === ta && !doc.documentElement?.classList?.contains('mobile-keyboard-open')) {
+        ta.blur();
+      }
+    }
+    target.term.focus();
   }
 
   setFontSize(size) {
@@ -3187,6 +3224,7 @@ export class SeamWindowSession {
   _installTouchSelection(entry) {
     const { body, term } = entry;
     let origin, lastTouch, anchor, selecting = false, scrolling = false, panning = false, pinch = null, suppressClick = false, copyButton;
+    let moved = false, gestureBlocked = false, hadMultiTouch = false, suppressMouseUntil = 0;
     let accumPx = 0, velocity = 0, lastMoveTime = 0, momentumId = null, lastPoint = { x: 0, y: 0 }, lastTap = null;
     const clearHold = () => { this.global.clearTimeout(entry.holdTimer); entry.holdTimer = null; };
     const stopMomentum = () => {
@@ -3308,24 +3346,32 @@ export class SeamWindowSession {
     };
     const onStart = (event) => {
       if (!this._isMobile() || event.target.closest?.('.wb-touch-copy, .wb-scroll-bottom, .seam-pane-takeover')) return;
-      if (event.touches.length === 2) {
+      if (event.touches.length >= 2) {
+        hadMultiTouch = true;
+        gestureBlocked = true;
         clearHold(); stopMomentum(); origin = null; scrolling = false; panning = false;
-        const [t1, t2] = event.touches;
-        pinch = {
-          startDist: Math.max(1, Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY)),
-          startScale: entry.userScale || 1,
-        };
+        if (event.touches.length === 2) {
+          const [t1, t2] = event.touches;
+          pinch = {
+            startDist: Math.max(1, Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY)),
+            startScale: entry.userScale || 1,
+          };
+        }
         return;
       }
       if (event.touches.length !== 1) return;
+      const wasMomentum = momentumId != null;
       pinch = null;
-      clearHold(); stopMomentum(); selecting = false; scrolling = false; panning = false; accumPx = 0; velocity = 0;
+      clearHold(); stopMomentum();
+      moved = false; selecting = false; scrolling = false; panning = false; accumPx = 0; velocity = 0;
+      gestureBlocked = wasMomentum || hadMultiTouch;
       copyButton?.remove(); copyButton = null;
       const touch = event.touches[0];
       const now = Date.now();
       if (lastTap && now - lastTap.time < 280 && Math.hypot(touch.clientX - lastTap.x, touch.clientY - lastTap.y) < 24) {
         lastTap = null;
         if ((entry.userScale || 1) > 1.02 || entry.panX || entry.panY) {
+          gestureBlocked = true;
           entry.userScale = 1;
           entry.panX = 0;
           entry.panY = 0;
@@ -3341,8 +3387,8 @@ export class SeamWindowSession {
       anchor = position(touch);
       if (!anchor) return;
       entry.holdTimer = this.global.setTimeout(() => {
-        if (this.disposed || !anchor || scrolling || panning || pinch) return;
-        selecting = true; suppressClick = true;
+        if (this.disposed || !anchor || scrolling || panning || pinch || moved || gestureBlocked) return;
+        selecting = true; suppressClick = true; gestureBlocked = true;
         this.global.navigator?.vibrate?.(20);
         const line = term.buffer.active.getLine(anchor.row);
         const { left, right } = expandWordAt(line, anchor.col, term.cols);
@@ -3353,6 +3399,7 @@ export class SeamWindowSession {
     };
     const onMove = (event) => {
       if (pinch && event.touches.length === 2) {
+        gestureBlocked = true;
         clearHold();
         event.preventDefault();
         event.stopPropagation();
@@ -3362,7 +3409,14 @@ export class SeamWindowSession {
         this._syncMobileViewportTransform(entry);
         return;
       }
-      if (!origin || event.touches.length !== 1) { clearHold(); return; }
+      if (!origin || event.touches.length !== 1) {
+        clearHold();
+        if (event.touches.length > 1) {
+          hadMultiTouch = true;
+          gestureBlocked = true;
+        }
+        return;
+      }
       const touch = event.touches[0];
       if (selecting) {
         event.preventDefault(); event.stopPropagation();
@@ -3383,7 +3437,9 @@ export class SeamWindowSession {
         return;
       }
       if (!scrolling) {
-        if (Math.hypot(totalDx, totalDy) <= 10) return;
+        if (Math.hypot(totalDx, totalDy) <= 8) return;
+        moved = true;
+        gestureBlocked = true;
         clearHold();
         if (((entry.userScale || 1) > 1.02 || (entry.fitScale || 1) < 0.99) && Math.abs(totalDx) > Math.abs(totalDy)) {
           panning = true;
@@ -3393,8 +3449,13 @@ export class SeamWindowSession {
           this._syncMobileViewportTransform(entry);
           return;
         }
-        if (Math.abs(totalDy) >= Math.abs(totalDx)) scrolling = true;
-        else return;
+        if (Math.abs(totalDy) >= Math.abs(totalDx)) {
+          scrolling = true;
+        } else {
+          event.preventDefault();
+          event.stopPropagation();
+          return;
+        }
       }
       event.preventDefault();
       event.stopPropagation();
@@ -3415,19 +3476,22 @@ export class SeamWindowSession {
     };
     const onEnd = (event) => {
       clearHold(); origin = null; lastTouch = null;
-      if (pinch && (!event.touches || event.touches.length < 2)) {
+      const remainingTouches = event.touches?.length || 0;
+      const blocked = gestureBlocked || hadMultiTouch || Boolean(pinch) || panning || selecting || scrolling || moved;
+      if (blocked) {
+        suppressMouseUntil = Date.now() + 700;
+        suppressClick = true;
+      }
+      if (pinch && remainingTouches < 2) {
         pinch = null;
         event.preventDefault?.(); event.stopPropagation?.();
-        return;
-      }
-      if (panning) {
+      } else if (panning) {
         panning = false;
         event.preventDefault?.(); event.stopPropagation?.();
-        return;
-      }
-      if (selecting) { event.preventDefault(); event.stopPropagation(); return; }
-      if (scrolling) {
-        event.preventDefault(); event.stopPropagation();
+      } else if (selecting) {
+        event.preventDefault?.(); event.stopPropagation?.();
+      } else if (scrolling) {
+        event.preventDefault?.(); event.stopPropagation?.();
         scrolling = false;
         if (Math.abs(velocity) > 0.25 && typeof this.global.requestAnimationFrame === 'function') {
           let v = velocity;
@@ -3446,16 +3510,56 @@ export class SeamWindowSession {
           };
           momentumId = this.global.requestAnimationFrame(step);
         }
+      } else if (blocked) {
+        event.preventDefault?.(); event.stopPropagation?.();
+      } else if (this._isMobile() && event.type === 'touchend' && this._isPaneInputAllowed(entry.paneId)) {
+        const doc = this.global.document;
+        const ta = term.textarea;
+        if (ta && doc?.activeElement === ta && !doc.documentElement?.classList?.contains('mobile-keyboard-open')) {
+          ta.blur();
+          ta.focus({ preventScroll: true });
+        }
+      }
+      if (remainingTouches === 0) {
+        hadMultiTouch = false;
+        gestureBlocked = false;
+        moved = false;
+      }
+    };
+    const onCancel = () => {
+      clearHold();
+      origin = null;
+      lastTouch = null;
+      pinch = null;
+      panning = false;
+      scrolling = false;
+      selecting = false;
+      moved = false;
+      hadMultiTouch = false;
+      gestureBlocked = false;
+      suppressMouseUntil = Date.now() + 700;
+      suppressClick = true;
+    };
+    const onMouseDown = (event) => {
+      if (!this._isMobile() || event.target.closest?.('.wb-touch-copy, .wb-scroll-bottom, .seam-pane-takeover')) return;
+      if (Date.now() < suppressMouseUntil || gestureBlocked || !this._isPaneInputAllowed(entry.paneId)) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
       }
     };
     const onClick = (event) => {
-      if (event.target.closest?.('.wb-touch-copy, .wb-scroll-bottom')) return;
-      if (suppressClick) { event.preventDefault(); event.stopImmediatePropagation(); suppressClick = false; }
+      if (event.target.closest?.('.wb-touch-copy, .wb-scroll-bottom, .seam-pane-takeover')) return;
+      if (suppressClick || (this._isMobile() && Date.now() < suppressMouseUntil)) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        suppressClick = false;
+      }
     };
     body.addEventListener('touchstart', onStart, { capture: true, passive: true });
     body.addEventListener('touchmove', onMove, { capture: true, passive: false });
     body.addEventListener('touchend', onEnd, { capture: true, passive: false });
-    body.addEventListener('touchcancel', clearHold, { passive: true });
+    body.addEventListener('touchcancel', onCancel, { capture: true, passive: true });
+    body.addEventListener('mousedown', onMouseDown, true);
     body.addEventListener('click', onClick, true);
     entry.cleanups.push(() => {
       clearHold(); stopMomentum(); copyButton?.remove(); scrollBottomBtn.remove();
@@ -3463,7 +3567,8 @@ export class SeamWindowSession {
       body.removeEventListener('touchstart', onStart, { capture: true });
       body.removeEventListener('touchmove', onMove, { capture: true });
       body.removeEventListener('touchend', onEnd, { capture: true });
-      body.removeEventListener('touchcancel', clearHold);
+      body.removeEventListener('touchcancel', onCancel, { capture: true });
+      body.removeEventListener('mousedown', onMouseDown, true);
       body.removeEventListener('click', onClick, true);
     });
   }

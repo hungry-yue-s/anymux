@@ -101,6 +101,7 @@ export function fixture({ runScripts = false } = {}) {
       this.buffer = { active: { viewportY: 0, baseY: 0, type: 'normal', getLine: () => null } };
       this.modes = { mouseTrackingMode: 'none' };
       this.scrolledLines = [];
+      this.scrolledToLines = [];
       this.scrolledToBottom = 0;
       terminals.push(this);
     }
@@ -124,6 +125,7 @@ export function fixture({ runScripts = false } = {}) {
     onWriteParsed(fn) { this.listeners.writeParsed = fn; return { dispose() {} }; }
     onScroll(fn) { this.listeners.scroll = fn; return { dispose() {} }; }
     scrollLines(n) { this.scrolledLines.push(n); }
+    scrollToLine(n) { this.scrolledToLines.push(n); this.buffer.active.viewportY = n; this.listeners.scroll?.(); }
     scrollToBottom() { this.scrolledToBottom += 1; this.buffer.active.viewportY = this.buffer.active.baseY; this.listeners.scroll?.(); }
     clearSelection() {}
     write(data, done) { this.writes.push(data); done?.(); }
@@ -1710,6 +1712,142 @@ describe('SeamWindowSession multi-pane workbench session', () => {
     session.selectPane('%2');
     sendLayout(socket, { activePaneId: '%1' });
     expect(session.activePaneId).toBe('%2');
+
+    session.dispose();
+    f.close();
+  });
+
+  it('keeps disableStdin false and preserves scrollback offset during live re-snapshots', async () => {
+    const f = fixture();
+    f.win.MobileUI = { isMobile: () => true };
+    const session = new SeamWindowSession(f.win, { container: f.host, target });
+    await session.ready;
+    const socket = f.sockets[0];
+    hydrateWindow(socket);
+    const term1 = f.terminals[0];
+    expect(term1.options.disableStdin).toBe(false);
+
+    // Track every disableStdin toggle during an async re-snapshot
+    const toggledTrueDuringLiveResync = [];
+    let currentDisable = term1.options.disableStdin;
+    Object.defineProperty(term1.options, 'disableStdin', {
+      configurable: true,
+      get: () => currentDisable,
+      set: (val) => {
+        currentDisable = val;
+        if (val === true) toggledTrueDuringLiveResync.push(val);
+      },
+    });
+
+    // Simulate user scrolled up 30 lines from bottom (baseY=100, viewportY=70)
+    term1.buffer.active.baseY = 100;
+    term1.buffer.active.viewportY = 70;
+    let deferredDone = null;
+    term1.write = (_data, done) => { deferredDone = done; };
+
+    socket.onmessage({ data: encodeSnapshotBinary({ paneId: '%1', seq: 1, cols: 60, rows: 30, text: 'resync' }) });
+    // Even while restoring mid-write, everHydrated pane must NOT flip disableStdin to true
+    expect(toggledTrueDuringLiveResync).toHaveLength(0);
+    expect(currentDisable).toBe(false);
+    // While restoring, send() still safely queues/blocks user typing
+    expect(session.send('x', true, '%1')).toBe(false);
+
+    // Snapshot write finishes and updates buffer baseY -> viewportY preserved 30 lines from bottom
+    term1.buffer.active.baseY = 110;
+    term1.buffer.active.viewportY = 110;
+    deferredDone();
+    expect(term1.scrolledToLines.at(-1)).toBe(80);
+    expect(currentDisable).toBe(false);
+
+    // Observer / disconnect transitions DO still re-lock disableStdin = true
+    socket.onmessage({ data: JSON.stringify({ type: 'size-lease', protocol: 1, sizeLease: 'observer', inputAllowed: false, windowCols: 60, windowRows: 30, zoomed: false }) });
+    expect(currentDisable).toBe(true);
+
+    session.dispose();
+    f.close();
+  });
+
+  it('blocks synthetic mousedown after mobile swipe, pinch, double-tap reset, and rail taps, while allowing clean tap & mobile keyboard reopen', async () => {
+    const f = fixture();
+    f.win.MobileUI = { isMobile: () => true };
+    const session = new SeamWindowSession(f.win, { container: f.host, target });
+    await session.ready;
+    hydrateWindow(f.sockets[0]);
+    const term1 = f.terminals[0];
+    const pane1 = f.host.querySelector('.seam-pane[data-pane-id="%1"]');
+    const body1 = pane1.querySelector('.pane-body');
+    const rail1 = pane1.querySelector('.seam-rail');
+
+    const dispatchTouch = (type, touches) => {
+      const ev = new f.win.Event(type, { bubbles: true, cancelable: true });
+      Object.defineProperty(ev, 'touches', { value: touches });
+      body1.dispatchEvent(ev);
+      return ev;
+    };
+    const dispatchMouseDown = () => {
+      const ev = new f.win.MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0 });
+      body1.dispatchEvent(ev);
+      return ev;
+    };
+
+    // 1. Diagonal/horizontal swipe on non-scaled pane -> prevents default & suppresses trailing mousedown
+    dispatchTouch('touchstart', [{ clientX: 100, clientY: 200 }]);
+    const hMove = dispatchTouch('touchmove', [{ clientX: 145, clientY: 204 }]);
+    expect(hMove.defaultPrevented).toBe(true);
+    dispatchTouch('touchend', []);
+    expect(dispatchMouseDown().defaultPrevented).toBe(true);
+
+    // 2. Vertical swipe -> suppresses trailing mousedown
+    dispatchTouch('touchstart', [{ clientX: 100, clientY: 200 }]);
+    dispatchTouch('touchmove', [{ clientX: 100, clientY: 140 }]);
+    dispatchTouch('touchend', []);
+    expect(dispatchMouseDown().defaultPrevented).toBe(true);
+
+    // 3. Multi-touch pinch -> suppresses trailing mousedown after finger lift
+    dispatchTouch('touchstart', [{ clientX: 80, clientY: 200 }, { clientX: 160, clientY: 200 }]);
+    dispatchTouch('touchmove', [{ clientX: 60, clientY: 200 }, { clientX: 200, clientY: 200 }]);
+    dispatchTouch('touchend', [{ clientX: 60, clientY: 200 }]);
+    dispatchTouch('touchend', []);
+    expect(dispatchMouseDown().defaultPrevented).toBe(true);
+
+    // 4. Double-tap zoom reset blocks mousedown so it does not open keyboard
+    const entry1 = session.panes.get('%1');
+    entry1.userScale = 2;
+    dispatchTouch('touchstart', [{ clientX: 120, clientY: 220 }]);
+    dispatchTouch('touchend', []);
+    dispatchTouch('touchstart', [{ clientX: 122, clientY: 222 }]);
+    dispatchTouch('touchend', []);
+    expect(entry1.userScale).toBe(1);
+    expect(dispatchMouseDown().defaultPrevented).toBe(true);
+
+    // 5. Clicking pane rail on mobile does NOT focus term
+    let focusCalls = 0;
+    const origFocus = term1.focus.bind(term1);
+    term1.focus = () => { focusCalls += 1; origFocus(); };
+    rail1.dispatchEvent(new f.win.MouseEvent('click', { bubbles: true }));
+    expect(focusCalls).toBe(0);
+
+    // 6. Clean stationary tap after suppression expires allows mousedown through
+    vi.useFakeTimers();
+    try {
+      vi.advanceTimersByTime(800);
+      dispatchTouch('touchstart', [{ clientX: 150, clientY: 250 }]);
+      dispatchTouch('touchend', []);
+      expect(dispatchMouseDown().defaultPrevented).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    // 7. session.focus() on mobile blurs & re-focuses textarea when activeElement stuck without open keyboard
+    let blurCalls = 0;
+    const origBlur = term1.textarea.blur.bind(term1.textarea);
+    term1.textarea.focus();
+    Object.defineProperty(f.win.document, 'activeElement', { configurable: true, value: term1.textarea });
+    term1.textarea.blur = () => { blurCalls += 1; origBlur(); };
+    f.win.document.documentElement.classList.remove('mobile-keyboard-open');
+    session.focus('%1');
+    expect(blurCalls).toBe(1);
+    expect(focusCalls).toBe(1);
 
     session.dispose();
     f.close();

@@ -288,6 +288,7 @@ describe('native workbench UI', () => {
     await f.api.render('dev', view.id, { container: f.host });
     const session = f.sessions[0];
     session.fit = vi.fn();
+    session.focus = vi.fn();
 
     const quickBtns = [...f.host.querySelectorAll('.mobile-terminal-quick-keys button')].map((b) => b.dataset.wbKey);
     expect(quickBtns).toEqual([
@@ -457,6 +458,52 @@ describe('native workbench UI', () => {
     s2.options.onContext({ serverId: 'dev', instanceId: '42:123', sessionId: '$1', windowId: '@2', paneId: '%0', clientId: 'c2' });
     expect(s2.selectPane).toHaveBeenCalledWith('%2');
 
+    f.api.unmount();
+    f.close();
+  });
+
+  it('prevents Key Rail buttons from stealing IME focus, skips redundant closed-drawer work on focusKeyboard, and avoids reparenting actions on visualViewport resize', async () => {
+    const f = fixture();
+    f.win.MobileUI.isMobile = () => true;
+    const header = f.win.document.createElement('div');
+    header.className = 'mobile-header';
+    f.win.document.body.append(header);
+    const vvListeners = {};
+    f.win.visualViewport = {
+      addEventListener: vi.fn((name, fn) => { vvListeners[name] = fn; }),
+      removeEventListener: vi.fn(),
+    };
+
+    const view = await f.api.create({ serverId: 'dev', ...remote });
+    await f.api.render('dev', view.id, { container: f.host });
+    const session = f.sessions[0];
+    session.fit = vi.fn();
+    session.focus = vi.fn();
+
+    // Key Rail mousedown calls preventDefault so tapping quick keys never dismisses IME
+    const escBtn = f.host.querySelector('[data-wb-key="esc"]');
+    const mdEv = new f.win.MouseEvent('mousedown', { bubbles: true, cancelable: true });
+    escBtn.dispatchEvent(mdEv);
+    expect(mdEv.defaultPrevented).toBe(true);
+
+    // visualViewport resize must not detach/re-append owner.actions if already mounted inside .mobile-header
+    const appendSpy = vi.spyOn(header, 'append');
+    vvListeners.resize?.();
+    expect(appendSpy).not.toHaveBeenCalled();
+
+    // Clicking '输入' while drawer is already closed focuses synchronously without scheduling a 270ms fitTimer
+    vi.useFakeTimers();
+    try {
+      session.fit.mockClear();
+      f.host.querySelector('.mobile-terminal-keyboard').click();
+      expect(session.focus).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(300);
+      expect(session.fit).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+
+    header.remove();
     f.api.unmount();
     f.close();
   });

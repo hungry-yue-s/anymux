@@ -136,7 +136,9 @@ export function createWorkbench(global, options = {}) {
     if (topbar) { if (!topbar.classList.contains('terminal-layout')) owner.addedTerminalLayout = true; topbar.classList.add('terminal-layout'); }
     const target = mobile() ? doc.querySelector('.mobile-header') : doc.getElementById('ms-top-actions');
     owner.actions.classList.toggle('wb-actions-mobile', mobile());
-    (target || owner.toolbar).append(owner.actions); owner.toolbar.hidden = !!target;
+    const dest = target || owner.toolbar;
+    if (owner.actions.parentElement !== dest) dest.append(owner.actions);
+    owner.toolbar.hidden = !!target;
     owner.root.classList.toggle('wb-mobile', mobile()); owner.tools.hidden = !mobile();
     if (!mobile()) owner.closeDrawer();
   }
@@ -156,7 +158,9 @@ export function createWorkbench(global, options = {}) {
     };
     const toggleDrawer = (open) => {
       if (mounted && mounted !== owner) return;
-      drawerOpen = open;
+      const next = Boolean(open);
+      if (next === drawerOpen) return;
+      drawerOpen = next;
       if (open && owner.menu) owner.menu.open = false;
       if (open) doc.activeElement?.blur?.();
       if (open && !hasPlugin('keypad', owner.serverId)) return;
@@ -199,6 +203,7 @@ export function createWorkbench(global, options = {}) {
         try { Promise.resolve(run(key)).catch(notify); } catch (error) { notify(error); }
       };
       if (!repeatable) {
+        key.addEventListener('mousedown', (event) => event.preventDefault());
         key.addEventListener('click', invoke);
       } else {
         let holdTimer = null, repeatTimer = null, pointerHandled = false;

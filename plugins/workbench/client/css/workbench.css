@@ -782,6 +782,9 @@ html[data-native-transparency] .pane-body .xterm-viewport { background: transpar
   -webkit-user-select: none;
   user-select: none;
 }
+.wb-mobile .pane-body .xterm-helper-textarea {
+  pointer-events: none;
+}
 .wb-mobile.drawer-pushed { transition: none; }
 .wb-history { margin: auto; width: min(960px, calc(100vw - 32px)); height: min(740px, calc(100dvh - 72px)); max-width: calc(100vw - 32px); max-height: calc(100dvh - 72px); padding: 0; overflow: hidden; border: 1px solid var(--workspace-line-strong, var(--border)); border-radius: 12px; box-shadow: 0 24px 80px rgba(0, 0, 0, .42), 0 4px 16px rgba(0, 0, 0, .2); color: var(--workspace-text, var(--text-primary)); background: var(--workspace-panel, var(--bg-card)); }
 .wb-history[open] { display: flex; }
