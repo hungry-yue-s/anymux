@@ -1560,6 +1560,41 @@ describe('MsApp sidebar context menu', () => {
     ctx.win.close();
   });
 
+  it('positions right-click menu at pointer coordinates even when an off-sidebar trigger button exists, and clamps overflowed tap triggers', () => {
+    const ctx = loadStatusShell();
+    Object.defineProperty(ctx.win, 'innerWidth', { value: 1200, configurable: true });
+    Object.defineProperty(ctx.win, 'innerHeight', { value: 800, configurable: true });
+    const sidebar = ctx.document.querySelector('.ms-sidebar');
+    sidebar.getBoundingClientRect = () => ({ left: 0, right: 260, width: 260, top: 0, bottom: 800, height: 800 });
+
+    const target = row(ctx, 'session');
+    target.getBoundingClientRect = () => ({ left: 48, right: 580, top: 180, bottom: 218 });
+    const trigger = ctx.document.createElement('button');
+    trigger.className = 'tree-menu-button';
+    trigger.getBoundingClientRect = () => ({ left: 540, right: 564, top: 184, bottom: 212 });
+    target.appendChild(trigger);
+
+    const menu = ctx.MsApp._ensureSidebarContextMenu();
+    menu.getBoundingClientRect = () => ({ width: 160, height: 120 });
+
+    // Right-click inside sidebar stays at pointer coordinates rather than jumping to trigger right edge (564)
+    ctx.MsApp._positionSidebarContextMenu(menu, target, { clientX: 110, clientY: 200 });
+    expect(parseInt(menu.style.left, 10)).toBe(110);
+    expect(parseInt(menu.style.top, 10)).toBe(200);
+
+    // Right-click near bottom-right flips above and left of cursor within viewport
+    ctx.MsApp._positionSidebarContextMenu(menu, target, { clientX: 1150, clientY: 740 });
+    expect(parseInt(menu.style.left, 10)).toBe(990);
+    expect(parseInt(menu.style.top, 10)).toBe(620);
+
+    // Tapping trigger when trigger overflowed sidebar clamps anchorRight to sidebar.right (260)
+    ctx.MsApp._positionSidebarContextMenu(menu, target, {});
+    expect(parseInt(menu.style.left, 10)).toBe(100);
+    expect(parseInt(menu.style.top, 10)).toBe(216);
+
+    ctx.win.close();
+  });
+
   it('offers new window, rename and close for Session rows and rename/close for Window rows', () => {
     const ctx = loadStatusShell();
     seedRemoteSidebarWorkspace(ctx.Store);

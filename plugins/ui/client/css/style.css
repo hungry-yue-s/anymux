@@ -2312,11 +2312,14 @@ textarea:focus-visible {
 
 .tree {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
   gap: 4px;
   margin: 0 0 4px;
 }
 
 .tree-session-group {
+  min-width: 0;
   padding: 3px;
   border: 0;
   border-radius: 8px;
@@ -2330,6 +2333,7 @@ textarea:focus-visible {
 .tree-session-row {
   display: flex;
   align-items: center;
+  min-width: 0;
   min-height: 34px;
   border: 0;
   border-radius: 6px;
@@ -2368,6 +2372,8 @@ textarea:focus-visible {
 
 .tree-window-list {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
   gap: 1px;
   margin: 0;
   padding: 1px 0 2px;
@@ -3890,6 +3896,7 @@ textarea:focus-visible {
 .tree-window-row {
   display: flex;
   align-items: center;
+  min-width: 0;
   gap: 1px;
 }
 

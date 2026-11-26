@@ -824,20 +824,47 @@
     _positionSidebarContextMenu(menu, row, event) {
       const gutter = 8;
       const rowRect = row.getBoundingClientRect();
-      let left = Number(event.clientX) || rowRect.left + 16;
-      let top = Number(event.clientY) || rowRect.bottom;
+      const hasPoint = Boolean(
+        event
+        && Number.isFinite(event.clientX)
+        && Number.isFinite(event.clientY)
+        && (event.clientX > 0 || event.clientY > 0),
+      );
       menu.style.left = '0px';
       menu.style.top = '0px';
       menu.style.visibility = 'hidden';
       menu.hidden = false;
       const rect = menu.getBoundingClientRect();
-      const trigger = row.querySelector('.tree-menu-button');
-      if (trigger) {
-        const anchor = trigger.getBoundingClientRect();
-        left = anchor.right - rect.width;
-        top = anchor.bottom + 4;
+      let left;
+      let top;
+      if (hasPoint) {
+        left = Number(event.clientX);
+        top = Number(event.clientY);
         if (top + rect.height > global.innerHeight - gutter) {
-          top = anchor.top - rect.height - 4;
+          top = Number(event.clientY) - rect.height;
+        }
+        if (left + rect.width > global.innerWidth - gutter) {
+          left = Number(event.clientX) - rect.width;
+        }
+      } else {
+        const trigger = row.querySelector('.tree-menu-button');
+        if (trigger) {
+          const anchor = trigger.getBoundingClientRect();
+          const container = row.closest('.subnav, .ms-sidebar, #ms-mobile-workspace-tree');
+          const cRect = container && typeof container.getBoundingClientRect === 'function'
+            ? container.getBoundingClientRect()
+            : null;
+          const anchorRight = cRect && cRect.width > 0 && anchor.right > cRect.right
+            ? cRect.right
+            : anchor.right;
+          left = anchorRight - rect.width;
+          top = anchor.bottom + 4;
+          if (top + rect.height > global.innerHeight - gutter) {
+            top = anchor.top - rect.height - 4;
+          }
+        } else {
+          left = rowRect.left + 16;
+          top = rowRect.bottom;
         }
       }
       left = Math.max(gutter, Math.min(left, global.innerWidth - rect.width - gutter));

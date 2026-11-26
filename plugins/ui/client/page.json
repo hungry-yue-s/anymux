@@ -1,8 +1,8 @@
 {
   "serve": ["."],
   "head": [
-    { "order": 50, "style": "/css/style.css?v=59" },
-    { "order": 51, "style": "/css/workspace.css?v=4" },
+    { "order": 50, "style": "/css/style.css?v=60" },
+    { "order": 51, "style": "/css/workspace.css?v=5" },
     { "order": 53, "style": "/css/mobile.css?v=7" },
     { "order": 56, "style": "/css/blocks.css?v=2" },
     { "order": 57, "style": "/css/context-menu.css?v=1" }
@@ -26,7 +26,7 @@
     { "order": 360, "script": "/js/servers.js?v=15" },
     { "order": 365, "script": "/js/management-page.js" },
     { "order": 385, "script": "/js/context-menu.js?v=1" },
-    { "order": 390, "script": "/js/ms-app.js?v=27" },
+    { "order": 390, "script": "/js/ms-app.js?v=28" },
     { "order": 410, "script": "/js/workspace-commands.js" }
   ]
 }

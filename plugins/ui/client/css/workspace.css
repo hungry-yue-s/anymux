@@ -138,12 +138,12 @@ html.tmux-native-titlebar body { --workspace-chrome-height:44px; }
 .ms-app .server-switcher>span:last-child { flex-shrink:0; }
 .ms-app .server-switcher:hover { color:var(--workspace-text); }
 .ms-app .subnav { margin:0; }
-.ms-app.mode-terminal .subnav { flex:1; min-height:0; overflow:auto; }
+.ms-app.mode-terminal .subnav { flex:1; min-height:0; overflow-y:auto; overflow-x:hidden; }
 .ms-app .tree-section-head { min-height:28px; margin:0 2px 18px; font-size:12px; font-weight:500; letter-spacing:0; text-transform:none; color:var(--workspace-muted); }
 .ms-app .tree-section-head .provider-badge { display:none; }
-.ms-app .tree { gap:18px; }
-.ms-app .tree-session-group,.ms-app .tree-session-group.active { padding:0; border:0; background:none; box-shadow:none; }
-.ms-app .tree-session-row,.ms-app .tree-session-row.active { min-height:38px; padding:0; gap:4px; background:none; border:0; }
+.ms-app .tree { grid-template-columns:minmax(0,1fr); min-width:0; gap:18px; }
+.ms-app .tree-session-group,.ms-app .tree-session-group.active { min-width:0; padding:0; border:0; background:none; box-shadow:none; }
+.ms-app .tree-session-row,.ms-app .tree-session-row.active { min-width:0; min-height:38px; padding:0; gap:4px; background:none; border:0; }
 .ms-app .tree-session-row>.tree-item,.ms-app .tree-session-row.active>.tree-item {
   min-height:38px; padding:6px 2px; gap:6px; grid-template-columns:10px minmax(0,1fr);
   background:none; color:var(--workspace-muted); font-size:13px; font-weight:500;
@@ -152,7 +152,7 @@ html.tmux-native-titlebar body { --workspace-chrome-height:44px; }
 .ms-app .tree-session-row .tree-item>span:nth-child(2),.ms-app .tree-item-name { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .ms-app .tree-session-row .tree-item>span:first-child { font-size:10px; color:var(--workspace-muted); }
 .ms-app .tree-session-row .cmd,.ms-app .tree-session-row .tree-create-window { display:none; }
-.ms-app .tree-window-list { padding:4px 0 2px 12px; margin-left:6px; gap:3px; background:none; border:0; border-left:1px solid var(--workspace-line); }
+.ms-app .tree-window-list { grid-template-columns:minmax(0,1fr); min-width:0; padding:4px 0 2px 12px; margin-left:6px; gap:3px; background:none; border:0; border-left:1px solid var(--workspace-line); }
 .ms-app .tree-window-row { display:flex; align-items:center; min-width:0; gap:2px; padding:0; border-radius:6px; }
 .ms-app .tree-window-row>.tree-item { flex:1; min-width:0; min-height:34px; display:flex; align-items:center; justify-content:space-between; gap:6px; padding:7px 9px; border-radius:6px; background:none; color:var(--workspace-muted); font-size:13px; }
 .ms-app .tree-window-row>.tree-item.active { background:var(--workspace-accent); color:var(--workspace-bg); box-shadow:none; font-weight:550; }
@@ -427,6 +427,7 @@ button { touch-action:manipulation; }
 .tree-agent-list {
   display: flex;
   flex-direction: column;
+  min-width: 0;
   gap: 2px;
   padding: 2px 0 4px 18px;
 }
