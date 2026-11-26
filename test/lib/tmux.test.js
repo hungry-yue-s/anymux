@@ -408,6 +408,7 @@ describe('by-id tmux helpers', () => {
     });
     const tails = await api.capturePaneTails(['%0', '%2', 'bad-id', '%0'], { lines: 1 });
     expect(calls).toHaveLength(1);
+    expect(calls[0]).toContain('===ANYMUX_PANE_TAIL:#{pane_id}===');
     expect(tails.get('%0')).toBe('esc to cancel');
     expect(tails.get('%2')).toBe('? for shortcuts');
     expect(tails.has('bad-id')).toBe(false);
