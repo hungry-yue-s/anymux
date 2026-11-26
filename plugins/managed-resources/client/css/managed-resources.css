@@ -3,3 +3,5 @@
  * order and @media, so the cascade is what it was. */
 
 .managed-skill { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--border-color, #555); }
+.managed-toggle { display: flex; align-items: center; gap: 8px; margin: 10px 0 12px; font-size: 13px; cursor: pointer; }
+.managed-toggle input { width: 16px; height: 16px; accent-color: var(--workspace-accent, #7aa2f7); cursor: pointer; }

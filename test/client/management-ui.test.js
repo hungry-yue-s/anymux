@@ -67,10 +67,57 @@ it('installs a plugin from the management page and protects conflicting skills',
   loadSlots(win);
   const root = win.document.getElementById('root');
   await win.ManagementPage.mount(root);
-  expect(root.querySelector('[data-managed="skill-install"]').disabled).toBe(true);
+  expect(root.querySelector('[data-managed="plugin-install"]').disabled).toBeFalsy();
   root.querySelector('[data-managed="plugin-install"]').click();
   await vi.waitFor(() => expect(root.querySelector('[data-managed="plugin-disable"]')).not.toBeNull());
   expect(win.Api.post).toHaveBeenCalledWith('/api/plugins/tmux-agent/install');
   expect(root.textContent).toContain('已启用');
+  dom.window.close();
+});
+
+it('renders managed agent hook controls, toggles auto-install setting, and syncs per-agent hooks', async () => {
+  const dom = new JSDOM('<div id="root"></div>', { runScripts: 'outside-only', url: 'http://localhost' });
+  const win = dom.window;
+  let autoInstall = true;
+  let claudeState = 'not_installed';
+  win.AppShell = { escape: (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;'), toast: vi.fn() };
+  win.Api = {
+    get: vi.fn(async (path) => path === '/api/plugins' ? { plugins: [] } : {
+      runtime: { path: '/managed/tmux', available: true },
+      skills: [],
+      instructions: [],
+      agentHooks: {
+        autoInstall,
+        scriptPath: '/data/anymux/agent-hooks/agent-event-router.mjs',
+        agents: [
+          { agent: 'claude', label: 'Claude Code', cliFound: true, cliPath: '/opt/homebrew/bin/claude', configPath: '/home/.claude/settings.json', state: claudeState, installedEvents: claudeState === 'installed' ? 11 : 0, totalEvents: 11 },
+          { agent: 'gemini', label: 'Gemini CLI', cliFound: false, cliPath: null, configPath: '/home/.gemini/settings.json', state: 'not_installed', installedEvents: 0, totalEvents: 7 },
+        ],
+      },
+    }),
+    post: vi.fn(async (path, body) => {
+      if (path === '/api/managed-resources/hooks/settings') autoInstall = Boolean(body.autoInstall);
+      if (path === '/api/managed-resources/hooks/claude/install') claudeState = 'installed';
+      if (path === '/api/managed-resources/hooks/claude/uninstall') claudeState = 'not_installed';
+      return {};
+    }),
+  };
+  loadSlots(win);
+  const root = win.document.getElementById('root');
+  await win.ManagementPage.mount(root);
+
+  expect(root.textContent).toContain('Agent 状态 Hook（自动托管）');
+  expect(root.textContent).toContain('/data/anymux/agent-hooks/agent-event-router.mjs');
+  expect(root.querySelector('[data-hook-target="claude"]').textContent).toBe('安装');
+
+  root.querySelector('[data-hook-target="claude"]').click();
+  await vi.waitFor(() => expect(root.querySelector('[data-hook-target="claude"]').textContent).toBe('移除'));
+  expect(win.Api.post).toHaveBeenCalledWith('/api/managed-resources/hooks/claude/install');
+
+  const toggle = root.querySelector('input[data-managed="hooks-auto"]');
+  toggle.checked = false;
+  toggle.dispatchEvent(new win.Event('change', { bubbles: true }));
+  await vi.waitFor(() => expect(win.Api.post).toHaveBeenCalledWith('/api/managed-resources/hooks/settings', { autoInstall: false }));
+  expect(root.querySelector('input[data-managed="hooks-auto"]').checked).toBe(false);
   dom.window.close();
 });

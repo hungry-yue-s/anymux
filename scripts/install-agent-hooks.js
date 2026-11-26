@@ -1,223 +1,41 @@
 #!/usr/bin/env node
 
-import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  AgentHookManager,
+  EVENT_SPECS,
+  HOOK_AGENTS,
+} from '../lib/agent-hooks.js';
+import { appDir } from '../lib/legacy-names.js';
 
 const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-const PROJECT_ROOT = resolve(__dirname, '..');
-const ROUTER = join(PROJECT_ROOT, 'scripts', 'agent-event-router.js');
-const PANEL_URL = 'https://127.0.0.1:7681/api/agent-events';
-const MARKER_PREFIX = 'anymux-';
-// Hooks installed before the rename or legacy bell-only Claude hook.
-const LEGACY_MARKER_PREFIX = 'tmux-web-panel-';
-const LEGACY_CLAUDE_BELL_MARKER = "printf '\\a'";
 
-export const AGENTS = {
-  claude: {
-    get path() { return join(homedir(), '.claude', 'settings.json'); },
-    schemaClean: true,
-    root() { return {}; },
-    hooks(root) {
-      root.hooks = root.hooks || {};
-      return root.hooks;
-    },
-  },
-  qoder: {
-    get path() { return join(homedir(), '.qoder', 'settings.json'); },
-    root() { return {}; },
-    hooks(root) {
-      root.hooks = root.hooks || {};
-      return root.hooks;
-    },
-  },
-  codex: {
-    get path() { return join(homedir(), '.codex', 'hooks.json'); },
-    root() { return { description: 'Codex hooks.', hooks: {} }; },
-    hooks(root) {
-      root.hooks = root.hooks || {};
-      return root.hooks;
-    },
-  },
-};
-
-export const EVENT_SPECS = [
-  ['SessionStart', 'session_start', false],
-  ['UserPromptSubmit', 'user_prompt_submit', false],
-  ['PreToolUse', 'pre_tool_use', false],
-  ['PostToolUse', 'post_tool_use', false],
-  ['Stop', 'agent_stop', true],
-  ['PermissionRequest', 'permission_wait', true],
-  ['Notification', 'notification', true],
-  ['StopFailure', 'stop_failure', true],
-  ['SessionEnd', 'session_end', false],
-  ['SubagentStart', 'subagent_start', false],
-  ['SubagentStop', 'subagent_stop', false],
-];
+export { AgentHookManager, EVENT_SPECS, HOOK_AGENTS };
 
 function usage() {
-  console.log('Usage: node scripts/install-agent-hooks.js [claude|qoder|codex|all] [--uninstall]');
-}
-
-async function readJson(file, fallback) {
-  try {
-    return JSON.parse(await readFile(file, 'utf8'));
-  } catch (err) {
-    if (err.code === 'ENOENT') return fallback();
-    throw err;
-  }
-}
-
-async function backup(file) {
-  if (!existsSync(file)) return null;
-  const stamp = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
-  const dest = `${file}.bak-${stamp}`;
-  await copyFile(file, dest);
-  return dest;
-}
-
-function shellQuote(arg) {
-  if (/^[a-zA-Z0-9_./:-]+$/.test(arg)) return arg;
-  return JSON.stringify(arg);
-}
-
-function claudeCommandFor(eventName) {
-  return [
-    'node',
-    shellQuote(ROUTER),
-    '--agent', 'claude',
-    '--event', eventName,
-    '--panel-url', PANEL_URL,
-  ].join(' ');
-}
-
-function hookFor(agent, hookEvent, eventName) {
-  if (AGENTS[agent]?.schemaClean) {
-    return {
-      type: 'command',
-      command: claudeCommandFor(eventName),
-      async: true,
-      timeout: 5,
-    };
-  }
-  return {
-    type: 'command',
-    command: ROUTER,
-    args: [
-      '--agent', agent,
-      '--event', eventName,
-      '--panel-url', PANEL_URL,
-    ],
-    name: `${MARKER_PREFIX}${agent}-${hookEvent}`,
-    async: true,
-    timeout: 5,
-  };
-}
-
-function installedNames(agent, hookEvent, prefix = MARKER_PREFIX) {
-  const names = [`${prefix}${agent}-${hookEvent}`];
-  if (agent === 'qoder') names.push(`${prefix}${hookEvent}`);
-  return names;
-}
-
-function isClaudeRouterHook(hook, eventName = null) {
-  if (!hook || typeof hook.command !== 'string') return false;
-  if (!hook.command.includes('agent-event-router.js')) return false;
-  if (!eventName) return true;
-  return new RegExp(`--event\\s+${eventName}(?:\\s|$)`).test(hook.command);
-}
-
-export function installHooks(agent, root) {
-  const spec = AGENTS[agent];
-  const { removed: replaced } = uninstallHooks(agent, root, [LEGACY_MARKER_PREFIX]);
-  const hooks = spec.hooks(root);
-  let added = replaced;
-  for (const [hookEvent, eventName] of EVENT_SPECS) {
-    const list = Array.isArray(hooks[hookEvent]) ? hooks[hookEvent] : [];
-    let exists = false;
-    if (spec.schemaClean) {
-      exists = list.some((entry) =>
-        Array.isArray(entry.hooks) && entry.hooks.some((h) => isClaudeRouterHook(h, eventName)));
-    } else {
-      const names = installedNames(agent, hookEvent);
-      exists = list.some((entry) =>
-        Array.isArray(entry.hooks) && entry.hooks.some((h) => h && names.includes(h.name)));
-    }
-    if (!exists) {
-      list.push({ matcher: '*', hooks: [hookFor(agent, hookEvent, eventName)] });
-      added += 1;
-    }
-    hooks[hookEvent] = list;
-  }
-  return { added };
-}
-
-export function uninstallHooks(agent, root, prefixes = [MARKER_PREFIX, LEGACY_MARKER_PREFIX]) {
-  const spec = AGENTS[agent];
-  const hooks = spec.hooks(root);
-  const fullRemoval = prefixes.includes(MARKER_PREFIX);
-  let removed = 0;
-
-  for (const hookEvent of Object.keys(hooks)) {
-    const list = Array.isArray(hooks[hookEvent]) ? hooks[hookEvent] : [];
-    const next = [];
-    for (const entry of list) {
-      if (!Array.isArray(entry.hooks)) {
-        next.push(entry);
-        continue;
-      }
-      const before = entry.hooks.length;
-      entry.hooks = entry.hooks.filter((h) => {
-        if (!h) return true;
-        if (typeof h.command === 'string' && h.command.includes(LEGACY_CLAUDE_BELL_MARKER)) {
-          return false;
-        }
-        if (spec.schemaClean && fullRemoval && isClaudeRouterHook(h)) {
-          return false;
-        }
-        if (typeof h.name === 'string') {
-          const matchesPrefix = prefixes.some((prefix) => h.name.startsWith(`${prefix}${agent}-`)
-            || (agent === 'qoder' && installedNames(agent, hookEvent, prefix).includes(h.name)));
-          if (matchesPrefix) return false;
-        }
-        return true;
-      });
-      removed += before - entry.hooks.length;
-      if (entry.hooks.length > 0) next.push(entry);
-    }
-    if (next.length > 0) hooks[hookEvent] = next;
-    else delete hooks[hookEvent];
-  }
-  return { removed };
-}
-
-export async function update(agent, uninstall) {
-  const spec = AGENTS[agent];
-  const root = await readJson(spec.path, spec.root);
-  const result = uninstall ? uninstallHooks(agent, root) : installHooks(agent, root);
-  // Nothing to change: leave the file, and no backup of it, behind.
-  if ((result.added ?? result.removed) === 0) return { agent, path: spec.path, backup: null, ...result };
-  await mkdir(dirname(spec.path), { recursive: true });
-  const backupPath = await backup(spec.path);
-  await writeFile(spec.path, JSON.stringify(root, null, 2) + '\n');
-  return { agent, path: spec.path, backup: backupPath, ...result };
+  const names = [...Object.keys(HOOK_AGENTS), 'all'].join('|');
+  console.log(`Usage: node scripts/install-agent-hooks.js [${names}] [--uninstall]`);
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === __filename) {
   const args = process.argv.slice(2);
   const uninstall = args.includes('--uninstall') || args.includes('--remove');
   const target = args.find((arg) => !arg.startsWith('--')) || 'all';
-  if (!['claude', 'qoder', 'codex', 'all'].includes(target)) {
+  if (target !== 'all' && !Object.hasOwn(HOOK_AGENTS, target)) {
     usage();
     process.exit(1);
   }
 
-  const targets = target === 'all' ? ['claude', 'qoder', 'codex'] : [target];
-  const results = [];
-  for (const agent of targets) results.push(await update(agent, uninstall));
+  const userHome = homedir();
+  const manager = new AgentHookManager({
+    userHome,
+    dataDir: appDir('data', { home: userHome }),
+    configDir: process.env.ANYMUX_CONFIG_DIR || appDir('config', { home: userHome }),
+  });
+
+  const results = uninstall ? await manager.uninstall(target) : await manager.install(target);
   console.log(JSON.stringify({ ok: true, uninstall, results }, null, 2));
-  console.log('No bearer token was written to agent configuration. The router uses ANYMUX_TOKEN or the local anymux token store.');
+  console.log('No bearer token was written to agent configuration. The router reads local tokens dynamically.');
 }

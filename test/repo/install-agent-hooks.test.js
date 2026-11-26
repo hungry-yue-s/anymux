@@ -25,7 +25,7 @@ async function runInstaller(home, ...args) {
     cwd: process.cwd(),
     // os.homedir() reads USERPROFILE on Windows: with HOME alone, the
     // installer would write the real ~/.claude, ~/.qoder and ~/.codex there.
-    env: { ...process.env, HOME: home, USERPROFILE: home },
+    env: { ...process.env, HOME: home, USERPROFILE: home, ANYMUX_CONFIG_DIR: join(home, '.config', 'anymux') },
   });
 }
 
@@ -45,7 +45,7 @@ describe('install-agent-hooks', () => {
       for (const [agent, config] of [['qoder', qoder], ['codex', codex]]) {
         for (const event of EVENTS) {
           const found = (config.hooks[event] || []).some((entry) =>
-            (entry.hooks || []).some((hook) => hook.name === `anymux-${agent}-${event}`),
+            (entry.hooks || []).some((hook) => hook.name === `anymux-${agent}-${event}` && hook.command.includes('agent-event-router.mjs')),
           );
           expect(found).toBe(true);
         }
@@ -54,7 +54,7 @@ describe('install-agent-hooks', () => {
 
       for (const event of EVENTS) {
         const list = claude.hooks[event] || [];
-        expect(list.some((entry) => (entry.hooks || []).some((h) => h.command && h.command.includes('agent-event-router.js') && !h.name))).toBe(true);
+        expect(list.some((entry) => (entry.hooks || []).some((h) => h.command && h.command.includes('agent-event-router.mjs') && !h.name))).toBe(true);
       }
       expect(JSON.stringify(claude)).not.toContain('--panel-token');
     } finally {

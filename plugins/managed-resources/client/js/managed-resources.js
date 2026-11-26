@@ -146,6 +146,46 @@
       + rows + '</div></div>';
   }
 
+  function hooksSection(resources) {
+    const info = resources.agentHooks;
+    if (!info || !Array.isArray(info.agents)) return '';
+    const hookStateText = {
+      installed: '已安装',
+      outdated: '待升级',
+      partial: '部分缺失',
+      not_installed: '未安装',
+      disabled: '已禁用',
+      error: '配置异常',
+    };
+    const detected = info.agents.filter((a) => a.cliFound);
+    const allInstalled = detected.length > 0 && detected.every((a) => a.state === 'installed');
+    const anyPresent = info.agents.some((a) => a.state === 'installed' || a.state === 'outdated' || a.state === 'partial');
+    const rows = info.agents.map((a) => {
+      const cliBadge = a.cliFound
+        ? '已检测到 CLI' + (a.cliPath ? ' · ' + a.cliPath : '')
+        : '未检测到 CLI';
+      const actionLabel = a.state === 'installed' ? '移除' : (a.state === 'outdated' || a.state === 'partial' ? '更新' : '安装');
+      const actionVerb = a.state === 'installed' ? 'hooks-uninstall' : 'hooks-install';
+      return '<div class="managed-skill"><div><strong>' + esc(a.label || a.agent) + '</strong>'
+        + '<small class="mono">' + esc(a.configPath) + '</small>'
+        + '<small>' + esc(cliBadge) + ' · 状态：' + esc(hookStateText[a.state] || a.state)
+        + (a.totalEvents ? '（' + esc(String(a.installedEvents ?? 0)) + '/' + esc(String(a.totalEvents)) + '）' : '')
+        + (a.detail ? ' · ' + esc(a.detail) : '') + '</small></div>'
+        + button(actionLabel, actionVerb, 'data-hook-target="' + esc(a.agent) + '"') + '</div>';
+    }).join('');
+
+    return '<div class="section"><div class="section-head"><h3>Agent 状态 Hook（自动托管）</h3></div><div class="ms-card managed-card">'
+      + '<p>面板启动时会自动扫描本机已安装的 Agent CLI，并将实时生命周期（运行中 / 子代理 / 模型 / 等待确认 / 完成 / 失败）与零配置侧边栏检测融合。</p>'
+      + '<p>路由脚本独立落在稳定路径：<span class="mono">' + esc(info.scriptPath || '') + '</span>（不随发版目录失效）。</p>'
+      + '<label class="managed-toggle"><input type="checkbox" data-managed="hooks-auto" ' + (info.autoInstall !== false ? 'checked' : '') + '>'
+      + '<span>启动时自动为已检测到的 Agent 安装并维护状态 Hook</span></label>'
+      + '<div class="managed-actions">'
+      + button(allInstalled ? '重新同步全部' : '一键同步/安装', 'hooks-install', 'data-hook-target="all"')
+      + (anyPresent ? button('全部移除', 'hooks-uninstall', 'data-hook-target="all"') : '')
+      + '</div>'
+      + rows + '</div></div>';
+  }
+
   async function runDocs(action, target) {
     const verb = action === 'docs-install' ? 'install' : 'uninstall';
     await global.Api.post(api + '/skills/agent-docs/' + target + '/' + verb);
@@ -159,7 +199,8 @@
     const presentationSkills = resources.skills.filter((skill) => skill.name === 'anymux-presentation');
     const presentationInstalled = presentationSkills.length > 0 && presentationSkills.every((skill) => skill.status === 'managed');
     const agents = [...new Set(resources.skills.map((skill) => skill.target))].map(agentName).join('、');
-    host.innerHTML = docsSection(resources)
+    host.innerHTML = hooksSection(resources)
+      + docsSection(resources)
       + '<div class="section"><div class="section-head"><h3>信息呈现网页</h3></div><div class="ms-card managed-card">'
       + '<p>让 Agent 生成的个人报告、说明和可视化网页跟随面板配色，切换主题时即时更新。</p>'
       + '<p>Skill 只提供主题接入约定，布局、字体、组件和交互由 Agent 自由设计；专门的视觉作品可保留自己的风格。</p>'
@@ -173,9 +214,32 @@
       + skillRows(resources.skills.filter((skill) => skill.name !== 'anymux-presentation' && skill.name !== 'agent-docs'))
       + '</div></div>';
 
-    actions(host, page, remount, (action, target) => (action.startsWith('docs-')
-      ? runDocs(action, target.dataset.target)
-      : global.Api.post(api + '/skills/' + target.dataset.name + '/' + target.dataset.target + '/' + action.slice(6))));
+    host.onchange = async (event) => {
+      const box = event.target.closest('input[data-managed="hooks-auto"]');
+      if (!box) return;
+      box.disabled = true;
+      try {
+        reading = null;
+        await global.Api.post(api + '/hooks/settings', { autoInstall: Boolean(box.checked) });
+        reading = null;
+        global.AppShell.toast(box.checked ? '已开启自动托管并同步 Hook' : '已关闭自动托管并清理 Anymux Hook');
+        await remount();
+      } catch (error) {
+        reading = null;
+        await remount();
+        page.feedback(error.message);
+        global.AppShell.toast(error.message);
+      } finally { box.disabled = false; }
+    };
+
+    actions(host, page, remount, (action, target) => {
+      if (action === 'hooks-install' || action === 'hooks-uninstall') {
+        const hookTarget = target.dataset.hookTarget || 'all';
+        return global.Api.post(api + '/hooks/' + hookTarget + '/' + (action === 'hooks-install' ? 'install' : 'uninstall'));
+      }
+      if (action.startsWith('docs-')) return runDocs(action, target.dataset.target);
+      return global.Api.post(api + '/skills/' + target.dataset.name + '/' + target.dataset.target + '/' + action.slice(6));
+    });
   }
 
   global.PanelSlots.managementPanels.register({ id: 'tmux', order: 10, mount: mountTmux });

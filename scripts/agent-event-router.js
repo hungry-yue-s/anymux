@@ -23,15 +23,34 @@ function parseArgs(argv) {
   return args;
 }
 
-async function readStdin() {
-  let data = '';
-  for await (const chunk of process.stdin) data += chunk;
-  if (!data.trim()) return {};
-  try {
-    return JSON.parse(data);
-  } catch {
-    return { message: data.trim() };
-  }
+async function readStdin(timeoutMs = 250) {
+  if (process.stdin.isTTY) return {};
+  return new Promise((resolve) => {
+    let data = '';
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      process.stdin.removeListener('data', onData);
+      process.stdin.removeListener('end', finish);
+      process.stdin.removeListener('error', finish);
+      process.stdin.pause();
+      if (!data.trim()) return resolve({});
+      try {
+        resolve(JSON.parse(data));
+      } catch {
+        resolve({ message: data.trim() });
+      }
+    };
+    const onData = (chunk) => { data += chunk; };
+    const timer = setTimeout(finish, timeoutMs);
+    process.stdin.setEncoding('utf8');
+    process.stdin.on('data', onData);
+    process.stdin.on('end', finish);
+    process.stdin.on('error', finish);
+    process.stdin.resume();
+  });
 }
 
 const BELL_EVENTS = new Set([
@@ -52,9 +71,9 @@ function shouldBell(event) {
   return BELL_EVENTS.has(event);
 }
 
-function localPanelToken() {
+function localPanelToken(configDir, tokenFileName = 'tokens.json') {
   try {
-    const file = join(appDir('config'), 'tokens.json');
+    const file = join(configDir, tokenFileName);
     const entries = JSON.parse(readFileSync(file, 'utf8'));
     if (!Array.isArray(entries)) return '';
     const now = Date.now();
@@ -65,6 +84,15 @@ function localPanelToken() {
     return valid && typeof valid[0] === 'string' ? valid[0] : '';
   } catch {
     return '';
+  }
+}
+
+function readEndpointConfig(configDir) {
+  try {
+    const parsed = JSON.parse(readFileSync(join(configDir, 'hook-endpoint.json'), 'utf8'));
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
   }
 }
 
@@ -103,14 +131,20 @@ function postJson(url, payload, token) {
 const args = parseArgs(process.argv);
 const input = await readStdin();
 const event = args.event || input.hook_event_name || input.event || 'notification';
+const session = args.session || input.session || input.tmux_session || '';
+const windowId = args.windowId || args['window-id'] || input.windowId || input.window_id || '';
+const paneId = args.paneId || args['pane-id'] || input.paneId || input.pane_id || process.env.TMUX_PANE || '';
+if (!paneId && !session && !windowId && !process.env.TMUX && !process.env.TMUX_PANE) {
+  process.exit(0);
+}
 const payload = {
   ...input,
   agent: args.agent || input.agent || input.source || 'agent',
   event,
-  session: args.session || input.session || input.tmux_session,
+  session,
   windowIndex: args.windowIndex ?? args['window-index'] ?? input.windowIndex ?? input.window_index,
-  windowId: args.windowId || args['window-id'] || input.windowId || input.window_id,
-  paneId: args.paneId || args['pane-id'] || input.paneId || input.pane_id || process.env.TMUX_PANE || '',
+  windowId,
+  paneId,
   tty: args.tty || input.tty || process.env.TTY || '',
 };
 
@@ -122,8 +156,11 @@ if (args.bell && shouldBell(event)) {
   }
 }
 
-const panelUrl = args.panelUrl || args['panel-url'] || process.env.ANYMUX_AGENT_EVENTS_URL || 'https://127.0.0.1:7681/api/agent-events';
-const panelToken = args.panelToken || args['panel-token'] || process.env.ANYMUX_TOKEN || localPanelToken();
+const configDir = process.env.ANYMUX_CONFIG_DIR || appDir('config');
+const endpoint = readEndpointConfig(configDir);
+const effectiveConfigDir = endpoint.configDir || configDir;
+const panelUrl = args.panelUrl || args['panel-url'] || process.env.ANYMUX_AGENT_EVENTS_URL || endpoint.url || 'https://127.0.0.1:7681/api/agent-events';
+const panelToken = args.panelToken || args['panel-token'] || process.env.ANYMUX_TOKEN || localPanelToken(effectiveConfigDir, endpoint.tokenFileName);
 const monitorUrl = args.monitorUrl || args['monitor-url'] || process.env.AGENT_MONITOR_URL || '';
 const monitorToken = args.monitorToken || args['monitor-token'] || process.env.AGENT_MONITOR_TOKEN || '';
 

@@ -30,6 +30,9 @@ export async function apply(ctx) {
     serverTmuxBin: IS_WINDOWS ? TMUX_BIN : null,
     // CODEX_HOME, CLAUDE_CONFIG_DIR, QODER_CONFIG_DIR, DSH_HOME move the agents' homes.
     env: process.env,
+    nodeCommand: process.execPath,
+    panelUrl: `${launch.tls ? 'https' : 'http'}://127.0.0.1:${launch.port || 7681}/api/agent-events`,
+    tokenFileName: launch.tokenFileName,
   });
   await resources.load();
   ctx.http.mount('/api/managed-resources', createManagedResourcesRouter(resources));
@@ -43,4 +46,10 @@ export async function apply(ctx) {
   } catch (error) {
     ctx.logger.warn('could not relink moved skills: %s', error.message);
   }
+  resources.reconcileAgentHooks().then((res) => {
+    const updated = (res.results || []).filter((r) => (r.added || 0) > 0).map((r) => r.agent);
+    if (updated.length) ctx.logger.info('synced managed agent hooks: %s', updated.join(', '));
+  }).catch((error) => {
+    ctx.logger.warn('could not reconcile managed agent hooks: %s', error.message);
+  });
 }
