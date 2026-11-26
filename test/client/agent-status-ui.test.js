@@ -27,6 +27,7 @@ function bootSidebarDom({ extraScripts = [] } = {}) {
   w.eval(read('plugins/ui/client/js/slots.js'));
   w.eval(read('plugins/ui/client/js/router.js'));
   w.eval(read('plugins/ui/client/js/store.js'));
+  w.eval(read('plugins/ui/client/js/agent-icons-data.js'));
   w.eval(read('plugins/ui/client/js/agent-status.js'));
   w.eval(read('plugins/ui/client/js/app-shell.js'));
   for (const s of extraScripts) w.eval(read(s));
@@ -188,5 +189,58 @@ describe('AgentIcons & AgentStatus UI integration', () => {
 
     expect(w.NotificationPanel.needsYou()).toHaveLength(0);
     expect(w.document.getElementById('ms-needs-you-pill').hidden).toBe(true);
+  });
+
+  it('renders Orca 45-agent SVG & PNG library with zero external requests, zero textContent, and clean Unicode titles', () => {
+    const w = bootSidebarDom();
+    const expectedAgents = [
+      'claude', 'claude-agent-teams', 'openclaude', 'codex', 'grok', 'copilot',
+      'opencode', 'opencode2', 'mimo-code', 'ante', 'trae', 'muse', 'dsh',
+      'qoder', 'qoder-cn', 'zcode', 'pi', 'omp', 'prime-agent', 'gemini',
+      'antigravity', 'aider', 'goose', 'amp', 'kilo', 'kiro', 'crush', 'aug',
+      'autohand', 'cline', 'codebuff', 'freebuff', 'command-code', 'continue',
+      'cursor', 'droid', 'kimi', 'mistral-vibe', 'qwen-code', 'rovo', 'hermes',
+      'devin', 'openclaw', 'codebuddy', 'jcode',
+    ];
+
+    const host = w.document.createElement('div');
+    for (const id of expectedAgents) {
+      host.innerHTML = w.AgentIcons.appIcon(id);
+      const wrap = host.querySelector('.agent-app-icon');
+      expect(wrap).not.toBeNull();
+      expect(wrap.classList.contains('is-letter')).toBe(false);
+      expect(wrap.classList.contains('is-agent')).toBe(true);
+      expect(wrap.textContent).toBe('');
+      const svg = wrap.querySelector('svg');
+      const img = wrap.querySelector('img.agent-app-img');
+      expect(Boolean(svg || img)).toBe(true);
+      if (img) {
+        expect(img.getAttribute('src').startsWith('data:image/png;base64,')).toBe(true);
+      }
+      if (svg) {
+        expect(svg.querySelector('text')).toBeNull();
+      }
+    }
+
+    // Aliases resolve properly
+    host.innerHTML = w.AgentIcons.appIcon('agy');
+    expect(host.querySelector('.agent-app-icon.is-kind-antigravity.is-img img.agent-app-img')).not.toBeNull();
+    host.innerHTML = w.AgentIcons.appIcon('dsh-tui');
+    expect(host.querySelector('.agent-app-icon.is-kind-dsh.is-img img.agent-app-img')).not.toBeNull();
+
+    // Official vector icons match Orca viewBoxes & unique gradient IDs for omp
+    host.innerHTML = w.AgentIcons.appIcon('claude');
+    expect(host.querySelector('svg').getAttribute('viewBox')).toBe('0 0 24 24');
+    host.innerHTML = w.AgentIcons.appIcon('codex');
+    expect(host.querySelector('svg').getAttribute('viewBox')).toBe('0 0 24 24');
+    host.innerHTML = w.AgentIcons.appIcon('omp') + w.AgentIcons.appIcon('omp');
+    const grads = host.querySelectorAll('linearGradient');
+    expect(grads).toHaveLength(2);
+    expect(grads[0].id).not.toBe(grads[1].id);
+
+    // Client-side detectFromPane handles astral emoji without UTF-16 surrogate split
+    const detected = w.AgentIcons.detectFromPane({ id: '%1', command: 'node', title: '✦ 🐋 解释 MAS 的 HWID' });
+    expect(detected.status).toBe('working');
+    expect(detected.label).toBe('🐋 解释 MAS 的 HWID');
   });
 });

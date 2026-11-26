@@ -50,10 +50,25 @@ describe('agent-status core detection and fusion', () => {
   it('normalizes agent names and detects agents from command lines', () => {
     expect(normalizeAgentType('Claude-Code')).toBe('claude');
     expect(normalizeAgentType('qodercli')).toBe('qoder');
+    expect(normalizeAgentType('agy')).toBe('antigravity');
+    expect(normalizeAgentType('dsh-tui')).toBe('dsh');
+    expect(normalizeAgentType('qoderclicn')).toBe('qoder-cn');
+    expect(normalizeAgentType('traecli')).toBe('trae');
+    expect(normalizeAgentType('qwen')).toBe('qwen-code');
+    expect(normalizeAgentType('vibe')).toBe('mistral-vibe');
+    expect(normalizeAgentType('auggie')).toBe('aug');
+    expect(normalizeAgentType('cn')).toBe('continue');
     expect(matchAgentFromCommand('/usr/local/bin/codex')).toBe('codex');
+    expect(matchAgentFromCommand('/usr/local/bin/agy')).toBe('antigravity');
     expect(matchAgentFromCommandLine('node /Users/me/.nvm/versions/node/v22/lib/node_modules/@openai/codex/bin/codex.js --full-auto')).toBe('codex');
     expect(matchAgentFromCommandLine('node /opt/homebrew/bin/claude --resume abc')).toBe('claude');
+    expect(matchAgentFromCommandLine('node /opt/homebrew/bin/dsh --profile dsh-tui')).toBe('dsh');
+    expect(matchAgentFromCommandLine('agy')).toBe('antigravity');
+    expect(matchAgentFromCommandLine('acli rovodev run')).toBe('rovo');
     expect(matchAgentFromCommandLine('python3 -m aider --model sonnet')).toBe('aider');
+    // Negative false-positive checks for unrelated node processes
+    expect(matchAgentFromCommandLine('/opt/homebrew/bin/node /Users/me/.claude-mem/dsh-observer/bridge.mjs')).toBe('');
+    expect(matchAgentFromCommandLine('node node_modules/next/dist/bin/next dev')).toBe('');
   });
 
   it('parses ps process table and finds foreground descendant agent (cycle-safe BFS)', () => {
@@ -129,6 +144,21 @@ describe('agent-status core detection and fusion', () => {
       agentType: 'codex',
       prompt: 'Approve git push',
       source: 'osc',
+    });
+
+    // Regression: astral emojis (surrogate pairs like 🐋, 🚀) must not false-match attention/permission or get half-stripped
+    expect(stripTitleDecorations('✦ 🐋 解释 MAS 的 HWID')).toBe('🐋 解释 MAS 的 HWID');
+    const dshTitle = detectAgentFromTitle('✦ 🐋 解释 MAS 的 HWID', 'dsh');
+    expect(dshTitle).toMatchObject({
+      status: 'working',
+      agentType: 'dsh',
+      label: '🐋 解释 MAS 的 HWID',
+    });
+    expect(detectAgentFromTitle('🚀 Deploy service')).toBeNull();
+    expect(detectAgentFromTitle('🔔 Approve bash', 'claude')).toMatchObject({
+      status: 'permission',
+      agentType: 'claude',
+      label: 'Approve bash',
     });
   });
 

@@ -20,31 +20,91 @@
     claude: 'claude',
     'claude-code': 'claude',
     claudecode: 'claude',
+    'claude-agent-teams': 'claude-agent-teams',
+    openclaude: 'openclaude',
     codex: 'codex',
     'codex-cli': 'codex',
     'openai-codex': 'codex',
-    qoder: 'qoder',
-    qodercli: 'qoder',
-    gemini: 'gemini',
-    'gemini-cli': 'gemini',
+    grok: 'grok',
+    copilot: 'copilot',
+    'gh-copilot': 'copilot',
+    'github-copilot': 'copilot',
     opencode: 'opencode',
     'open-code': 'opencode',
-    cursor: 'cursor',
-    'cursor-agent': 'cursor',
+    opencode2: 'opencode2',
+    mimo: 'mimo-code',
+    'mimo-code': 'mimo-code',
+    ante: 'ante',
+    trae: 'trae',
+    traecli: 'trae',
+    'trae-cli': 'trae',
+    muse: 'muse',
+    dsh: 'dsh',
+    'dsh-tui': 'dsh',
+    dst: 'dsh',
+    dsb: 'dsh',
+    deepseek: 'dsh',
+    'deepseek-harness': 'dsh',
+    qoder: 'qoder',
+    qodercli: 'qoder',
+    'qoder-cn': 'qoder-cn',
+    qoderclicn: 'qoder-cn',
+    qodercn: 'qoder-cn',
+    zcode: 'zcode',
+    'zcode-cli': 'zcode',
+    pi: 'pi',
+    omp: 'omp',
+    'oh-my-pi': 'omp',
+    'prime-agent': 'prime-agent',
+    gemini: 'gemini',
+    'gemini-cli': 'gemini',
+    antigravity: 'antigravity',
+    agy: 'antigravity',
+    'antigravity-cli': 'antigravity',
     aider: 'aider',
     goose: 'goose',
     amp: 'amp',
+    kilo: 'kilo',
+    kilocode: 'kilo',
     kiro: 'kiro',
     'kiro-cli': 'kiro',
+    crush: 'crush',
+    charm: 'crush',
+    aug: 'aug',
+    auggie: 'aug',
+    autohand: 'autohand',
+    'autohand-code': 'autohand',
+    cline: 'cline',
+    codebuff: 'codebuff',
+    freebuff: 'freebuff',
+    'command-code': 'command-code',
+    continue: 'continue',
+    cn: 'continue',
+    'continue-cli': 'continue',
+    cursor: 'cursor',
+    'cursor-agent': 'cursor',
     droid: 'droid',
     factory: 'droid',
-    copilot: 'copilot',
-    'gh-copilot': 'copilot',
-    cline: 'cline',
+    'factory-droid': 'droid',
+    kimi: 'kimi',
+    'kimi-code': 'kimi',
+    'kimi-cli': 'kimi',
+    'mistral-vibe': 'mistral-vibe',
+    vibe: 'mistral-vibe',
+    qwen: 'qwen-code',
+    'qwen-code': 'qwen-code',
+    rovo: 'rovo',
+    rovodev: 'rovo',
+    'rovo-dev': 'rovo',
+    hermes: 'hermes',
+    devin: 'devin',
+    openclaw: 'openclaw',
+    codebuddy: 'codebuddy',
+    cbc: 'codebuddy',
+    jcode: 'jcode',
     roo: 'roo',
     roocode: 'roo',
     windsurf: 'windsurf',
-    devin: 'devin',
   };
 
   var TOOL_MAP = {
@@ -63,22 +123,53 @@
   };
 
   var AGENT_LABELS = {
-    claude: 'Claude Code',
+    claude: 'Claude',
+    'claude-agent-teams': 'Claude Agent Teams',
+    openclaude: 'OpenClaude',
     codex: 'Codex',
-    qoder: 'Qoder',
-    gemini: 'Gemini CLI',
+    grok: 'Grok',
+    copilot: 'GitHub Copilot',
     opencode: 'OpenCode',
-    cursor: 'Cursor Agent',
+    opencode2: 'OpenCode 2',
+    'mimo-code': 'MiMo Code',
+    ante: 'Ante',
+    trae: 'Trae',
+    muse: 'Muse',
+    dsh: 'DeepSeek Harness',
+    qoder: 'Qoder CLI',
+    'qoder-cn': 'Qoder CLI China',
+    zcode: 'ZCode',
+    pi: 'Pi',
+    omp: 'OMP',
+    'prime-agent': 'Prime Agent',
+    gemini: 'Gemini',
+    antigravity: 'Antigravity',
     aider: 'Aider',
     goose: 'Goose',
     amp: 'Amp',
+    kilo: 'Kilocode',
     kiro: 'Kiro',
-    droid: 'Droid',
-    copilot: 'Copilot',
+    crush: 'Charm',
+    aug: 'Auggie',
+    autohand: 'Autohand Code',
     cline: 'Cline',
+    codebuff: 'Codebuff',
+    freebuff: 'Freebuff',
+    'command-code': 'Command Code',
+    continue: 'Continue',
+    cursor: 'Cursor',
+    droid: 'Droid',
+    kimi: 'Kimi',
+    'mistral-vibe': 'Mistral Vibe',
+    'qwen-code': 'Qwen Code',
+    rovo: 'Rovo Dev',
+    hermes: 'Hermes',
+    devin: 'Devin',
+    openclaw: 'OpenClaw',
+    codebuddy: 'CodeBuddy',
+    jcode: 'Jcode',
     roo: 'Roo Code',
     windsurf: 'Windsurf',
-    devin: 'Devin',
     editor: '编辑器',
     ssh: 'SSH 远程',
     python: 'Python',
@@ -94,12 +185,55 @@
     shell: '终端',
   };
 
-  var SPINNER_RE = /[\u2800-\u28FF⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏◐◓◑◒◴◵◶◷⣾⣽⣻⢿⡿⣟⣯⣷✳✶✻✽✦✧✺✹✸✷✵✴]/;
-  var ATTENTION_RE = /[⏸⚠❓✋🔔🔐]/;
-  var DONE_RE = /[✓✔✅]/;
-  var FAILED_RE = /[✗✘❌⨯]/;
-  var INTERRUPTED_RE = /[⏹⊘]/;
-  var LEADING_DECORATION_RE = /^[\s\u2800-\u28FF⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏◐◓◑◒◴◵◶◷⣾⣽⣻⢿⡿⣟⣯⣷✳✶✻✽✦✧✺✹✸✷✵✴⏸⚠❓✋🔔🔐✓✔✅✗✘❌⨯⏹⊘·•›>\-|:]+/;
+  var SPINNER_RE = /[\u2800-\u28FF⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏◐◓◑◒◴◵◶◷⣾⣽⣻⢿⡿⣟⣯⣷✳✶✻✽✦✧✺✹✸✷✵✴]/u;
+  var ATTENTION_RE = /[⏸⚠❓✋🔔🔐]/u;
+  var DONE_RE = /[✓✔✅]/u;
+  var FAILED_RE = /[✗✘❌⨯]/u;
+  var INTERRUPTED_RE = /[⏹⊘]/u;
+  var LEADING_DECORATION_RE = /^[\s\u2800-\u28FF⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏◐◓◑◒◴◵◶◷⣾⣽⣻⢿⡿⣟⣯⣷✳✶✻✽✦✧✺✹✸✷✵✴⏸⚠❓✋🔔🔐✓✔✅✗✘❌⨯⏹⊘·•›>\-|:]+/u;
+
+  var _svgUid = 0;
+
+  var TITLE_AGENT_PATTERNS = [
+    { agent: 'claude-agent-teams', re: /\bclaude\s+agent\s+teams\b/i },
+    { agent: 'openclaude', re: /\bopenclaude\b/i },
+    { agent: 'claude', re: /\bclaude(?:\s+code)?\b/i },
+    { agent: 'codex', re: /\bcodex\b/i },
+    { agent: 'antigravity', re: /\b(?:antigravity|agy)\b/i },
+    { agent: 'dsh', re: /\b(?:dsh(?:-tui)?|deepseek\s+harness)\b/i },
+    { agent: 'qoder-cn', re: /\b(?:qoderclicn|qoder-cn)\b/i },
+    { agent: 'qoder', re: /\bqoder(?:cli)?\b/i },
+    { agent: 'gemini', re: /\bgemini(?:\s+cli)?\b/i },
+    { agent: 'opencode2', re: /\bopencode2\b/i },
+    { agent: 'opencode', re: /\bopencode\b/i },
+    { agent: 'grok', re: /\bgrok\b/i },
+    { agent: 'kimi', re: /\bkimi(?:\s+code)?\b/i },
+    { agent: 'qwen-code', re: /\bqwen(?:-code|\s+code)?\b/i },
+    { agent: 'trae', re: /\btrae(?:cli)?\b/i },
+    { agent: 'cursor', re: /\bcursor(?:\s+agent)?\b/i },
+    { agent: 'aider', re: /\baider\b/i },
+    { agent: 'goose', re: /\bgoose\b/i },
+    { agent: 'amp', re: /\bamp\b/i },
+    { agent: 'kilo', re: /\bkilo(?:code)?\b/i },
+    { agent: 'kiro', re: /\bkiro(?:-cli)?\b/i },
+    { agent: 'droid', re: /\bdroid\b/i },
+    { agent: 'copilot', re: /\bcopilot\b/i },
+    { agent: 'cline', re: /\bcline\b/i },
+    { agent: 'devin', re: /\bdevin\b/i },
+    { agent: 'hermes', re: /\bhermes\b/i },
+    { agent: 'openclaw', re: /\bopenclaw\b/i },
+    { agent: 'codebuddy', re: /\bcodebuddy\b/i },
+    { agent: 'zcode', re: /\bzcode\b/i },
+    { agent: 'autohand', re: /\bautohand\b/i },
+    { agent: 'codebuff', re: /\bcodebuff\b/i },
+    { agent: 'freebuff', re: /\bfreebuff\b/i },
+    { agent: 'crush', re: /\bcrush\b/i },
+    { agent: 'aug', re: /\bauggie\b/i },
+    { agent: 'rovo', re: /\brovo(?:\s+dev|dev)?\b/i },
+    { agent: 'mimo-code', re: /\bmimo(?:-code|\s+code)\b/i },
+    { agent: 'prime-agent', re: /\bprime-agent\b/i },
+    { agent: 'jcode', re: /\bjcode\b/i },
+  ];
 
   function escAttr(v) {
     return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) {
@@ -133,9 +267,9 @@
     return TOOL_MAP[base] || base;
   }
 
-  // Local SVG geometry table (no external network requests, zero textContent)
+  // Fallback SVG geometry table when AgentIconLibrary is absent or for dev tools
   var SVG_BODIES = {
-    // AI Agents
+    // Minimal fallbacks for core AI agents
     claude: '<path d="M12 2.5v4.2M12 17.3v4.2M4.9 4.9l3 3M16.1 16.1l3 3M2.5 12h4.2M17.3 12h4.2M4.9 19.1l3-3M16.1 7.9l3-3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="2.1" fill="currentColor"/>',
     codex: '<circle cx="12" cy="12" r="7.5" stroke="currentColor" stroke-width="1.6" fill="none"/><path d="M12 4.5v5.2l4.5 2.6M19.5 12l-4.5-2.6-4.5 2.6M12 19.5v-5.2l-4.5-2.6M4.5 12l4.5 2.6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" fill="none"/>',
     qoder: '<polygon points="12,3 19.8,7.5 19.8,16.5 12,21 4.2,16.5 4.2,7.5" stroke="currentColor" stroke-width="1.7" fill="none"/><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.6" fill="none"/><path d="M14.2 14.2 17 17" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',
@@ -169,9 +303,26 @@
   };
 
   function appIcon(kind) {
-    var clean = String(kind || 'shell').toLowerCase();
-    var body = SVG_BODIES[clean];
+    var raw = String(kind || 'shell').trim().toLowerCase().replace(/[_\s]+/g, '-');
+    var clean = AGENT_ALIASES[raw] || raw;
     var agentCls = isAgentKind(clean) ? ' is-agent' : '';
+    var lib = global.AgentIconLibrary;
+    if (lib && lib.svg && lib.svg[clean]) {
+      var spec = lib.svg[clean];
+      var svgBody = spec.body;
+      if (svgBody.indexOf('{{UID}}') >= 0) {
+        svgBody = svgBody.replace(/\{\{UID\}\}/g, String(++_svgUid));
+      }
+      return '<span class="agent-app-icon is-kind-' + escAttr(clean) + agentCls + '" aria-hidden="true">'
+        + '<svg viewBox="' + escAttr(spec.viewBox || '0 0 24 24') + '" fill="none" aria-hidden="true" focusable="false">' + svgBody + '</svg>'
+        + '</span>';
+    }
+    if (lib && lib.img && lib.img[clean]) {
+      return '<span class="agent-app-icon is-kind-' + escAttr(clean) + ' is-img' + agentCls + '" aria-hidden="true">'
+        + '<img class="agent-app-img" src="' + escAttr(lib.img[clean]) + '" alt="" aria-hidden="true" draggable="false"/>'
+        + '</span>';
+    }
+    var body = SVG_BODIES[clean];
     if (body) {
       return '<span class="agent-app-icon is-kind-' + escAttr(clean) + agentCls + '" aria-hidden="true">'
         + '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false">' + body + '</svg>'
@@ -269,11 +420,12 @@
     var status = null;
     if (title) {
       if (!agentType) {
-        if (/\bclaude(?:\s+code)?\b/i.test(title)) agentType = 'claude';
-        else if (/\bcodex\b/i.test(title)) agentType = 'codex';
-        else if (/\bqoder(?:cli)?\b/i.test(title)) agentType = 'qoder';
-        else if (/\bgemini(?:\s+cli)?\b/i.test(title)) agentType = 'gemini';
-        else if (/\bopencode\b/i.test(title)) agentType = 'opencode';
+        for (var i = 0; i < TITLE_AGENT_PATTERNS.length; i += 1) {
+          if (TITLE_AGENT_PATTERNS[i].re.test(title)) {
+            agentType = TITLE_AGENT_PATTERNS[i].agent;
+            break;
+          }
+        }
       }
       if (ATTENTION_RE.test(title)) status = 'permission';
       else if (FAILED_RE.test(title)) status = 'failed';

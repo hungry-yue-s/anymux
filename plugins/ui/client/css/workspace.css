@@ -378,15 +378,23 @@ button { touch-action:manipulation; }
   width: 15px;
   height: 15px;
   color: var(--workspace-muted);
-  opacity: 0.9;
+  opacity: 0.92;
 }
 .agent-app-icon > svg { width: 14px; height: 14px; display: block; }
-.agent-app-icon.is-kind-claude { color: var(--agent-claude); }
-.agent-app-icon.is-kind-codex { color: var(--agent-codex); }
-.agent-app-icon.is-kind-qoder { color: var(--agent-qoder); }
+.agent-app-icon > img.agent-app-img { width: 14px; height: 14px; display: block; border-radius: 3px; object-fit: contain; }
+.agent-app-icon.is-img { opacity: 1; }
+.agent-app-icon.is-kind-claude,
+.agent-app-icon.is-kind-claude-agent-teams { color: var(--agent-claude); opacity: 1; }
+.agent-app-icon.is-kind-codex,
+.agent-app-icon.is-kind-copilot,
+.agent-app-icon.is-kind-opencode,
+.agent-app-icon.is-kind-opencode2,
+.agent-app-icon.is-kind-pi { color: var(--workspace-text); opacity: 0.92; }
+.agent-app-icon.is-kind-qoder,
+.agent-app-icon.is-kind-qoder-cn { color: var(--agent-qoder); }
 .agent-app-icon.is-kind-gemini { color: var(--agent-gemini); }
 .agent-app-icon.is-kind-cursor { color: var(--agent-cursor); }
-.agent-app-icon.is-kind-aider { color: var(--agent-aider); }
+.agent-app-icon.is-kind-aider { color: var(--agent-aider); opacity: 1; }
 .agent-app-icon.is-kind-amp { color: var(--agent-amp); }
 .agent-app-icon.is-letter {
   border-radius: 4px;
