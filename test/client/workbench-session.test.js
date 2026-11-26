@@ -807,17 +807,14 @@ describe('SeamWindowSession multi-pane workbench session', () => {
     expect(f.host.querySelectorAll('.seam-pane')).toHaveLength(1);
     expect(f.host.querySelector('.seam-pane').dataset.paneId).toBe('%1');
 
+    // Mobile always uses single-pane switcher (no split mode toggle)
+    expect(f.host.querySelector('.seam-mobile-split-toggle')).toBeNull();
+
     // Switch active pane via mobile tab bar
     f.host.querySelectorAll('.seam-mobile-pane-tab')[1].click();
     expect(session.activePaneId).toBe('%2');
-    expect(f.host.querySelector('.seam-pane').dataset.paneId).toBe('%2');
-
-    // Toggle split view on mobile -> shows both panes side by side
-    f.host.querySelector('.seam-mobile-split-toggle').click();
-    expect(f.host.querySelector('.seam-mobile-split-toggle').textContent).toBe('单窗');
-    expect(f.host.querySelectorAll('.seam-pane')).toHaveLength(2);
-    f.host.querySelector('.seam-mobile-split-toggle').click();
     expect(f.host.querySelectorAll('.seam-pane')).toHaveLength(1);
+    expect(f.host.querySelector('.seam-pane').dataset.paneId).toBe('%2');
 
     // Clicking visible rail menu button opens pane-rail ContextMenu items anchored to button
     const menuBtn = f.host.querySelector('[data-pane-action="menu"]');
@@ -1634,6 +1631,85 @@ describe('SeamWindowSession multi-pane workbench session', () => {
     const cleanup = installTuiWheelHandler(term, { global: f.win });
     cleanup();
     expect(term._customWheelHandler(wheelUp)).toBe(true);
+
+    session.dispose();
+    f.close();
+  });
+
+  it('supports per-pane takeover overlays, single-pane takeback actions, mobile viewport fit-scale & sticky Ctrl', async () => {
+    const f = fixture();
+    const stickyStates = [];
+    const session = new SeamWindowSession(f.win, {
+      container: f.host,
+      target: { ...target },
+      onStickyModifierChange: (s) => stickyStates.push(s),
+    });
+    await session.ready;
+    const socket = f.sockets[0];
+    hydrateWindow(socket);
+
+    // Desktop receives paneLeases where %2 is driven by mobile while %1 stays interactive
+    socket.onmessage({ data: JSON.stringify({
+      type: 'size-lease',
+      protocol: 1,
+      windowCols: 120,
+      windowRows: 36,
+      zoomed: false,
+      sizeLease: 'owner',
+      inputAllowed: true,
+      foreignClient: false,
+      paneLeases: {
+        '%1': { owner: true, inputAllowed: true },
+        '%2': { owner: false, inputAllowed: false, driverDevice: 'mobile' },
+      },
+    }) });
+
+    const pane1El = f.host.querySelector('.seam-pane[data-pane-id="%1"]');
+    const pane2El = f.host.querySelector('.seam-pane[data-pane-id="%2"]');
+    expect(pane1El.querySelector('.seam-pane-takeover').hidden).toBe(true);
+    expect(pane2El.querySelector('.seam-pane-takeover').hidden).toBe(false);
+    expect(pane2El.querySelector('.seam-pane-takeover').textContent).toContain('手机端正在控制此窗格');
+    expect(session.send('ok', true, '%1')).toBe(true);
+    expect(session.send('blocked', true, '%2')).toBe(false);
+
+    // Clicking per-pane takeover button requests takeover only for %2
+    socket.sent.length = 0;
+    pane2El.querySelector('.seam-pane-takeover .seam-lease-btn.is-primary').click();
+    expect(socket.sent.at(-1)).toEqual({ type: 'takeover', paneId: '%2' });
+
+    // Sticky Ctrl converts next lowercase letter to control byte and disarms
+    socket.sent.length = 0;
+    session.setStickyModifier('ctrl', true);
+    expect(session.send('c', true, '%1')).toBe(true);
+    expect(socket.sent.at(-1)).toEqual({ type: 'input', paneId: '%1', data: '\x03' });
+    expect(stickyStates).toEqual([{ ctrl: true }, { ctrl: false }]);
+
+    // Mobile follow-peer shows corner pill and scales wide desktop pane to fit narrow container
+    f.win.MobileUI = { isMobile: () => true };
+    const pane1Body = pane1El.querySelector('.pane-body');
+    Object.defineProperties(pane1Body, { clientWidth: { configurable: true, value: 360 }, clientHeight: { configurable: true, value: 600 } });
+    f.terminals[0].cols = 120;
+    f.terminals[0].rows = 36;
+    session._syncMobileViewportTransform(session.panes.get('%1'));
+    expect(f.terminals[0].element.style.transform).toContain('scale(');
+    socket.onmessage({ data: JSON.stringify({
+      type: 'size-lease',
+      protocol: 1,
+      windowCols: 120,
+      windowRows: 36,
+      zoomed: false,
+      sizeLease: 'follow-peer',
+      inputAllowed: true,
+      foreignClient: false,
+      paneLeases: { '%1': { owner: true, inputAllowed: true }, '%2': { owner: false, inputAllowed: false, driverDevice: 'desktop' } },
+    }) });
+    expect(session.leaseBar.hidden).toBe(false);
+    expect(session.leaseBar.textContent).toContain('适配尺寸');
+
+    // Mobile locally pinned pane is preserved across follow-peer layout updates where desktop pane %1 remains active
+    session.selectPane('%2');
+    sendLayout(socket, { activePaneId: '%1' });
+    expect(session.activePaneId).toBe('%2');
 
     session.dispose();
     f.close();

@@ -583,6 +583,7 @@ export class SeamWindowSession {
     onFontSize = () => {},
     onContext = () => {},
     onAction = () => {},
+    onStickyModifierChange = () => {},
     visible = true,
     fontSize,
   }) {
@@ -596,6 +597,7 @@ export class SeamWindowSession {
     this.onFontSize = onFontSize;
     this.onContext = onContext;
     this.onAction = onAction;
+    this.onStickyModifierChange = typeof onStickyModifierChange === 'function' ? onStickyModifierChange : () => {};
     this.visible = visible;
     this.status = 'connecting';
     this.disposed = false;
@@ -605,11 +607,16 @@ export class SeamWindowSession {
     this.sizeLease = 'owner';
     this.inputAllowed = true;
     this.foreignClient = false;
+    this.paneLeases = null;
+    this.sizeOverridden = false;
+    this.stickyCtrl = false;
     this._leaseCollapsed = false;
     this._leasePending = false;
     this._lastLeaseMode = 'owner';
     this.zoomed = false;
     this.activePaneId = null;
+    this._localActivePaneId = null;
+    this._pendingSelectPane = null;
     this.windowCols = 80;
     this.windowRows = 24;
     this.layoutTree = null;
@@ -629,7 +636,6 @@ export class SeamWindowSession {
     this._treeTopologyKey = null;
     this._draggingDivider = false;
     this._activeDragCleanup = null;
-    this.mobileSplitView = false;
     this.parked = false;
     this._webglAttachHandle = null;
 
@@ -763,11 +769,18 @@ export class SeamWindowSession {
     if (!this.disposed) this.onState({ status, message, reason, target: this.target });
   }
 
+  _isPaneInputAllowed(paneId) {
+    if (this.paneLeases && paneId && Object.prototype.hasOwnProperty.call(this.paneLeases, paneId)) {
+      return Boolean(this.paneLeases[paneId]?.inputAllowed);
+    }
+    return this.inputAllowed;
+  }
+
   _syncInputGates() {
     const windowLive = this.status === 'live';
     for (const pane of this.panes.values()) {
       if (!pane.term) continue;
-      const enabled = windowLive && this.inputAllowed && pane.hydrated && !pane.restoring;
+      const enabled = windowLive && this._isPaneInputAllowed(pane.paneId) && pane.hydrated && !pane.restoring;
       pane.term.options.disableStdin = !enabled;
       pane.term.options.cursorBlink = enabled && pane.paneId === this.activePaneId;
     }
@@ -778,14 +791,18 @@ export class SeamWindowSession {
     const { serverId, instanceId, sessionId, windowId, clientId } = this.target;
     const path = global.Api.nodeUrl(serverId, '/ws/window-stream/' + encodeURIComponent(windowId));
     const grid = this._measureWindowGrid();
-    const query = new URLSearchParams({
+    const params = {
       instanceId,
       sessionId,
       clientId,
       cols: String(grid.cols || this.windowCols || 80),
       rows: String(grid.rows || this.windowRows || 24),
+      device: this._isMobile() ? 'mobile' : 'desktop',
       protocol: '1',
-    });
+    };
+    const focusPane = this.activePaneId || this.target.paneId;
+    if (focusPane) params.paneId = focusPane;
+    const query = new URLSearchParams(params);
     const auth = global.Auth?.wsTokenParam?.();
     if (auth) for (const [key, value] of new URLSearchParams(auth)) query.set(key, value);
     return (global.location.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + global.location.host + path + '?' + query;
@@ -802,6 +819,7 @@ export class SeamWindowSession {
     this.layoutRows = null;
     this.layoutZoomed = false;
     this._layoutSyncPending = false;
+    this._pendingSelectPane = this._localActivePaneId || null;
     this._settledViewportEnv = null;
     this._cancelResizeTimer();
     this._resetResizeGuard();
@@ -860,6 +878,8 @@ export class SeamWindowSession {
     const prevLease = this.sizeLease;
     this.sizeLease = message.sizeLease || 'owner';
     this.foreignClient = Boolean(message.foreignClient);
+    this.paneLeases = message.paneLeases && typeof message.paneLeases === 'object' ? message.paneLeases : null;
+    this.sizeOverridden = Boolean(message.sizeOverridden);
     this.inputAllowed = typeof message.inputAllowed === 'boolean' ? message.inputAllowed : this.sizeLease !== 'observer';
     this._leasePending = false;
     if (this.sizeLease === 'observer' && this._lastLeaseMode !== 'observer') {
@@ -888,6 +908,8 @@ export class SeamWindowSession {
     if (message.type === 'ready') this.serverReady = true;
     this._syncInputGates();
     this._renderLeaseBar();
+    this._renderPaneTakeovers();
+    this._renderMobilePaneBar();
     this._becameReady();
   }
 
@@ -907,10 +929,16 @@ export class SeamWindowSession {
     this.layoutString = message.layoutString || '';
     this.layoutTree = message.tree || null;
     const panes = Array.isArray(message.panes) ? message.panes : [];
-    const activeFromPanes = panes.find((item) => item.active)?.id;
-    this.activePaneId = message.activePaneId || activeFromPanes || panes[0]?.id || null;
-
     const liveIds = new Set(panes.map((item) => item.id));
+    const activeFromPanes = panes.find((item) => item.active)?.id;
+    if (this._localActivePaneId && !liveIds.has(this._localActivePaneId)) {
+      this._localActivePaneId = null;
+    }
+    const preserveMobilePane = this._isMobile() && this._localActivePaneId && liveIds.has(this._localActivePaneId);
+    this.activePaneId = preserveMobilePane
+      ? this._localActivePaneId
+      : (message.activePaneId || activeFromPanes || panes[0]?.id || null);
+
     for (const paneId of [...this.panes.keys()]) {
       if (!liveIds.has(paneId)) this._disposePane(paneId);
     }
@@ -932,6 +960,7 @@ export class SeamWindowSession {
     }
 
     this._renderLeaseBar();
+    this._renderPaneTakeovers();
     this._syncActivePaneState();
     this._renderMobilePaneBar();
     this._publishContext();
@@ -983,6 +1012,7 @@ export class SeamWindowSession {
       entry.pendingBytes = 0;
       for (const chunk of queued) this._queueLiveWrite(entry, chunk, epoch);
       this._syncInputGates();
+      this._syncMobileViewportTransform(entry);
       this._becameReady();
     };
 
@@ -1050,6 +1080,11 @@ export class SeamWindowSession {
     this.attempt = 0;
     if (this.status !== 'live') this._setStatus('live');
     else this._syncInputGates();
+    if (this._pendingSelectPane && this.panes.has(this._pendingSelectPane)) {
+      const pendingPane = this._pendingSelectPane;
+      this._pendingSelectPane = null;
+      this._send({ type: 'select-pane', paneId: pendingPane });
+    }
     this._publishContext();
     this.fit();
   }
@@ -1250,7 +1285,11 @@ export class SeamWindowSession {
     body.dataset.contextZone = 'pane-body';
     body.dataset.paneId = paneId;
 
-    el.append(rail, body);
+    const takeoverEl = doc.createElement('div');
+    takeoverEl.className = 'seam-pane-takeover';
+    takeoverEl.hidden = true;
+
+    el.append(rail, body, takeoverEl);
 
     entry = {
       paneId,
@@ -1258,6 +1297,12 @@ export class SeamWindowSession {
       el,
       rail,
       body,
+      takeoverEl,
+      takeoverCollapsed: false,
+      fitScale: 1,
+      userScale: 1,
+      panX: 0,
+      panY: 0,
       num,
       agentStateEl,
       ico,
@@ -1669,7 +1714,7 @@ export class SeamWindowSession {
       return;
     }
 
-    if (this.sizeLease === 'follow-foreign') {
+    if (this.sizeLease === 'follow-foreign' || this.sizeLease === 'follow-peer') {
       this.leaseBar.hidden = false;
       this.leaseBar.className = 'seam-lease-bar is-chip is-held';
       this.leaseBar.setAttribute('role', 'status');
@@ -1682,20 +1727,29 @@ export class SeamWindowSession {
       iconWrap.innerHTML = PANE_ICONS.device;
       const label = doc.createElement('span');
       label.className = 'seam-chip-label';
-      label.title = '其他客户端正在控制窗口尺寸，当前可继续输入';
-      label.textContent = '其他端尺寸 ' + this.windowCols + '×' + this.windowRows;
+      const activePane = this.activePaneId && this.panes.get(this.activePaneId);
+      const dispCols = this.sizeLease === 'follow-peer' ? (activePane?.meta?.width || this.windowCols) : this.windowCols;
+      const dispRows = this.sizeLease === 'follow-peer' ? (activePane?.meta?.height || this.windowRows) : this.windowRows;
+      label.title = this.sizeLease === 'follow-peer'
+        ? '桌面端控制窗口布局，当前窗格可直接操作并自动缩放适配'
+        : '其他客户端正在控制窗口尺寸，当前可继续输入';
+      label.textContent = (this.sizeLease === 'follow-peer' ? '跟随尺寸 ' : '其他端尺寸 ') + dispCols + '×' + dispRows;
       const btn = doc.createElement('button');
       btn.type = 'button';
       btn.className = 'seam-lease-btn is-primary is-compact';
       btn.disabled = this._leasePending;
-      btn.textContent = this._leasePending ? '正在接管…' : '接管尺寸';
-      btn.addEventListener('click', () => this.takeover());
+      btn.textContent = this._leasePending ? '正在接管…' : (this.sizeLease === 'follow-peer' ? '适配尺寸' : '接管尺寸');
+      btn.addEventListener('click', () => (
+        this.sizeLease === 'follow-peer'
+          ? this.takeover({ paneId: this.activePaneId, claimSize: true })
+          : this.takeover()
+      ));
       chip.append(iconWrap, label, btn);
       this.leaseBar.append(chip);
       return;
     }
 
-    if (this.sizeLease === 'owner' && this.foreignClient) {
+    if (this.sizeLease === 'owner' && (this.foreignClient || this.sizeOverridden)) {
       this.leaseBar.hidden = false;
       this.leaseBar.className = 'seam-lease-bar is-chip is-taken';
       this.leaseBar.setAttribute('role', 'status');
@@ -1722,12 +1776,131 @@ export class SeamWindowSession {
     this.leaseBar.removeAttribute('aria-live');
   }
 
+  _renderPaneTakeovers() {
+    const doc = this.global.document;
+    for (const entry of this.panes.values()) {
+      if (!entry.takeoverEl) continue;
+      const lease = this.paneLeases?.[entry.paneId];
+      const drivenRemotely = Boolean(this.sizeLease !== 'observer' && lease && lease.inputAllowed === false);
+      entry.el.classList.toggle('is-driven-remote', drivenRemotely);
+      if (!drivenRemotely) {
+        entry.takeoverEl.hidden = true;
+        entry.takeoverEl.className = 'seam-pane-takeover';
+        entry.takeoverEl.replaceChildren();
+        entry.takeoverCollapsed = false;
+        continue;
+      }
+
+      const driverLabel = lease.driverDevice === 'mobile' ? '手机端' : '其他端';
+      entry.takeoverEl.hidden = false;
+      if (!entry.takeoverCollapsed) {
+        entry.takeoverEl.className = 'seam-pane-takeover is-overlay';
+        const card = doc.createElement('div');
+        card.className = 'seam-takeover-card is-pane';
+
+        const iconWrap = doc.createElement('div');
+        iconWrap.className = 'seam-takeover-icon';
+        iconWrap.innerHTML = PANE_ICONS.device;
+        const dot = doc.createElement('span');
+        dot.className = 'seam-takeover-dot';
+        dot.setAttribute('aria-hidden', 'true');
+        iconWrap.append(dot);
+
+        const body = doc.createElement('div');
+        body.className = 'seam-takeover-body';
+        const title = doc.createElement('div');
+        title.className = 'seam-takeover-title';
+        title.textContent = driverLabel + '正在控制此窗格';
+        const desc = doc.createElement('div');
+        desc.className = 'seam-takeover-desc';
+        desc.textContent = '当前窗格已锁定只读同步，其余窗格可继续独立操作。';
+
+        const actions = doc.createElement('div');
+        actions.className = 'seam-takeover-actions';
+        const paneBtn = doc.createElement('button');
+        paneBtn.type = 'button';
+        paneBtn.className = 'seam-lease-btn is-primary';
+        paneBtn.disabled = this._leasePending;
+        paneBtn.textContent = this._leasePending ? '正在接管…' : '接管此窗格';
+        paneBtn.addEventListener('click', (event) => {
+          event.stopPropagation();
+          this.takeover({ paneId: entry.paneId });
+        });
+        actions.append(paneBtn);
+
+        if (this.panes.size > 1) {
+          const allBtn = doc.createElement('button');
+          allBtn.type = 'button';
+          allBtn.className = 'seam-lease-btn';
+          allBtn.disabled = this._leasePending;
+          allBtn.textContent = '接管全部';
+          allBtn.addEventListener('click', (event) => {
+            event.stopPropagation();
+            this.takeover();
+          });
+          actions.append(allBtn);
+        }
+        body.append(title, desc, actions);
+
+        const minBtn = doc.createElement('button');
+        minBtn.type = 'button';
+        minBtn.className = 'seam-takeover-min';
+        minBtn.title = '最小化为角标';
+        minBtn.setAttribute('aria-label', '最小化');
+        minBtn.innerHTML = PANE_ICONS.minimize;
+        minBtn.addEventListener('click', (event) => {
+          event.stopPropagation();
+          entry.takeoverCollapsed = true;
+          this._renderPaneTakeovers();
+        });
+
+        card.append(iconWrap, body, minBtn);
+        entry.takeoverEl.replaceChildren(card);
+      } else {
+        entry.takeoverEl.className = 'seam-pane-takeover is-chip';
+        const chip = doc.createElement('div');
+        chip.className = 'seam-takeover-chip';
+
+        const iconWrap = doc.createElement('span');
+        iconWrap.className = 'seam-takeover-icon is-compact';
+        iconWrap.innerHTML = PANE_ICONS.device;
+        const dot = doc.createElement('span');
+        dot.className = 'seam-takeover-dot';
+        dot.setAttribute('aria-hidden', 'true');
+        iconWrap.append(dot);
+
+        const expandBtn = doc.createElement('button');
+        expandBtn.type = 'button';
+        expandBtn.className = 'seam-chip-expand';
+        expandBtn.textContent = driverLabel + '控制中';
+        expandBtn.addEventListener('click', (event) => {
+          event.stopPropagation();
+          entry.takeoverCollapsed = false;
+          this._renderPaneTakeovers();
+        });
+
+        const btn = doc.createElement('button');
+        btn.type = 'button';
+        btn.className = 'seam-lease-btn is-primary is-compact';
+        btn.disabled = this._leasePending;
+        btn.textContent = this._leasePending ? '正在接管…' : '接管此窗格';
+        btn.addEventListener('click', (event) => {
+          event.stopPropagation();
+          this.takeover({ paneId: entry.paneId });
+        });
+
+        chip.append(iconWrap, expandBtn, btn);
+        entry.takeoverEl.replaceChildren(chip);
+      }
+    }
+  }
+
   _isMobile() {
     return Boolean(this.global.MobileUI?.isMobile?.());
   }
 
   _isMobileSinglePane() {
-    return Boolean(this._isMobile() && !this.mobileSplitView && !this.zoomed && this.panes.size > 1 && this.activePaneId && this.panes.has(this.activePaneId));
+    return Boolean(this._isMobile() && !this.zoomed && this.panes.size > 1 && this.activePaneId && this.panes.has(this.activePaneId));
   }
 
   _renderMobilePaneBar() {
@@ -1778,19 +1951,7 @@ export class SeamWindowSession {
       btn.addEventListener('click', () => this.selectPane(entry.paneId));
       tabs.append(btn);
     }
-    const splitToggle = doc.createElement('button');
-    splitToggle.type = 'button';
-    splitToggle.className = 'seam-mobile-split-toggle';
-    splitToggle.setAttribute('aria-pressed', String(this.mobileSplitView));
-    splitToggle.textContent = this.mobileSplitView ? '单窗' : '分屏';
-    splitToggle.addEventListener('click', () => {
-      this.mobileSplitView = !this.mobileSplitView;
-      this._renderTree();
-      this._renderMobilePaneBar();
-      this._resetResizeGuard();
-      this.fit();
-    });
-    this.mobilePaneBar.replaceChildren(tabs, splitToggle);
+    this.mobilePaneBar.replaceChildren(tabs);
   }
 
   _layoutTopologyKey() {
@@ -2528,7 +2689,7 @@ export class SeamWindowSession {
     entry.inputBatchActive = false;
     const data = entry.inputBatchBuf;
     entry.inputBatchBuf = '';
-    if (data && !this.disposed && this.status === 'live' && this.inputAllowed && entry.hydrated && !entry.restoring) {
+    if (data && !this.disposed && this.status === 'live' && this._isPaneInputAllowed(entry.paneId) && entry.hydrated && !entry.restoring) {
       this.inputVersion++;
       this._sendInput(entry.paneId, data, false);
     }
@@ -2575,7 +2736,7 @@ export class SeamWindowSession {
           entry.hoverTimer = null;
           const pending = entry.pendingHoverSeq;
           entry.pendingHoverSeq = null;
-          if (pending && !this.disposed && this.status === 'live' && this.inputAllowed && entry.hydrated && !entry.restoring) {
+          if (pending && !this.disposed && this.status === 'live' && this._isPaneInputAllowed(paneId) && entry.hydrated && !entry.restoring) {
             this._sendInputImmediate(paneId, pending, false);
           }
         }, 16);
@@ -2586,16 +2747,32 @@ export class SeamWindowSession {
     return this._sendInputImmediate(paneId, data, false);
   }
 
+  setStickyModifier(name, armed) {
+    if (this.disposed || name !== 'ctrl') return false;
+    const next = Boolean(armed);
+    if (this.stickyCtrl === next) return next;
+    this.stickyCtrl = next;
+    this.onStickyModifierChange({ ctrl: next });
+    return next;
+  }
+
   send(data, trackIntent = true, paneId = this.activePaneId) {
     const entry = paneId && this.panes.get(paneId);
-    if (this.status !== 'live' || !this.inputAllowed || !entry?.term || !entry?.hydrated || entry.restoring || typeof data !== 'string') return false;
+    if (this.status !== 'live' || !this._isPaneInputAllowed(paneId) || !entry?.term || !entry?.hydrated || entry.restoring || typeof data !== 'string') return false;
+    if (this.stickyCtrl && data.length === 1) {
+      const code = data.charCodeAt(0);
+      if ((code >= 64 && code <= 95) || (code >= 97 && code <= 122)) {
+        data = String.fromCharCode(code & 0x1f);
+        this.setStickyModifier('ctrl', false);
+      }
+    }
     if (trackIntent) this.inputVersion++;
     return this._sendInput(paneId, data, false);
   }
 
   paste(text, paneId = this.activePaneId) {
     const entry = paneId && this.panes.get(paneId);
-    if (this.status !== 'live' || !this.inputAllowed || !entry?.term || !entry?.hydrated || entry.restoring) return false;
+    if (this.status !== 'live' || !this._isPaneInputAllowed(paneId) || !entry?.term || !entry?.hydrated || entry.restoring) return false;
     if (entry.term.paste) entry.term.paste(text);
     else this.send(text, true, paneId);
     return true;
@@ -2605,18 +2782,26 @@ export class SeamWindowSession {
     if (this.disposed || !this.panes.has(paneId)) return false;
     const prev = this.activePaneId;
     this.activePaneId = paneId;
+    if (this._isMobile()) this._localActivePaneId = paneId;
     this._syncActivePaneState();
-    if (this._isMobile() && !this.mobileSplitView && this.panes.size > 1) {
+    if (this._isMobileSinglePane()) {
       this._renderTree();
       this._resetResizeGuard();
       this.fit();
+    } else if (this._isMobile()) {
+      this._syncMobileViewportTransform(this.panes.get(paneId));
     }
     this._renderMobilePaneBar();
     this._syncInputGates();
     this._publishContext();
     if (!this._isMobile()) this.panes.get(paneId)?.term?.focus();
-    if (prev !== paneId && this.status === 'live') {
-      this._send({ type: 'select-pane', paneId });
+    if (prev !== paneId) {
+      if (this.status === 'live') {
+        this._pendingSelectPane = null;
+        this._send({ type: 'select-pane', paneId });
+      } else {
+        this._pendingSelectPane = paneId;
+      }
     }
     return true;
   }
@@ -2626,13 +2811,20 @@ export class SeamWindowSession {
     return this._send({ type: 'zoom-pane', paneId, ...(typeof zoomed === 'boolean' ? { zoomed } : {}) });
   }
 
-  takeover() {
+  takeover(options = null) {
     this._leasePending = true;
     this._renderLeaseBar();
-    const sent = this._send({ type: 'takeover' });
+    this._renderPaneTakeovers();
+    const payload = { type: 'takeover' };
+    if (options && typeof options === 'object') {
+      if (options.paneId) payload.paneId = options.paneId;
+      if (options.claimSize === true) payload.claimSize = true;
+    }
+    const sent = this._send(payload);
     if (!sent) {
       this._leasePending = false;
       this._renderLeaseBar();
+      this._renderPaneTakeovers();
     }
     return sent;
   }
@@ -2783,8 +2975,52 @@ export class SeamWindowSession {
     };
   }
 
+  _syncMobileViewportTransform(entry) {
+    const el = entry?.term?.element;
+    if (!el) return;
+    if (!this._isMobile() || entry.isRich || !entry.body?.clientWidth) {
+      entry.fitScale = 1;
+      entry.userScale = 1;
+      entry.panX = 0;
+      entry.panY = 0;
+      el.style.transform = '';
+      el.style.transformOrigin = '';
+      return;
+    }
+    const availW = Math.max(1, entry.body.clientWidth - PANE_PAD_X);
+    const availH = Math.max(1, (entry.body.clientHeight || 200) - PANE_PAD_Y);
+    const cell = this._cellMetrics();
+    const contentW = Math.max(1, (entry.term.cols || 80) * cell.width);
+    const contentH = Math.max(1, (entry.term.rows || 24) * cell.height);
+    entry.fitScale = contentW > availW + 1 ? Math.max(0.45, Math.min(1, availW / contentW)) : 1;
+    const userScale = Math.max(1, Math.min(3, entry.userScale || 1));
+    entry.userScale = userScale;
+    const totalScale = entry.fitScale * userScale;
+    if (Math.abs(totalScale - 1) < 0.005 && !entry.panX && !entry.panY) {
+      el.style.transform = '';
+      el.style.transformOrigin = '';
+      return;
+    }
+    const minPanX = Math.min(0, availW - contentW * totalScale);
+    const minPanY = Math.min(0, availH - contentH * totalScale);
+    entry.panX = Math.max(minPanX, Math.min(0, entry.panX || 0));
+    entry.panY = Math.max(minPanY, Math.min(0, entry.panY || 0));
+    el.style.transformOrigin = '0 0';
+    el.style.transform = `translate3d(${entry.panX.toFixed(1)}px, ${entry.panY.toFixed(1)}px, 0) scale(${totalScale.toFixed(4)})`;
+  }
+
   fit() {
-    if (this.disposed || this.parked || !this.visible || !this.treeHost.isConnected || this.sizeLease !== 'owner' || this._layoutSyncPending) {
+    if (this.disposed || this.parked || !this.visible || !this.treeHost.isConnected) {
+      this._cancelResizeTimer();
+      return;
+    }
+    if (this._isMobile()) {
+      const active = (this.activePaneId && this.panes.get(this.activePaneId)) || this.panes.values().next().value;
+      if (active) this._syncMobileViewportTransform(active);
+    } else {
+      for (const pane of this.panes.values()) this._syncMobileViewportTransform(pane);
+    }
+    if (this.sizeLease !== 'owner' || this._layoutSyncPending) {
       this._cancelResizeTimer();
       return;
     }
@@ -2950,12 +3186,56 @@ export class SeamWindowSession {
 
   _installTouchSelection(entry) {
     const { body, term } = entry;
-    let origin, lastTouch, anchor, selecting = false, scrolling = false, suppressClick = false, copyButton;
-    let accumPx = 0, velocity = 0, lastMoveTime = 0, momentumId = null, lastPoint = { x: 0, y: 0 };
+    let origin, lastTouch, anchor, selecting = false, scrolling = false, panning = false, pinch = null, suppressClick = false, copyButton;
+    let accumPx = 0, velocity = 0, lastMoveTime = 0, momentumId = null, lastPoint = { x: 0, y: 0 }, lastTap = null;
     const clearHold = () => { this.global.clearTimeout(entry.holdTimer); entry.holdTimer = null; };
     const stopMomentum = () => {
       if (momentumId != null && this.global.cancelAnimationFrame) this.global.cancelAnimationFrame(momentumId);
       momentumId = null;
+    };
+    const expandWordAt = (line, col, cols) => {
+      const isWordChar = (ch) => /[\p{L}\p{N}_./\\:~-]/u.test(ch || '');
+      if (line && typeof this.global.Intl?.Segmenter === 'function' && typeof line.getCell === 'function') {
+        const glyphs = [];
+        for (let c = 0; c < cols;) {
+          const cell = line.getCell(c);
+          if (!cell?.getChars || !cell?.getWidth) break;
+          const w = cell.getWidth();
+          if (w <= 0) { c++; continue; }
+          const ch = cell.getChars() || ' ';
+          glyphs.push({ text: ch, start: c, end: c + w - 1 });
+          c += w;
+        }
+        if (glyphs.length) {
+          const map = [];
+          let text = '';
+          for (const g of glyphs) {
+            for (let k = 0; k < g.text.length; k++) map.push(g);
+            text += g.text;
+          }
+          const segmenter = new this.global.Intl.Segmenter(undefined, { granularity: 'grapheme' });
+          const segs = Array.from(segmenter.segment(text), (s) => ({
+            text: s.segment,
+            start: map[s.index].start,
+            end: map[s.index + s.segment.length - 1].end,
+          }));
+          const idx = segs.findIndex((s) => s.start <= col && col <= s.end);
+          if (idx >= 0 && isWordChar(segs[idx].text)) {
+            let leftIdx = idx, rightIdx = idx;
+            while (leftIdx > 0 && isWordChar(segs[leftIdx - 1].text)) leftIdx--;
+            while (rightIdx + 1 < segs.length && isWordChar(segs[rightIdx + 1].text)) rightIdx++;
+            return { left: segs[leftIdx].start, right: segs[rightIdx].end };
+          }
+          if (idx >= 0) return { left: segs[idx].start, right: segs[idx].end };
+        }
+      }
+      const word = (c) => isWordChar(line?.getCell?.(c)?.getChars());
+      let left = col, right = col;
+      if (word(left)) {
+        while (left > 0 && word(left - 1)) left--;
+        while (right < cols - 1 && word(right + 1)) right++;
+      }
+      return { left, right };
     };
     const scrollBottomBtn = this.global.document.createElement('button');
     scrollBottomBtn.type = 'button';
@@ -3027,30 +3307,61 @@ export class SeamWindowSession {
       entry.el.append(copyButton);
     };
     const onStart = (event) => {
-      if (!this._isMobile() || event.touches.length !== 1 || event.target.closest?.('.wb-touch-copy, .wb-scroll-bottom')) return;
-      clearHold(); stopMomentum(); selecting = false; scrolling = false; accumPx = 0; velocity = 0;
+      if (!this._isMobile() || event.target.closest?.('.wb-touch-copy, .wb-scroll-bottom, .seam-pane-takeover')) return;
+      if (event.touches.length === 2) {
+        clearHold(); stopMomentum(); origin = null; scrolling = false; panning = false;
+        const [t1, t2] = event.touches;
+        pinch = {
+          startDist: Math.max(1, Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY)),
+          startScale: entry.userScale || 1,
+        };
+        return;
+      }
+      if (event.touches.length !== 1) return;
+      pinch = null;
+      clearHold(); stopMomentum(); selecting = false; scrolling = false; panning = false; accumPx = 0; velocity = 0;
       copyButton?.remove(); copyButton = null;
       const touch = event.touches[0];
+      const now = Date.now();
+      if (lastTap && now - lastTap.time < 280 && Math.hypot(touch.clientX - lastTap.x, touch.clientY - lastTap.y) < 24) {
+        lastTap = null;
+        if ((entry.userScale || 1) > 1.02 || entry.panX || entry.panY) {
+          entry.userScale = 1;
+          entry.panX = 0;
+          entry.panY = 0;
+          this._syncMobileViewportTransform(entry);
+        }
+      } else {
+        lastTap = { x: touch.clientX, y: touch.clientY, time: now };
+      }
       origin = { x: touch.clientX, y: touch.clientY };
       lastTouch = { x: touch.clientX, y: touch.clientY };
       lastPoint = { x: touch.clientX, y: touch.clientY };
-      lastMoveTime = Date.now();
+      lastMoveTime = now;
       anchor = position(touch);
       if (!anchor) return;
       entry.holdTimer = this.global.setTimeout(() => {
-        if (this.disposed || !anchor || scrolling) return;
+        if (this.disposed || !anchor || scrolling || panning || pinch) return;
         selecting = true; suppressClick = true;
         this.global.navigator?.vibrate?.(20);
         const line = term.buffer.active.getLine(anchor.row);
-        const word = (col) => /[\p{L}\p{N}_./\\:~-]/u.test(line?.getCell?.(col)?.getChars() || '');
-        let left = anchor.col, right = anchor.col;
-        if (word(left)) { while (left > 0 && word(left - 1)) left--; while (right < term.cols - 1 && word(right + 1)) right++; }
+        const { left, right } = expandWordAt(line, anchor.col, term.cols);
         anchor = { row: anchor.row, col: left };
         term.select?.(left, anchor.row, right - left + 1);
         showCopy();
       }, 450);
     };
     const onMove = (event) => {
+      if (pinch && event.touches.length === 2) {
+        clearHold();
+        event.preventDefault();
+        event.stopPropagation();
+        const [t1, t2] = event.touches;
+        const dist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
+        entry.userScale = Math.max(1, Math.min(3, pinch.startScale * (dist / pinch.startDist)));
+        this._syncMobileViewportTransform(entry);
+        return;
+      }
       if (!origin || event.touches.length !== 1) { clearHold(); return; }
       const touch = event.touches[0];
       if (selecting) {
@@ -3064,9 +3375,24 @@ export class SeamWindowSession {
       }
       const totalDx = touch.clientX - origin.x;
       const totalDy = touch.clientY - origin.y;
+      if (panning) {
+        event.preventDefault(); event.stopPropagation();
+        entry.panX = (entry.panX || 0) + (touch.clientX - lastTouch.x);
+        lastTouch = { x: touch.clientX, y: touch.clientY };
+        this._syncMobileViewportTransform(entry);
+        return;
+      }
       if (!scrolling) {
         if (Math.hypot(totalDx, totalDy) <= 10) return;
         clearHold();
+        if (((entry.userScale || 1) > 1.02 || (entry.fitScale || 1) < 0.99) && Math.abs(totalDx) > Math.abs(totalDy)) {
+          panning = true;
+          entry.panX = (entry.panX || 0) + (touch.clientX - lastTouch.x);
+          lastTouch = { x: touch.clientX, y: touch.clientY };
+          event.preventDefault(); event.stopPropagation();
+          this._syncMobileViewportTransform(entry);
+          return;
+        }
         if (Math.abs(totalDy) >= Math.abs(totalDx)) scrolling = true;
         else return;
       }
@@ -3089,6 +3415,16 @@ export class SeamWindowSession {
     };
     const onEnd = (event) => {
       clearHold(); origin = null; lastTouch = null;
+      if (pinch && (!event.touches || event.touches.length < 2)) {
+        pinch = null;
+        event.preventDefault?.(); event.stopPropagation?.();
+        return;
+      }
+      if (panning) {
+        panning = false;
+        event.preventDefault?.(); event.stopPropagation?.();
+        return;
+      }
       if (selecting) { event.preventDefault(); event.stopPropagation(); return; }
       if (scrolling) {
         event.preventDefault(); event.stopPropagation();

@@ -290,7 +290,10 @@ describe('native workbench UI', () => {
     session.fit = vi.fn();
 
     const quickBtns = [...f.host.querySelectorAll('.mobile-terminal-quick-keys button')].map((b) => b.dataset.wbKey);
-    expect(quickBtns).toEqual(['esc', 'tab', 'ctrl', 'up', 'down', 'paste']);
+    expect(quickBtns).toEqual([
+      'esc', 'tab', 'shift-tab', 'ctrl-mod', 'ctrl', 'ctrl-d', 'ctrl-l',
+      'enter', 'up', 'down', 'left', 'right', 'backspace', 'paste',
+    ]);
 
     f.host.querySelector('[data-wb-key="up"]').click();
     expect(session.send).toHaveBeenCalledWith('\x1b[A');
@@ -385,6 +388,76 @@ describe('native workbench UI', () => {
     expect(f.sessions[1].disposed).toBe(true);
     f.api.unmount();
     expect(f.sessions[0].disposed).toBe(true);
+    f.close();
+  });
+
+  it('renders Orca mobile key rail with Shift+Tab, repeatable arrows, and sticky Ctrl modifier', async () => {
+    const f = fixture();
+    f.win.MobileUI.isMobile = () => true;
+    const view = await f.api.create({ serverId: 'dev', ...remote });
+    await f.api.render('dev', view.id, { container: f.host });
+    const session = f.sessions[0];
+    session.stickyCtrl = false;
+    session.setStickyModifier = vi.fn((name, armed) => {
+      if (name === 'ctrl') {
+        session.stickyCtrl = armed;
+        session.options.onStickyModifierChange?.({ ctrl: armed });
+      }
+      return armed;
+    });
+
+    const shiftTabBtn = f.host.querySelector('[data-wb-key="shift-tab"]');
+    const ctrlBtn = f.host.querySelector('[data-wb-key="ctrl-mod"]');
+    const upBtn = f.host.querySelector('[data-wb-key="up"]');
+    expect(shiftTabBtn).not.toBeNull();
+    expect(ctrlBtn).not.toBeNull();
+    expect(upBtn).not.toBeNull();
+
+    shiftTabBtn.click();
+    expect(session.send).toHaveBeenCalledWith('\x1b[Z');
+
+    // Toggle sticky Ctrl on, then simulate session disarming it after keystroke
+    ctrlBtn.click();
+    expect(session.setStickyModifier).toHaveBeenCalledWith('ctrl', true);
+    expect(ctrlBtn.classList.contains('is-active')).toBe(true);
+    expect(ctrlBtn.getAttribute('aria-pressed')).toBe('true');
+    session.setStickyModifier('ctrl', false);
+    expect(ctrlBtn.classList.contains('is-active')).toBe(false);
+    expect(ctrlBtn.getAttribute('aria-pressed')).toBe('false');
+
+    // Repeatable arrow fires immediately and repeats on hold
+    vi.useFakeTimers();
+    session.send.mockClear();
+    upBtn.dispatchEvent(new f.win.Event('pointerdown', { bubbles: true, cancelable: true }));
+    await vi.advanceTimersByTimeAsync(500);
+    upBtn.dispatchEvent(new f.win.Event('pointerup', { bubbles: true }));
+    expect(session.send.mock.calls.filter(([d]) => d === '\x1b[A').length).toBeGreaterThanOrEqual(3);
+    vi.useRealTimers();
+
+    f.api.unmount();
+    f.close();
+  });
+
+  it('defers selectPane during async open navigation until the target view mounts', async () => {
+    const f = fixture();
+    const v1 = await f.api.create({ serverId: 'dev', instanceId: '42:123', sessionId: '$1', windowId: '@1', paneId: '%1' });
+    const v2 = await f.api.create({ serverId: 'dev', instanceId: '42:123', sessionId: '$1', windowId: '@2', paneId: '%2' });
+    await f.api.render('dev', v1.id, { container: f.host });
+    f.sessions[0].selectPane = vi.fn(() => true);
+    f.sessions[0].setParked = vi.fn();
+
+    // Simulate Router.go deferring hashchange while selectPane('%2') is called immediately after open(v2.id)
+    f.api.open(v2.id);
+    expect(f.api.selectPane('%2')).toBe(false);
+    expect(f.sessions[0].selectPane).not.toHaveBeenCalled();
+
+    await f.api.render('dev', v2.id, { container: f.host });
+    const s2 = f.sessions[1];
+    s2.selectPane = vi.fn(() => true);
+    s2.options.onContext({ serverId: 'dev', instanceId: '42:123', sessionId: '$1', windowId: '@2', paneId: '%0', clientId: 'c2' });
+    expect(s2.selectPane).toHaveBeenCalledWith('%2');
+
+    f.api.unmount();
     f.close();
   });
 

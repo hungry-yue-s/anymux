@@ -552,4 +552,76 @@ describe('ControlPool multi-pane window-stream', () => {
       vi.useRealTimers();
     }
   });
+
+  it('grants per-pane ownership when desktop and mobile share a multi-pane window, and supports per-pane takeover without window lockstep', async () => {
+    const { pool, controls, target } = makeFixture();
+    const desktopFrames = [];
+    const mobileFrames = [];
+
+    const desktop = await pool.subscribeWindow(
+      { ...target, device: 'desktop' },
+      f => desktopFrames.push(Buffer.isBuffer(f) ? decodeBinaryFrame(f) : f),
+    );
+    expect(desktopFrames.find(f => f.type === 'ready')).toMatchObject({
+      sizeLease: 'owner',
+      inputAllowed: true,
+      paneLeases: {
+        '%3': { owner: true, inputAllowed: true },
+        '%4': { owner: true, inputAllowed: true },
+      },
+    });
+
+    // Mobile joins focusing %4 -> Mobile gets %4 ONLY (follow-peer), Desktop keeps %3 + owner sizeLease!
+    const mobile = await pool.subscribeWindow(
+      { ...target, device: 'mobile', paneId: '%4' },
+      f => mobileFrames.push(Buffer.isBuffer(f) ? decodeBinaryFrame(f) : f),
+    );
+    expect(mobileFrames.find(f => f.type === 'ready')).toMatchObject({
+      sizeLease: 'follow-peer',
+      inputAllowed: true,
+      paneLeases: {
+        '%3': { owner: false, inputAllowed: false, driverDevice: 'desktop' },
+        '%4': { owner: true, inputAllowed: true },
+      },
+    });
+    expect(desktopFrames.filter(f => f.type === 'ready').at(-1)).toMatchObject({
+      sizeLease: 'owner',
+      inputAllowed: true,
+      paneLeases: {
+        '%3': { owner: true, inputAllowed: true },
+        '%4': { owner: false, inputAllowed: false, driverDevice: 'mobile' },
+      },
+    });
+
+    // Desktop types freely in %3 while blocked only in %4; Mobile types in %4 while blocked in %3.
+    expect(await desktop.input('%3', 'ls')).toBe(true);
+    expect(await desktop.input('%4', 'no')).toBe(false);
+    expect(await mobile.input('%4', 'ok')).toBe(true);
+    expect(await mobile.input('%3', 'no')).toBe(false);
+    expect(await desktop.resizeWindow(150, 44)).toBe(true);
+    expect(await mobile.resizeWindow(50, 20)).toBe(false);
+
+    // Switching active pane on Mobile releases %4 back to Desktop and claims %3 WITHOUT yanking tmux select-pane on Desktop!
+    const selectCmdsBefore = controls[0].commands.filter(c => c.startsWith('select-pane')).length;
+    await mobile.selectPane('%3');
+    expect(controls[0].commands.filter(c => c.startsWith('select-pane')).length).toBe(selectCmdsBefore);
+    expect(await mobile.input('%3', 'ok')).toBe(true);
+    expect(await mobile.input('%4', 'no')).toBe(false);
+    expect(await desktop.input('%4', 'ok')).toBe(true);
+
+    // Desktop reclaims %3 via single-pane takeover while letting everything converge cleanly
+    await desktop.takeover({ paneId: '%3' });
+    expect(await desktop.input('%3', 'ok')).toBe(true);
+    expect(await mobile.input('%3', 'no')).toBe(false);
+
+    // Mobile can reclaim size explicitly when desired, and releaseTakeover returns sizeLease to Desktop
+    await mobile.takeover({ paneId: '%4', claimSize: true });
+    expect(mobileFrames.filter(f => f.type === 'ready').at(-1)).toMatchObject({ sizeLease: 'owner', sizeOverridden: true });
+    await mobile.releaseTakeover();
+    expect(desktopFrames.filter(f => f.type === 'ready').at(-1)).toMatchObject({ sizeLease: 'owner' });
+
+    mobile.close();
+    desktop.close();
+    pool.dispose();
+  });
 });

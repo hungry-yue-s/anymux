@@ -67,7 +67,7 @@ export function createWorkbench(global, options = {}) {
   const Session = options.Session || SeamWindowSession;
   const maxWarmViews = Number.isInteger(options.maxWarmViews) && options.maxWarmViews >= 0 ? options.maxWarmViews : 12;
   const tab = tabIdentity(global), pending = new Map(), warmCache = new Map(), supportedCache = new Map();
-  let mounted = null, generation = 0, pendingFocusPane = null;
+  let mounted = null, generation = 0, pendingFocusPane = null, pendingOpenViewId = null;
   const mobile = () => global.MobileUI?.isMobile() ?? global.innerWidth < 768;
   const emit = (name, detail) => global.dispatchEvent(new global.CustomEvent(name, { detail }));
   const changed = () => emit('workbench-views-changed', {});
@@ -190,23 +190,79 @@ export function createWorkbench(global, options = {}) {
     trigger.setAttribute('aria-expanded', 'false'); trigger.setAttribute('aria-controls', drawer.id); trigger.setAttribute('aria-label', '打开终端工具');
     trigger.addEventListener('click', () => toggleDrawer(true));
     const keys = element('div', 'mobile-terminal-quick-keys');
-    const quick = (id, label, run) => {
+    const quick = (id, label, run, { repeatable = false, ariaLabel = label } = {}) => {
       const key = element('button', '', label);
       key.type = 'button';
       key.dataset.wbKey = id;
-      key.addEventListener('click', () => {
-        try { Promise.resolve(run()).catch(notify); } catch (error) { notify(error); }
-      });
+      key.setAttribute('aria-label', ariaLabel);
+      const invoke = () => {
+        try { Promise.resolve(run(key)).catch(notify); } catch (error) { notify(error); }
+      };
+      if (!repeatable) {
+        key.addEventListener('click', invoke);
+      } else {
+        let holdTimer = null, repeatTimer = null, pointerHandled = false;
+        const stopRepeat = () => {
+          global.clearTimeout(holdTimer);
+          global.clearInterval(repeatTimer);
+          holdTimer = null;
+          repeatTimer = null;
+        };
+        key.addEventListener('pointerdown', (event) => {
+          event.preventDefault();
+          pointerHandled = true;
+          stopRepeat();
+          invoke();
+          holdTimer = global.setTimeout(() => {
+            holdTimer = null;
+            repeatTimer = global.setInterval(invoke, 65);
+          }, 360);
+        });
+        for (const ev of ['pointerup', 'pointercancel', 'pointerleave', 'lostpointercapture']) {
+          key.addEventListener(ev, stopRepeat);
+        }
+        key.addEventListener('click', () => {
+          if (pointerHandled) { pointerHandled = false; return; }
+          invoke();
+        });
+        repeatCleanups.push(stopRepeat);
+      }
       keys.append(key);
+      return key;
     };
-    for (const [id, label, seq] of [
-      ['esc', 'Esc', '\x1b'],
-      ['tab', 'Tab', '\t'],
-      ['ctrl', 'Ctrl+C', '\x03'],
-      ['up', '↑', '\x1b[A'],
-      ['down', '↓', '\x1b[B'],
+    const repeatCleanups = [];
+    let ctrlBtn = null;
+    owner.syncStickyModifiers = (state = {}) => {
+      if (!ctrlBtn) return;
+      const armed = Boolean(state.ctrl);
+      ctrlBtn.classList.toggle('is-active', armed);
+      ctrlBtn.setAttribute('aria-pressed', String(armed));
+    };
+    for (const item of [
+      { id: 'esc', label: 'Esc', seq: '\x1b' },
+      { id: 'tab', label: 'Tab', seq: '\t' },
+      { id: 'shift-tab', label: 'S-Tab', ariaLabel: 'Shift+Tab', seq: '\x1b[Z' },
     ]) {
-      quick(id, label, () => send(seq));
+      quick(item.id, item.label, () => send(item.seq), { ariaLabel: item.ariaLabel });
+    }
+    ctrlBtn = quick('ctrl-mod', 'Ctrl', () => {
+      const next = !owner.session?.stickyCtrl;
+      owner.session?.setStickyModifier?.('ctrl', next);
+      owner.syncStickyModifiers({ ctrl: next });
+    }, { ariaLabel: 'Ctrl 修饰键' });
+    ctrlBtn.setAttribute('aria-pressed', 'false');
+    for (const item of [
+      { id: 'ctrl', label: 'Ctrl+C', seq: '\x03' },
+      { id: 'ctrl-d', label: 'Ctrl+D', seq: '\x04' },
+      { id: 'ctrl-l', label: 'Ctrl+L', seq: '\x0c' },
+      { id: 'enter', label: '↵', ariaLabel: 'Enter', seq: '\r' },
+      { id: 'up', label: '↑', ariaLabel: '向上方向键', seq: '\x1b[A', repeatable: true },
+      { id: 'down', label: '↓', ariaLabel: '向下方向键', seq: '\x1b[B', repeatable: true },
+      { id: 'left', label: '←', ariaLabel: '向左方向键', seq: '\x1b[D', repeatable: true },
+      { id: 'right', label: '→', ariaLabel: '向右方向键', seq: '\x1b[C', repeatable: true },
+      { id: 'backspace', label: '⌫', ariaLabel: '退格', seq: '\x7f', repeatable: true },
+    ]) {
+      quick(item.id, item.label, () => send(item.seq), { repeatable: item.repeatable, ariaLabel: item.ariaLabel });
     }
     quick('paste', '粘贴', async () => {
       if (!global.navigator.clipboard?.readText) throw new Error('当前浏览器不支持读取剪贴板');
@@ -232,7 +288,10 @@ export function createWorkbench(global, options = {}) {
       } catch (error) { notify(error); }
     });
     owner.tools = tools; owner.closeDrawer = () => toggleDrawer(false);
-    owner.toolsCleanup = () => { toggleDrawer(false); doc.removeEventListener('focusin', sentinel); drawerApi?.destroy(); };
+    owner.toolsCleanup = () => {
+      for (const stop of repeatCleanups) stop();
+      toggleDrawer(false); doc.removeEventListener('focusin', sentinel); drawerApi?.destroy();
+    };
   }
 
   function mountSession(owner, view, tabId) {
@@ -240,6 +299,7 @@ export function createWorkbench(global, options = {}) {
     const target = validateWindowTarget({ ...view, clientId: view.clientId + '-' + tabId });
     owner.session = new Session(global, { container: owner.terminal, target, fontSize: view.fontSize,
       onFontSize: (fontSize) => { if (store.get(view.id)) store.update(view.id, (saved) => { saved.fontSize = fontSize; }); },
+      onStickyModifierChange: (state) => { owner.syncStickyModifiers?.(state); },
       onContext: (confirmed) => {
         if (mounted !== owner || !store.get(view.id)) return;
         const saved = store.get(view.id);
@@ -421,7 +481,12 @@ export function createWorkbench(global, options = {}) {
       return Object.freeze({ ...fresh, focusRequestKey: selected.key });
     },
     focusedSession: () => mounted?.session || null,
-    open(id) { const view = store.get(id); if (!view) throw new Error('工作台不存在'); global.Router.go({ name: 'workbench', params: { serverId: view.serverId, viewId: id } }); },
+    open(id) {
+      const view = store.get(id);
+      if (!view) throw new Error('工作台不存在');
+      if (mounted?.viewId !== id) pendingOpenViewId = id;
+      global.Router.go({ name: 'workbench', params: { serverId: view.serverId, viewId: id } });
+    },
     async create(input) {
       input = { ...input, ...(input.target || {}) }; await supported(input.serverId);
       const view = store.create(input); changed();
@@ -430,6 +495,7 @@ export function createWorkbench(global, options = {}) {
     },
     async render(serverId, viewId, { container } = {}) {
       if (!container) throw new Error('缺少工作台容器');
+      if (pendingOpenViewId === viewId) pendingOpenViewId = null;
       if (mounted?.viewId === viewId && mounted.host === container && mounted.root.isConnected) { mounted.session?.fit(); return; }
       const view = store.get(viewId);
       if (!view || view.serverId !== serverId) {
@@ -553,6 +619,7 @@ export function createWorkbench(global, options = {}) {
     },
     unmount() {
       generation++; const owner = mounted; mounted = null;
+      pendingOpenViewId = null;
       disposeOwner(owner);
       clearWarmCache();
       doc.body.classList.remove('terminal-active');
@@ -592,6 +659,7 @@ export function createWorkbench(global, options = {}) {
     selectPane(paneId) {
       if (!paneId) return false;
       pendingFocusPane = paneId;
+      if (pendingOpenViewId && mounted?.viewId !== pendingOpenViewId) return false;
       if (mounted?.session?.selectPane?.(paneId)) {
         pendingFocusPane = null;
         return true;
@@ -694,6 +762,7 @@ export function createWorkbench(global, options = {}) {
       owner.histories.set(id, reader); return reader;
     },
     closeView(id) {
+      if (pendingOpenViewId === id) pendingOpenViewId = null;
       if (mounted?.viewId === id) {
         generation++; const owner = mounted; mounted = null;
         disposeOwner(owner);

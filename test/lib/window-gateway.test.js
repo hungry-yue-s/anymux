@@ -36,7 +36,7 @@ describe('window stream gateway', () => {
       resizePaneBatch: (resizes) => calls.push(['resize-pane-batch', resizes]),
       selectPane: paneId => calls.push(['select-pane', paneId]),
       zoomPane: (paneId, zoomed) => calls.push(['zoom-pane', paneId, zoomed]),
-      takeover: () => calls.push(['takeover']),
+      takeover: opts => calls.push(opts ? ['takeover', opts] : ['takeover']),
       releaseTakeover: () => calls.push(['release-takeover']),
       resync: (opts) => calls.push(['resync', opts]),
       visibility: v => calls.push(['visibility', v]),
@@ -62,6 +62,8 @@ describe('window stream gateway', () => {
     ws.emit('message', JSON.stringify({ type: 'select-pane', paneId: '%5' }));
     ws.emit('message', JSON.stringify({ type: 'zoom-pane', paneId: '%5', zoomed: true }));
     ws.emit('message', JSON.stringify({ type: 'takeover' }));
+    ws.emit('message', JSON.stringify({ type: 'takeover', paneId: '%5' }));
+    ws.emit('message', JSON.stringify({ type: 'takeover', paneId: '%5', claimSize: true }));
     ws.emit('message', JSON.stringify({ type: 'release-takeover' }));
     ws.emit('message', JSON.stringify({ type: 'resync', paneId: '%5', forceSnapshot: true }));
     ws.emit('message', JSON.stringify({ type: 'visibility', visible: false }));
@@ -75,6 +77,8 @@ describe('window stream gateway', () => {
       ['select-pane', '%5'],
       ['zoom-pane', '%5', true],
       ['takeover'],
+      ['takeover', { paneId: '%5' }],
+      ['takeover', { paneId: '%5', claimSize: true }],
       ['release-takeover'],
       ['resync', { paneId: '%5', forceSnapshot: true }],
       ['visibility', false],
@@ -107,5 +111,14 @@ describe('window stream gateway', () => {
     } finally {
       vi.useRealTimers();
     }
+
+    const { parseWindowStreamTarget } = await import('../../lib/terminal/window-protocol.js');
+    expect(parseWindowStreamTarget('/ws/window-stream/%402', new URLSearchParams('instanceId=1:2&sessionId=$1&protocol=1&device=mobile&paneId=%255'))).toEqual({
+      instanceId: '1:2',
+      sessionId: '$1',
+      windowId: '@2',
+      device: 'mobile',
+      paneId: '%5',
+    });
   });
 });
