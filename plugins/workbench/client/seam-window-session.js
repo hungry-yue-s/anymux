@@ -715,6 +715,7 @@ export class SeamWindowSession {
     this.parked = false;
     this._webglAttachHandle = null;
     this._pendingAcks = new Map();
+    this._paneInputSeqs = new Map();
     this._ackTimer = null;
     this._lastFocusSig = null;
 
@@ -987,6 +988,8 @@ export class SeamWindowSession {
           this._handleLayoutMessage(message);
         } else if (message.type === 'pane-exit') {
           this._disposePane(message.paneId);
+        } else if (message.type === 'input-ack') {
+          /* idempotent input ACK acknowledged */
         } else if (message.type === 'clipboard' && typeof message.data === 'string') {
           this.copy(message.data);
         } else if (message.type === 'exit' || message.type === 'window-exit') {
@@ -1041,7 +1044,10 @@ export class SeamWindowSession {
       this._settledViewportEnv = null;
       this._resetResizeGuard();
     }
-    if (message.type === 'ready') this.serverReady = true;
+    if (message.type === 'ready') {
+      this.serverReady = true;
+      if (message.inputAck !== undefined) this._inputAckSupported = Boolean(message.inputAck);
+    }
     this._syncInputGates();
     this._renderLeaseBar();
     this._renderPaneTakeovers();
@@ -3385,9 +3391,16 @@ export class SeamWindowSession {
 
   _sendInputImmediate(paneId, data, binary = false) {
     if (this.disposed || typeof data !== 'string' || !paneId) return false;
+    const attachSeq = (frame) => {
+      if (!this._inputAckSupported) return frame;
+      const n = (this._paneInputSeqs?.get(paneId) || 0) + 1;
+      this._paneInputSeqs?.set(paneId, n);
+      frame.seq = n;
+      return frame;
+    };
     if (!binary) {
       for (const chunk of iterateUtf8InputChunks(data, DEFAULT_PASTE_CHUNK_MAX_BYTES)) {
-        if (!this._send({ type: 'input', paneId, data: chunk })) return false;
+        if (!this._send(attachSeq({ type: 'input', paneId, data: chunk }))) return false;
       }
       return true;
     }
@@ -3395,7 +3408,7 @@ export class SeamWindowSession {
     for (let start = 0; start < bytes.length; start += INPUT_CHUNK_BYTES) {
       let raw = '';
       for (const byte of bytes.subarray(start, start + INPUT_CHUNK_BYTES)) raw += String.fromCharCode(byte);
-      if (!this._send({ type: 'input', paneId, encoding: 'base64', data: this.global.btoa(raw) })) return false;
+      if (!this._send(attachSeq({ type: 'input', paneId, encoding: 'base64', data: this.global.btoa(raw) }))) return false;
     }
     return true;
   }

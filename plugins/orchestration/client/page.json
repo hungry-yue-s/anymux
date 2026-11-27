@@ -1,0 +1,5 @@
+{
+  "serve": ["."],
+  "head": [{ "order": 64, "style": "/css/orchestration.css" }],
+  "body": [{ "order": 415, "script": "/js/orchestration-ui.js" }]
+}

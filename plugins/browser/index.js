@@ -6,6 +6,8 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { AppError, ErrorCode, handle } from '../../lib/servers/errors.js';
 import { requireSameOrigin } from '../../lib/api/same-origin.js';
+import { formatElementGrabNote } from '../../lib/browser/element-grab.js';
+import { listCdpTargets } from '../../lib/browser/cdp-client.js';
 
 const execFileAsync = promisify(execFile);
 const ALLOWED_SUBCOMMANDS = new Set(['open', 'snapshot', 'screenshot', 'get-url', 'close']);
@@ -39,6 +41,20 @@ export function createBrowserRouter({ exec = execFileAsync } = {}) {
         throw error;
       }
       throw new AppError(ErrorCode.INTERNAL, String(err?.stderr || err?.message || 'agent-browser 执行失败'));
+    }
+  }));
+
+  router.post('/grab-format', requireSameOrigin, handle(async (req) => ({
+    note: formatElementGrabNote(req.body || {}),
+  })));
+
+  router.get('/cdp/targets', handle(async (req) => {
+    const endpoint = String(req.query.endpoint || 'http://127.0.0.1:9222');
+    try {
+      const targets = await listCdpTargets(endpoint);
+      return { endpoint, targets };
+    } catch (err) {
+      throw new AppError(ErrorCode.VALIDATION_ERROR, String(err?.message || '无法连接回环 CDP 端点'));
     }
   }));
 

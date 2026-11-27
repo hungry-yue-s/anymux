@@ -59,6 +59,10 @@ plugins:
     use: session-vault
   - id: automations
     use: automations
+  - id: ports
+    use: ports
+  - id: orchestration
+    use: orchestration
   - id: sqlite
     use: sqlite
   - id: notebook

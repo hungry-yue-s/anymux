@@ -359,7 +359,7 @@ function createAutomationsTile(host, ctx) {
       for (const job of jobs) {
         const row = el(doc, 'div', 'seam-tile-row');
         row.append(
-          el(doc, 'span', 'seam-tile-badge', job.cron || ''),
+          el(doc, 'span', 'seam-tile-badge', job.schedule || job.cron || ''),
           el(doc, 'span', 'seam-tile-name', job.name || job.id),
           btn(doc, '立即运行', () => apiPost(ctx.global, ctx.serverId, '/api/automations/' + encodeURIComponent(job.id) + '/run', {}).then(load).catch(() => {})),
         );

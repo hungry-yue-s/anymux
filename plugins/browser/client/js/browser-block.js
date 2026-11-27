@@ -51,7 +51,8 @@
     input.setAttribute('data-autofocus', '');
     field.appendChild(input);
     var external = iconButton('external', '在新标签页打开', function () { if (frame.src) window.open(frame.src, '_blank', 'noopener'); });
-    bar.append(back, forward, reload, field, external);
+    var grabBtn = iconButton('code', '抓取元素上下文到终端 (Zero-Enter)', function () { grabElementToTerminal(); });
+    bar.append(back, forward, reload, field, grabBtn, external);
     var stage = el('div', 'browser-stage');
     var frame = el('iframe', 'browser-frame');
     frame.setAttribute('sandbox', 'allow-scripts allow-forms allow-same-origin allow-popups allow-modals allow-downloads');
@@ -124,6 +125,47 @@
     }
     bar.addEventListener('submit', function (e) { e.preventDefault(); navigate(input.value); });
     input.addEventListener('focus', function () { input.select(); });
+
+    function grabElementToTerminal() {
+      var ctx = ui.currentContext ? ui.currentContext() : {};
+      var paneId = ctx.paneId || '';
+      var serverId = ctx.serverId || (window.Api && Api.activeServerId && Api.activeServerId()) || 'local';
+      var client = ui.client(serverId);
+      var payload = { url: history[index] || input.value || '', selector: '', tag: '', role: '', text: '' };
+      try {
+        var doc = frame.contentDocument;
+        if (doc) {
+          var sel = doc.getSelection && doc.getSelection().toString();
+          var active = doc.activeElement;
+          if (active && active !== doc.body) {
+            payload.tag = active.tagName;
+            payload.role = active.getAttribute('role') || '';
+            payload.selector = active.id ? ('#' + active.id) : active.tagName.toLowerCase();
+            payload.text = sel || active.innerText || active.textContent || '';
+          } else if (sel) {
+            payload.text = sel;
+          }
+        }
+      } catch { /* cross-origin iframe: fall back to manual prompt */ }
+      if (!payload.selector && !payload.text && typeof window.prompt === 'function') {
+        var manual = window.prompt('跨域页面无法直接读取 DOM；输入 CSS 选择器或要点描述：', '');
+        if (manual === null) return;
+        payload.selector = manual.trim();
+      }
+      client.post('/api/browser/grab-format', payload).then(function (res) {
+        var note = res?.note || '';
+        if (!note) return;
+        if (paneId) {
+          return client.post('/api/agent-docs/prefill', { paneId: paneId, text: note }).then(function () {
+            toast('已将元素上下文填入终端（未发送回车）');
+          });
+        }
+        window._copyToClipboard?.(note);
+        toast('未检测到目标终端，已复制到剪贴板');
+      }).catch(function (err) {
+        toast('抓取失败：' + errorText(err));
+      });
+    }
 
     if (api.params.url) navigate(api.params.url); else render();
     return {
