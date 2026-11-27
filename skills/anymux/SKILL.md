@@ -38,10 +38,7 @@ Use existing service management for service restarts; do not manually kill and
 relaunch the panel or tmux. Installing a binary is not proof that the live
 server now runs that binary. Reading status should never create a tmux session.
 
-- Workspace & pane orchestration: `anymux workspace list|new`, `anymux pane new|open <kind> [--url ...|--path ...|--payload ...]|set-kind <kind>|zoom|break|clear|rename` drive the single-layer workspace and rich-pane APIs directly.
-- Parallel branches: `anymux worktree list|new <branch> [--open]|remove <path>` orchestrates Git worktrees with monorepo `sharedDirectories` (`.anymux/worktrees.json`, `anymux.json`, or `orca.json`) and safe dirty/pane removal guards.
-- Session archive & cron jobs: `anymux sessions [--provider claude|codex|gemini]` reads local agent transcripts read-only; `anymux automation list|run <id>` inspects/triggers scheduled cron tasks.
-- Browser automation: `anymux browser status|open <url>|snapshot` uses `agent-browser` when installed in PATH and falls back to `/api/open` for URL preview.
+- Daily workspace, pane, worktree, session archive, automation, browser, and multi-server CLI operations: use the `anymux-cli` skill (run `anymux skills get anymux-cli` or `anymux agent-context --json`). Keep this `anymux` skill focused on panel installation, plugin lifecycle, tmux builds, and managed resources.
 
 Management scope is the panel host. Remote tmux workspaces remain accessible
 through the existing server registry; this management API does not install
