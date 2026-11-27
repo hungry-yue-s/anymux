@@ -189,4 +189,29 @@ describe('panel presentation protocol', () => {
     win.document.dispatchEvent(new win.CustomEvent('panel-theme-change'));
     expect(fills).toHaveBeenCalledTimes(6);
   });
+
+  it('injects large opt-in HTML via head slice without corrupting the body and ignores comments or body metadata', () => {
+    const { win, frame, engine } = host();
+    const payload = 'X'.repeat(3_500_000);
+    const largeDoc = '<!-- leading comment -->\n<!DOCTYPE html>\n<html lang="zh-CN">\n<head data-x="1">\n'
+      + '<meta charset="utf-8">\n<meta name="anymux-presentation" content="1">\n'
+      + '<title>Large</title></head>\n<body><p>' + payload + '</p></body></html>';
+    engine.mount(frame, largeDoc);
+    expect(frame.hasAttribute('data-panel-presentation')).toBe(true);
+    expect(frame.srcdoc).toContain(payload);
+    expect(frame.srcdoc.indexOf('<head data-x="1"><script>')).toBeGreaterThan(-1);
+    const reader = child(frame.srcdoc, win);
+    expect(reader.document.querySelector('p').textContent.length).toBe(payload.length);
+    expect(reader.PanelPresentation.getTheme().themeId).toBe(engine.getTheme().themeId);
+
+    for (const ignored of [
+      '<!doctype html><html><head><!-- <meta name="anymux-presentation" content="1"> --></head><body><p>' + payload + '</p></body></html>',
+      '<!doctype html><html><head><title>Plain</title></head><body><meta name="anymux-presentation" content="1"><p>body</p></body></html>',
+    ]) {
+      const { frame: f2, engine: e2 } = host();
+      e2.mount(f2, ignored);
+      expect(f2.hasAttribute('data-panel-presentation')).toBe(false);
+      expect(f2.srcdoc).toBe(ignored);
+    }
+  });
 });

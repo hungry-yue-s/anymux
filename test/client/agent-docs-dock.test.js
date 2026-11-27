@@ -25,6 +25,9 @@ function setup({ width = 1440, docInfo = null } = {}) {
     if (parsed.pathname.endsWith('/info')) {
       return { status: 200, json: async () => ({ success: true, data: { absPath: path, isText: true, language: 'html', size: 10, mtimeMs: 1 } }) };
     }
+    if (parsed.pathname.endsWith('/raw')) {
+      return { ok: true, status: 200, text: async () => '<h1>' + path + '</h1>' };
+    }
     if (parsed.pathname.endsWith('/content')) {
       return { status: 200, json: async () => ({ success: true, data: { content: '<h1>' + path + '</h1>', language: 'html' } }) };
     }
@@ -328,7 +331,7 @@ describe('documents announced by a pane', () => {
     const original = fetch.getMockImplementation();
     let finish, started;
     const contentStarted = new Promise(resolve => { started = resolve; });
-    fetch.mockImplementation(url => String(url).includes('/content')
+    fetch.mockImplementation(url => String(url).includes('/raw')
       ? new Promise(resolve => { finish = () => resolve(original(url)); started(); }) : original(url));
     let opened;
     await preview.switchDockContext('local', '@5', INSTANCE);
@@ -345,8 +348,8 @@ describe('documents announced by a pane', () => {
     window.document.querySelector('.fp-dock-tab').click();
     expect(panel.unreadCount()).toBe(1);
     expect(JSON.parse(window.localStorage.getItem('anymux_document_notifications_v1'))[0]).toMatchObject({ fragment: 'new-section', read: false });
-    fetch.mockImplementation(url => String(url).includes('/content')
-      ? Promise.resolve({ status: 200, json: async () => ({ success: true, data: { content: '<h1>latest content</h1>', language: 'html' } }) }) : original(url));
+    fetch.mockImplementation(url => String(url).includes('/raw')
+      ? Promise.resolve({ ok: true, status: 200, text: async () => '<h1>latest content</h1>' }) : original(url));
     await preview._test.refreshCurrent(true);
     expect(window.document.querySelector('.fp-html-wrap iframe').srcdoc).toContain('latest content');
     expect(panel.unreadCount()).toBe(0);

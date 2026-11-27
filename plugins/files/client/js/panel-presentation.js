@@ -89,16 +89,49 @@
     apply(initial);
   }
 
+  function extractHeadSlice(content) {
+    var headEnd = /<\/head\s*>/i.exec(content);
+    if (headEnd) {
+      var headPart = content.slice(0, headEnd.index + headEnd[0].length);
+      return /anymux-presentation|tmux-panel-presentation/i.test(headPart) ? headPart : null;
+    }
+    var bodyStart = /<body(?=[\s>/])/i.exec(content);
+    if (bodyStart) {
+      var preBody = content.slice(0, bodyStart.index);
+      return /anymux-presentation|tmux-panel-presentation/i.test(preBody) ? preBody : null;
+    }
+    if (content.length <= 262144) return content;
+    var prefix = content.slice(0, 65536);
+    return /anymux-presentation|tmux-panel-presentation/i.test(prefix) ? prefix : null;
+  }
+
+  function findHeadInsertOffset(content) {
+    var pos = 0;
+    while (pos < content.length) {
+      var rest = content.slice(pos);
+      var m = /^\s+/.exec(rest)
+        || /^<!--[\s\S]*?-->/.exec(rest)
+        || /^<!doctype\s*(?:"[^"]*"|'[^']*'|[^>"'])*>/i.exec(rest)
+        || /^<html(?=[\s>])(?:"[^"]*"|'[^']*'|[^>"'])*>/i.exec(rest);
+      if (!m) break;
+      pos += m[0].length;
+    }
+    var headMatch = /^<head(?=[\s>])(?:"[^"]*"|'[^']*'|[^>"'])*>/i.exec(content.slice(pos));
+    return headMatch ? pos + headMatch[0].length : pos;
+  }
+
   function prepare(content, frame) {
-    var doc = new global.DOMParser().parseFromString(content, 'text/html');
+    if (typeof content !== 'string' || !/anymux-presentation|tmux-panel-presentation/i.test(content)) return content;
+    var headSlice = extractHeadSlice(content);
+    if (!headSlice) return content;
+    var doc = new global.DOMParser().parseFromString(headSlice, 'text/html');
     // tmux-panel-presentation: pages written before the rename.
-    if (!doc.head.querySelector('meta[name="anymux-presentation"][content="1"], meta[name="tmux-panel-presentation"][content="1"]')) return content;
-    var script = doc.createElement('script');
+    if (!doc.head || !doc.head.querySelector('meta[name="anymux-presentation"][content="1"], meta[name="tmux-panel-presentation"][content="1"]')) return content;
     // Only public appearance data goes into the frame, never URLs or credentials.
     var args = JSON.stringify([getTheme(frame), global.location.origin]).replace(/</g, '\\u003c');
-    script.textContent = '(' + installBridge.toString() + ').apply(null,' + args + ');';
-    doc.head.prepend(script);
-    return '<!doctype html>\n' + doc.documentElement.outerHTML;
+    var tag = '<script>(' + installBridge.toString() + ').apply(null,' + args + ');</script>';
+    var offset = findHeadInsertOffset(content);
+    return content.slice(0, offset) + tag + content.slice(offset);
   }
 
   function send(frame) {

@@ -2014,7 +2014,16 @@ var FilePreview = (function () {
           icon: '<path d="m8 8-4 4 4 4"/><path d="m16 8 4 4-4 4"/><path d="m14 4-4 16"/>',
           run: function () { html.__fpToggleSource(); },
         });
-        items.push(buttonAction(btnNewTab));
+        if (_nativeBrowserHandler()) {
+          items.push({
+            label: '在浏览器中打开',
+            hint: '在系统默认浏览器中打开当前预览',
+            icon: btnNewTab.querySelector('svg').innerHTML,
+            run: function () { _openNewTab(); },
+          });
+        } else {
+          items.push(buttonAction(btnNewTab));
+        }
         items = items.concat(copyItems, [buttonAction(btnShare)], downloadItems);
       }
       if (_isMobileReader()) items.push(buttonAction(btnClose));
@@ -3046,6 +3055,7 @@ var FilePreview = (function () {
       frame.hidden = false;
       return Promise.resolve({
         html: '<!DOCTYPE html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
+          + '<title>' + _escapeHtml(_currentFile.filename || 'preview') + '</title>'
           + '<style>html,body{margin:0;height:100%}iframe{display:block;width:100%;height:100%;border:0}</style>'
           + frame.outerHTML,
         filename: _currentFile.filename,
@@ -3106,8 +3116,107 @@ var FilePreview = (function () {
     });
   }
 
+  var MAX_NATIVE_BROWSER_BINARY_BYTES = 32 * 1024 * 1024;
+
+  function _nativeBrowserHandler() {
+    try {
+      var handlers = window.webkit && window.webkit.messageHandlers;
+      var handler = handlers && (handlers.anymuxOpenBrowser || handlers.tmuxPanelOpenBrowser);
+      return handler && typeof handler.postMessage === 'function' ? handler : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function _blobToBase64(blob) {
+    return new Promise(function (resolve, reject) {
+      var Reader = window.FileReader || FileReader;
+      var fr = new Reader();
+      fr.onload = function () {
+        var result = typeof fr.result === 'string' ? fr.result : '';
+        var comma = result.indexOf(',');
+        if (comma < 0) return reject(new Error('无法编码文件内容'));
+        resolve(result.slice(comma + 1));
+      };
+      fr.onerror = function () { reject(fr.error || new Error('读取文件失败')); };
+      fr.readAsDataURL(blob);
+    });
+  }
+
+  function _openInNativeBrowser(browserHandler) {
+    var headers = typeof Auth !== 'undefined' ? Auth.headers() : {};
+    var filename = _currentFile.filename || 'preview';
+    var job;
+
+    if (_currentFile.isPdf) {
+      job = fetch(_currentFile.rawUrl, { headers: headers, cache: 'no-store' })
+        .then(function (r) {
+          if (!r.ok) throw new Error('HTTP ' + r.status);
+          return r.blob();
+        })
+        .then(function (blob) {
+          if (blob.size > MAX_NATIVE_BROWSER_BINARY_BYTES) {
+            throw new Error('文件过大（超过 32MB），请下载原文件');
+          }
+          return _blobToBase64(blob);
+        })
+        .then(function (dataBase64) {
+          browserHandler.postMessage({ dataBase64: dataBase64, filename: filename });
+        });
+    } else if (_currentFile.isText || _currentFile.isMarkdown || _currentFile.isXlsx) {
+      var rendered = _overlay && _overlay.querySelector('.fp-html-wrap, .fp-md-wrap, .fp-code-wrap, .fp-xlsx-wrap');
+      if (rendered) {
+        job = _buildStandaloneDoc().then(function (out) {
+          if (out) {
+            browserHandler.postMessage({
+              html: out.html,
+              filename: out.filename || filename,
+            });
+          }
+        });
+      } else if (_currentFile.rawContent != null) {
+        var rawHtml = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>'
+          + _escapeHtml(filename)
+          + '</title><style>body{margin:0;padding:16px;font:13px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;word-break:break-word;}</style></head><body><pre>'
+          + _escapeHtml(_currentFile.rawContent) + '</pre></body></html>';
+        browserHandler.postMessage({ html: rawHtml, filename: filename + '.html' });
+        job = Promise.resolve();
+      } else if (_currentFile.rawUrl) {
+        browserHandler.postMessage({ url: _currentFile.rawUrl });
+        job = Promise.resolve();
+      }
+    } else if (_currentFile.isImage) {
+      job = fetch(_currentFile.rawUrl, { headers: headers, cache: 'no-store' })
+        .then(function (r) {
+          if (!r.ok) throw new Error('HTTP ' + r.status);
+          return r.blob();
+        })
+        .then(function (blob) {
+          if (blob.size > MAX_NATIVE_BROWSER_BINARY_BYTES) {
+            throw new Error('文件过大（超过 32MB），请下载原文件');
+          }
+          return _blobToBase64(blob);
+        })
+        .then(function (dataBase64) {
+          browserHandler.postMessage({ dataBase64: dataBase64, filename: filename });
+        });
+    } else if (_currentFile.rawUrl) {
+      browserHandler.postMessage({ url: _currentFile.rawUrl });
+      job = Promise.resolve();
+    }
+
+    return Promise.resolve(job).catch(function (err) {
+      _notifyFailure('在浏览器中打开失败：' + (err && err.message ? err.message : err));
+    });
+  }
+
   function _openNewTab() {
     if (!_currentFile || _currentFile.isDirectory) return;
+    var browserHandler = _nativeBrowserHandler();
+    if (browserHandler) {
+      _openInNativeBrowser(browserHandler);
+      return;
+    }
     if (_currentFile.isPdf) {
       var pdf = _overlay && _overlay.querySelector('.fp-pdf-wrap iframe');
       if (pdf) window.open(pdf.src, '_blank');
@@ -6120,6 +6229,23 @@ var FilePreview = (function () {
       });
   }
 
+  function _loadWorkingRawText(rawUrl, headers, language) {
+    return fetch(rawUrl, {
+      headers: headers, cache: 'no-store',
+    })
+      .then(function (r) {
+        if (!r.ok) {
+          var readErr = typeof r.json === 'function' ? r.json().catch(function () { return null; }) : Promise.resolve(null);
+          return readErr.then(function (body) {
+            throw new Error((body && body.error) || ('加载文件失败（HTTP ' + r.status + '）'));
+          });
+        }
+        return r.text().then(function (content) {
+          return { content: content, language: language || null };
+        });
+      });
+  }
+
   /** A file of a kind that only reads from disk, shown as some other version. */
   function _renderUnavailable(body, message, rawUrl, filename) {
     body.innerHTML = '';
@@ -6181,7 +6307,7 @@ var FilePreview = (function () {
     return source.loadContent().then(function (data) {
       if (!isCurrent()) return false;
       if (options.onContent) options.onContent(data.content);
-      var html = info.language === 'html' || /\.html?$/i.test(filename);
+      var html = !!(info.isHtml || info.language === 'html' || /\.html?$/i.test(filename));
       if (!html && !/\.(diff|patch)$/i.test(filename) && _needsTextPaging(data.content)) {
         _renderCode(body, data.content, data.language, options.targetLine);
         return true;
@@ -6233,11 +6359,18 @@ var FilePreview = (function () {
       .then(function (res) {
         if (!res.success) throw new Error(res.error || '无法读取文件');
         if (res.data.isDirectory) throw new Error('这是一个目录');
+        var rawUrl = _workingRawUrl(machine, res.data);
+        var filename = res.data.absPath.split('/').pop();
+        var isHtml = !!(res.data.isHtml || res.data.language === 'html' || /\.html?$/i.test(filename));
         return {
           info: res.data,
           name: res.data.absPath,
-          rawUrl: _workingRawUrl(machine, res.data),
-          loadContent: function () { return _loadWorkingContent(machine, res.data.absPath, headers); },
+          rawUrl: rawUrl,
+          loadContent: function () {
+            return isHtml
+              ? _loadWorkingRawText(rawUrl, headers, res.data.language || 'html')
+              : _loadWorkingContent(machine, res.data.absPath, headers);
+          },
         };
       });
     return described.then(function (described) {
@@ -6308,6 +6441,7 @@ var FilePreview = (function () {
 
     var rawUrl = _workingRawUrl(_machine(), info);
     var filename = info.absPath.split('/').pop();
+    var isHtml = !!(info.isHtml || info.language === 'html' || /\.html?$/i.test(filename));
 
     current = {
       absPath: info.absPath,
@@ -6317,7 +6451,7 @@ var FilePreview = (function () {
       isImage: info.isImage,
       isVideo: info.isVideo,
       isPdf: info.isPdf,
-      isHtml: info.language === 'html' || /\.html?$/i.test(filename),
+      isHtml: isHtml,
       isXlsx: info.isXlsx,
       isMarkdown: info.isMarkdown,
       isArchive: info.isArchive,
@@ -6329,7 +6463,11 @@ var FilePreview = (function () {
     var renderPromise = _renderFileBody(renderedBody, info, {
       name: info.absPath,
       rawUrl: rawUrl,
-      loadContent: function () { return _loadWorkingContent(_machine(), info.absPath, headers); },
+      loadContent: function () {
+        return isHtml
+          ? _loadWorkingRawText(rawUrl, headers, info.language || 'html')
+          : _loadWorkingContent(_machine(), info.absPath, headers);
+      },
     }, {
       isCurrent: isCurrent,
       paneId: options.paneId,

@@ -32,6 +32,55 @@ describe('files info API', () => {
     expect(res.body.data.size).toBe(expected.size);
     expect(res.body.data.mtimeMs).toBeCloseTo(expected.mtimeMs, 0);
   });
+
+  it('allows HTML previews up to 12MB via /info and /raw while keeping text edits and non-HTML files capped at 2MB', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'anymux-html-limit-'));
+    tempDirs.push(root);
+    const largeHtml = join(root, 'report.html');
+    const largeHtm = join(root, 'page.htm');
+    const oversizedHtml = join(root, 'huge.html');
+    const largeTxt = join(root, 'notes.txt');
+
+    const htmlBody = '<!doctype html><html><body>' + 'a'.repeat(3.5 * 1024 * 1024) + '</body></html>';
+    await writeFile(largeHtml, htmlBody);
+    await writeFile(largeHtm, htmlBody);
+    await writeFile(oversizedHtml, 'x');
+    await truncate(oversizedHtml, 13 * 1024 * 1024);
+    await writeFile(largeTxt, 'x');
+    await truncate(largeTxt, 2.5 * 1024 * 1024);
+
+    const app = express();
+    app.use(express.json({ limit: '16mb' }));
+    app.use('/api/files', createFilesRouter([root]));
+
+    for (const filePath of [largeHtml, largeHtm]) {
+      const info = await request(app).get('/api/files/info').query({ path: filePath });
+      expect(info.status).toBe(200);
+      expect(info.body.data).toMatchObject({ isHtml: true, isText: true, mimeType: 'text/plain', language: 'html' });
+
+      const raw = await request(app).get('/api/files/raw').query({ path: filePath });
+      expect(raw.status).toBe(200);
+      expect(raw.headers['content-type']).toContain('text/plain');
+      expect(raw.text).toBe(htmlBody);
+    }
+
+    const hugeInfo = await request(app).get('/api/files/info').query({ path: oversizedHtml });
+    expect(hugeInfo.status).toBe(413);
+    expect(hugeInfo.body.error).toContain('max 12MB');
+
+    const txtInfo = await request(app).get('/api/files/info').query({ path: largeTxt });
+    expect(txtInfo.status).toBe(413);
+    expect(txtInfo.body.error).toContain('max 2MB');
+
+    const rev = await stat(largeHtml);
+    const save = await request(app).put('/api/files/content').send({
+      path: largeHtml,
+      content: htmlBody,
+      expectedMtimeMs: rev.mtimeMs,
+      expectedSize: rev.size,
+    });
+    expect(save.status).toBe(413);
+  });
 });
 
 describe('files exists API', () => {

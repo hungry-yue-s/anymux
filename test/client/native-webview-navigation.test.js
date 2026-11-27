@@ -7,6 +7,10 @@ const source = readFileSync(
   repoPath('macos/Anymux/Sources/Anymux/PanelWebView.swift'),
   'utf8',
 );
+const browserLauncherSource = readFileSync(
+  repoPath('macos/Anymux/Sources/Anymux/NativeBrowserLauncher.swift'),
+  'utf8',
+);
 const endpointSource = readFileSync(repoPath('macos/Anymux/Sources/Anymux/PanelEndpoint.swift'), 'utf8');
 const modelSource = readFileSync(repoPath('macos/Anymux/Sources/Anymux/AppModel.swift'), 'utf8');
 const appSource = readFileSync(repoPath('macos/Anymux/Sources/Anymux/AnymuxApp.swift'), 'utf8');
@@ -57,8 +61,12 @@ describe('macOS native WebView navigation', () => {
 
   it('uses the native window bridge for previews and terminal pop-outs', () => {
     expect(source).toContain('openWindowHandlerName = "anymuxOpenWindow"');
+    expect(source).toContain('openBrowserHandlerName = "anymuxOpenBrowser"');
+    expect(source).toContain('NativeBrowserLauncher.open(body, relativeTo: endpoint.url)');
+    expect(browserLauncherSource).toContain('allowedExtensions');
     expect(source).toContain('html.utf8.count <= Self.maximumWindowHTMLBytes');
     expect(previewSource).toContain('handlers.anymuxOpenWindow');
+    expect(previewSource).toContain('handlers.anymuxOpenBrowser');
     expect(previewSource).toContain('html: out.html');
     expect(terminalSource).toContain('messageHandlers.anymuxOpenWindow');
     expect(indexSource).toMatch(/src="\/js\/file-preview\.js\?v=\d+"/);

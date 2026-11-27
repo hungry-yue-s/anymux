@@ -57,6 +57,7 @@ struct PanelWebView: NSViewRepresentable {
         static let actionHandlerName = "anymuxAction"
         static let clipboardHandlerName = "anymuxClipboard"
         static let openWindowHandlerName = "anymuxOpenWindow"
+        static let openBrowserHandlerName = "anymuxOpenBrowser"
         static let appearanceHandlerName = "anymuxAppearance"
         /// What a panel from before the rename calls each handler. The app answers
         /// both, so it keeps working with servers that have not been updated.
@@ -65,11 +66,18 @@ struct PanelWebView: NSViewRepresentable {
             "tmuxPanelAction": actionHandlerName,
             "tmuxPanelClipboard": clipboardHandlerName,
             "tmuxPanelOpenWindow": openWindowHandlerName,
+            "tmuxPanelOpenBrowser": openBrowserHandlerName,
             "tmuxPanelAppearance": appearanceHandlerName,
         ]
         static var allHandlerNames: [String] {
-            [notificationHandlerName, actionHandlerName, clipboardHandlerName, openWindowHandlerName, appearanceHandlerName]
-                + legacyHandlerNames.keys.sorted()
+            [
+                notificationHandlerName,
+                actionHandlerName,
+                clipboardHandlerName,
+                openWindowHandlerName,
+                openBrowserHandlerName,
+                appearanceHandlerName,
+            ] + legacyHandlerNames.keys.sorted()
         }
         static let maximumClipboardBytes = 1_048_576
         static let maximumClipboardImageBytes = 16_777_216
@@ -163,6 +171,11 @@ struct PanelWebView: NSViewRepresentable {
             if name == Self.clipboardHandlerName,
                let body = message.body as? [String: Any] {
                 copyToPasteboard(body)
+                return
+            }
+            if name == Self.openBrowserHandlerName,
+               let body = message.body as? [String: Any] {
+                NativeBrowserLauncher.open(body, relativeTo: endpoint.url)
                 return
             }
             if name == Self.openWindowHandlerName,

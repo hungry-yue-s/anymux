@@ -23,6 +23,13 @@
     return content.length > 65536 || content.split('\n').some(function (line, i) { return i >= 1000 || line.length > 4000; });
   }
 
+  var MAX_EDIT_BYTES = 2 * 1024 * 1024;
+  function canEdit(file) {
+    if (!file || file.isDirectory || !file.isText || file.rawContent == null) return false;
+    if (typeof file.size === 'number' && file.size > MAX_EDIT_BYTES) return false;
+    return file.rawContent.length <= MAX_EDIT_BYTES;
+  }
+
   function renderDiffFile(body, content, info, options) {
     options = options || {};
     var isCurrent = options.isCurrent || function () { return true; };
@@ -73,7 +80,7 @@
   // --- editor ------------------------------------------------------------------
 
   function openEditor(body, file, refresh) {
-    if (!body || !file || file.rawContent == null) { toast('这个文件不能在这里编辑', { error: true }); return; }
+    if (!body || !canEdit(file)) { toast('这个文件不能在这里编辑', { error: true }); return; }
     var markdown = !!file.isMarkdown;
     var wrap = el('div', 'blk-editor');
     wrap.setAttribute('data-fp-hold-refresh', '');
@@ -466,7 +473,7 @@
   function fileActions(file, ctx) {
     var items = [];
     var svgPaths = ui.iconPaths;
-    if (!file.isDirectory && file.isText && file.rawContent != null) {
+    if (canEdit(file)) {
       items.push({ label: '编辑', hint: file.isMarkdown ? '所见即所得的文档编辑' : '直接修改并保存（' + keysText('Mod+S') + '）', icon: svgPaths('edit'),
         run: function () { openEditor(ctx.body, file, ctx.refresh); } });
     }

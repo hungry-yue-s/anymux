@@ -6,7 +6,7 @@ const INSTANCE = '1873:1700000000';
 
 const source = readFileSync('plugins/files/client/js/file-preview.js', 'utf8');
 
-function setup(width = 1440, native = false) {
+function setup(width = 1440, native = false, { openBrowserHandler = null } = {}) {
   const dom = new JSDOM('<div class="ms-app mode-terminal"><main class="ms-main"><div class="terminal-view"></div></main></div>', { url: 'https://panel.test/', runScripts: 'outside-only' });
   const { window } = dom;
   Object.defineProperty(window, 'innerWidth', { value: width });
@@ -18,18 +18,33 @@ function setup(width = 1440, native = false) {
   const fetch = vi.fn(async (url) => {
     const parsed = new URL(url, window.location.href);
     const path = parsed.searchParams.get('path');
-    if (parsed.pathname.endsWith('/info')) return { status: 200, json: async () => ({ success: true, data: {
-      absPath: path, isText: !path.endsWith('.pdf'), isPdf: path.endsWith('.pdf'),
-      language: path.endsWith('.pdf') ? null : 'html', size: content.length, mtimeMs: revision,
-    } }) };
+    if (parsed.pathname.endsWith('/info')) {
+      const isPdf = path.endsWith('.pdf');
+      const isImage = /\.(png|jpe?g|webp)$/i.test(path);
+      const isHtml = /\.html?$/i.test(path);
+      return { status: 200, json: async () => ({ success: true, data: {
+        absPath: path, isText: !isPdf && !isImage, isPdf, isImage, isHtml,
+        language: isHtml ? 'html' : null, size: content.length, mtimeMs: revision,
+      } }) };
+    }
     if (parsed.pathname.endsWith('/content')) return { status: 200, json: async () => ({ success: true, data: { content, language: 'html' } }) };
-    if (parsed.pathname.endsWith('/raw')) return { ok: true, blob: async () => new window.Blob(['%PDF-1.7'], { type: 'application/pdf' }) };
+    if (parsed.pathname.endsWith('/raw')) {
+      if (/\.html?$/i.test(path)) return { ok: true, status: 200, text: async () => content };
+      if (/\.(png|jpe?g|webp)$/i.test(path)) return { ok: true, status: 200, blob: async () => new window.Blob(['PNGDATA'], { type: 'image/png' }) };
+      return { ok: true, status: 200, blob: async () => new window.Blob(['%PDF-1.7'], { type: 'application/pdf' }) };
+    }
     throw new Error('Unexpected fetch: ' + url);
   });
   window.Api = { activeServerId: () => 'remote', nodeUrl: (_serverId, path) => '/n/remote' + path };
-  if (native) {
-    window.__anymuxTransparency = true;
-    window.webkit = { messageHandlers: { anymuxAppearance: { postMessage: vi.fn() } } };
+  if (native || openBrowserHandler) {
+    window.webkit = { messageHandlers: {} };
+    if (native) {
+      window.__anymuxTransparency = true;
+      window.webkit.messageHandlers.anymuxAppearance = { postMessage: vi.fn() };
+    }
+    if (openBrowserHandler) {
+      window.webkit.messageHandlers.anymuxOpenBrowser = openBrowserHandler;
+    }
   }
   window.eval(readFileSync('plugins/ui/client/js/theme.js', 'utf8'));
   window.eval(readFileSync('plugins/files/client/js/panel-presentation.js', 'utf8'));
@@ -194,6 +209,71 @@ describe('HTML and PDF previews', () => {
     await preview.openFile('/tmp/report.pdf');
     expect(window.document.querySelector('.fp-error').textContent).toContain('PDF 加载失败（HTTP 401）');
     expect(window.URL.createObjectURL).not.toHaveBeenCalled();
+    preview.close();
+    window.close();
+  });
+
+  it('streams large HTML files via /raw without /content and opens a new browser tab on the web', async () => {
+    const { window, preview, fetch, headers, setContent } = setup();
+    const big = '<!doctype html><html><head><title>Big</title></head><body><p>' + 'z'.repeat(3_500_000) + '</p></body></html>';
+    setContent(big);
+    await preview.openFile('/tmp/large-report.html', '%1');
+    expect(fetch.mock.calls.some(([url]) => url.includes('/content'))).toBe(false);
+    expect(fetch).toHaveBeenCalledWith(expect.stringContaining('/n/remote/api/files/raw?'), {
+      headers, cache: 'no-store',
+    });
+    const frame = window.document.querySelector('.fp-html-wrap iframe');
+    expect(frame.srcdoc).toContain('z'.repeat(100));
+
+    const popup = { location: '' };
+    window.open = vi.fn(() => popup);
+    window.document.querySelector('.fp-btn-more').click();
+    expect(window.document.querySelector('.fp-menu [aria-label="在新标签页打开"]')).not.toBeNull();
+    expect(window.document.querySelector('.fp-menu [aria-label="在浏览器中打开"]')).toBeNull();
+    window.document.querySelector('.fp-menu [aria-label="在新标签页打开"]').click();
+    await vi.waitFor(() => expect(popup.location).toMatch(/^blob:/));
+    expect(window.open).toHaveBeenCalledWith('', '_blank');
+    preview.close();
+    window.close();
+  });
+
+  it('opens HTML, PDF and image previews in the macOS default browser via anymuxOpenBrowser', async () => {
+    const postMessage = vi.fn();
+    const { window, preview } = setup(1440, true, { openBrowserHandler: { postMessage } });
+    window.open = vi.fn();
+
+    await preview.openFile('/tmp/report.html', '%1');
+    window.document.querySelector('.fp-btn-more').click();
+    expect(window.document.querySelector('.fp-menu [aria-label="在新标签页打开"]')).toBeNull();
+    const openBrowserItem = window.document.querySelector('.fp-menu [aria-label="在浏览器中打开"]');
+    expect(openBrowserItem).not.toBeNull();
+    openBrowserItem.click();
+    await vi.waitFor(() => expect(postMessage).toHaveBeenCalledTimes(1));
+    expect(postMessage.mock.calls[0][0]).toMatchObject({
+      filename: 'report.html',
+      html: expect.stringContaining('sandbox="allow-scripts"'),
+    });
+    expect(window.open).not.toHaveBeenCalled();
+
+    await preview.openFile('/tmp/doc.pdf', '%1');
+    window.document.querySelector('.fp-btn-more').click();
+    window.document.querySelector('.fp-menu [aria-label="在浏览器中打开"]').click();
+    await vi.waitFor(() => expect(postMessage).toHaveBeenCalledTimes(2));
+    expect(postMessage.mock.calls[1][0]).toEqual({
+      dataBase64: Buffer.from('%PDF-1.7').toString('base64'),
+      filename: 'doc.pdf',
+    });
+
+    await preview.openFile('/tmp/pic.png', '%1');
+    window.document.querySelector('.fp-btn-more').click();
+    window.document.querySelector('.fp-menu [aria-label="在浏览器中打开"]').click();
+    await vi.waitFor(() => expect(postMessage).toHaveBeenCalledTimes(3));
+    expect(postMessage.mock.calls[2][0]).toEqual({
+      dataBase64: Buffer.from('PNGDATA').toString('base64'),
+      filename: 'pic.png',
+    });
+    expect(window.open).not.toHaveBeenCalled();
+
     preview.close();
     window.close();
   });

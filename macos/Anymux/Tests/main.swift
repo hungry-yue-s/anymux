@@ -187,12 +187,82 @@ private func testNativeAppearanceConfig() throws {
     try expect(invalid.blurRadius == rich.blurRadius, "NaN blurRadius should keep fallback")
 }
 
+private func testNativeBrowserLauncher() throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("anymux-browser-test-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    // 1. HTML staging + path traversal sanitization
+    let htmlBody: [String: Any] = [
+        "html": "<!doctype html><h1>Hello</h1>",
+        "filename": "../../evil/report.html",
+    ]
+    let stagedHTML = NativeBrowserLauncher.stagePreviewFile(body: htmlBody, directory: directory)
+    try expect(stagedHTML != nil, "HTML preview file should stage")
+    try expect(stagedHTML!.deletingLastPathComponent().path == directory.path, "staged file must stay in preview directory")
+    try expect(stagedHTML!.lastPathComponent.hasSuffix("-report.html"), "sanitized filename should retain safe basename")
+    let htmlContent = try String(contentsOf: stagedHTML!, encoding: .utf8)
+    try expect(htmlContent == "<!doctype html><h1>Hello</h1>", "HTML bytes must match")
+
+    // 2. Binary base64 staging for allowed extensions (PDF/PNG)
+    let pdfData = Data("%PDF-1.7".utf8)
+    let stagedPDF = NativeBrowserLauncher.stagePreviewFile(body: [
+        "dataBase64": pdfData.base64EncodedString(),
+        "filename": "../sub\\doc.pdf",
+    ], directory: directory)
+    try expect(stagedPDF != nil && stagedPDF!.lastPathComponent.hasSuffix("-doc.pdf"), "PDF preview should stage safely")
+    let readPDF = try Data(contentsOf: stagedPDF!)
+    try expect(readPDF == pdfData, "PDF bytes must match")
+
+    // 3. Reject dangerous extensions and path-only payloads
+    for badName in ["run.command", "script.sh", "payload.app", "noext"] {
+        let rejected = NativeBrowserLauncher.stagePreviewFile(body: [
+            "dataBase64": Data("echo hi".utf8).base64EncodedString(),
+            "filename": badName,
+        ], directory: directory)
+        try expect(rejected == nil, "dangerous or extensionless binary filename must be rejected: \(badName)")
+    }
+    let pathOnly = NativeBrowserLauncher.stagePreviewFile(body: ["path": "/etc/passwd"], directory: directory)
+    try expect(pathOnly == nil, "arbitrary filesystem path payload must be rejected")
+
+    // 4. Reject oversized payloads
+    let oversizedHTML = String(repeating: "x", count: NativeBrowserLauncher.maximumHTMLBytes + 1)
+    try expect(
+        NativeBrowserLauncher.stagePreviewFile(body: ["html": oversizedHTML], directory: directory) == nil,
+        "oversized HTML payload must be rejected"
+    )
+
+    // 5. Prune stale files by age and count
+    let oldFile = directory.appendingPathComponent("stale.html")
+    try Data("old".utf8).write(to: oldFile)
+    try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-90_000)], ofItemAtPath: oldFile.path)
+    NativeBrowserLauncher.pruneStaleFiles(in: directory, now: Date(), maxFiles: 2, maxAge: 86_400)
+    try expect(!FileManager.default.fileExists(atPath: oldFile.path), "expired preview file should be pruned")
+
+    for i in 0..<4 {
+        let url = directory.appendingPathComponent("item-\(i).html")
+        try Data("x".utf8).write(to: url)
+        try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(TimeInterval(i))], ofItemAtPath: url.path)
+    }
+    NativeBrowserLauncher.pruneStaleFiles(in: directory, now: Date().addingTimeInterval(10), maxFiles: 2, maxAge: 86_400)
+    let remaining = try FileManager.default.contentsOfDirectory(atPath: directory.path)
+    try expect(remaining.count == 2, "only maxFiles newest previews should remain")
+
+    // 6. HTTP/HTTPS URL validation
+    let base = URL(string: "https://127.0.0.1:7681/")!
+    try expect(NativeBrowserLauncher.validatedHTTPURL(from: "/api/files/raw?path=%2Ftmp%2Fa.mp4", relativeTo: base)?.scheme == "https", "relative HTTPS URL should validate")
+    try expect(NativeBrowserLauncher.validatedHTTPURL(from: "file:///etc/passwd", relativeTo: base) == nil, "file:// URL must be rejected")
+    try expect(NativeBrowserLauncher.validatedHTTPURL(from: "javascript:alert(1)", relativeTo: base) == nil, "javascript: URL must be rejected")
+}
+
 do {
     try testEndpointResolution()
     try testServiceStateParsing()
     try MainActor.assumeIsolated { try testTitlebarDragHitTesting() }
     try testNativeAppearanceConfig()
-    print("macOS shell self-tests passed: endpoint, TLS pin, loopback policy, service state, native titlebar hit-testing, appearance config")
+    try testNativeBrowserLauncher()
+    print("macOS shell self-tests passed: endpoint, TLS pin, loopback policy, service state, native titlebar hit-testing, appearance config, native browser launcher")
 } catch {
     fputs("macOS shell self-test failed: \(error)\n", stderr)
     exit(1)

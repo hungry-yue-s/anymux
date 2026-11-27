@@ -94,6 +94,9 @@ describe('PanelSlots on the composed page', () => {
     win.eval(readFileSync('plugins/files/client/js/file-blocks.js', 'utf8'));
     const file = { isText: true, isMarkdown: true, rawContent: '# Todo\n' + 'x'.repeat(70000), absPath: '/r/TODO.md' };
     expect(win.Blocks.previewActions(file, {}).some((item) => item.label === '看板视图')).toBe(false);
+    expect(win.Blocks.previewActions(file, {}).some((item) => item.label === '编辑')).toBe(true);
+    const oversizedHtml = { isText: true, isHtml: true, size: 3 * 1024 * 1024, rawContent: '<h1>big</h1>', absPath: '/r/big.html' };
+    expect(win.Blocks.previewActions(oversizedHtml, {}).some((item) => item.label === '编辑')).toBe(false);
     file.rawContent = '# Todo\n- small task';
     expect(win.Blocks.previewActions(file, {}).some((item) => item.label === '看板视图')).toBe(true);
     dom.window.close();
