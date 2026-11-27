@@ -280,6 +280,7 @@ var BlockHost = (function () {
       geom: options.geom || null,
       title: definition.title,
       subtitle: '',
+      tooltip: '',
       icon: definition.icon || kind,
       busy: false,
       unread: !!options.unread,
@@ -306,6 +307,13 @@ var BlockHost = (function () {
         if (next === instance.subtitle) return;
         instance.subtitle = next;
         syncTitle(instance);
+        syncSidebar();
+      },
+      setTooltip: function (tooltip) {
+        var next = tooltip || '';
+        if (next === instance.tooltip) return;
+        instance.tooltip = next;
+        if (instance.head) instance.head.title = next;
         syncSidebar();
       },
       setParams: function (next) { instance.params = Object.assign({}, instance.params, next || {}); instance.key = keyOf(kind, instance.params); persist(scopeOf(instance)); },
@@ -538,6 +546,7 @@ var BlockHost = (function () {
         kind: kinds[instance.kind].icon || instance.kind,
         title: instance.title,
         subtitle: instance.subtitle,
+        tooltip: instance.tooltip || '',
         icon: iconMarkup(kinds[instance.kind].icon || instance.kind),
         busy: instance.busy,
         element: instance.frame,
@@ -850,6 +859,7 @@ var BlockHost = (function () {
       url: function (path) { return window.Api ? Api.nodeUrl(serverId, path) : path; },
       setTitle: function (title) { if (typeof options.onTitle === 'function') options.onTitle(title || definition.title); },
       setSubtitle: function (subtitle) { if (typeof options.onSubtitle === 'function') options.onSubtitle(subtitle || ''); },
+      setTooltip: function (tooltip) { if (typeof options.onTooltip === 'function') options.onTooltip(tooltip || ''); },
       setParams: function (next) {
         api.params = Object.assign({}, api.params, next || {});
         if (typeof options.onParams === 'function') options.onParams(api.params);

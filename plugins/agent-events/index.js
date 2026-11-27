@@ -123,9 +123,10 @@ export function apply(ctx, options = {}) {
   ctx.http.mount('/api/agent-events', createAgentEventsRouter(service, {
     onNotifications: (notifications) => ctx.emit('status/notifications', notifications),
     validateEvent: (body) => validator.validate(body),
-    onEvent: async (result) => {
+    onEvent: async (result, rawPayload) => {
       const ev = result?.event;
       if (!ev) return;
+      ctx.emit('agent-events/raw', { event: ev, raw: rawPayload || {} });
       syncPaneAgentBinding(activeTmux, ev, boundPaneAgents).catch(() => {});
       if (!result?.duplicate) {
         ctx.emit('status/agent-state', ev);

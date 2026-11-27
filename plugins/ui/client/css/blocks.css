@@ -7,7 +7,7 @@
   --b-font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
 }
 .blk-frame, .blk-picker-overlay, .blk-dialog-overlay, .blk-db, .blk-board, .blk-editor, .blk-nb,
-.blk-difffile, .cmd-palette-overlay, .pane-git-chip, .ms-toast {
+.blk-difffile, .cmd-palette-overlay, .pane-git-slot, .pane-git-popover, .git-context-bar, .ms-toast {
   --b-bg: var(--workspace-bg, var(--bg-primary));
   --b-panel: var(--workspace-panel, var(--bg-card));
   --b-sunken: color-mix(in srgb, var(--b-bg) 70%, var(--b-panel));
@@ -425,19 +425,70 @@ body.blk-dragging iframe, body.blk-resizing iframe, body.fp-side-resizing iframe
   .git-bar-right .blk-segmented { margin-right: 2px; }
 }
 
-/* git chip in the top bar */
-.pane-git-chip { display: inline-flex; align-items: center; gap: 5px; height: 24px; min-width: 0; max-width: min(320px, 60%); margin-left: 10px; padding: 0 8px; border: 1px solid var(--b-line); border-radius: 12px; background: transparent; color: var(--b-muted); font: 500 12px var(--b-font-mono); cursor: pointer; flex: 0 1 auto; white-space: nowrap; transition: background .12s, color .12s; }
-.pane-git-chip:hover { background: var(--b-hover); color: var(--b-text); }
-.pane-git-chip[hidden] { display: none; }
-.pane-git-chip.is-stale { opacity: .55; }
-.pane-git-chip .blk-svg { width: 13px; height: 13px; }
-.pane-git-chip .blk-svg,.pane-git-separator,.pane-git-dirty,.pane-git-track { flex-shrink: 0; }
-.pane-git-project,.pane-git-branch { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pane-git-project { max-width: 140px; color: var(--b-text); }
-.pane-git-branch { max-width: 160px; color: var(--b-text); }
-.pane-git-dirty { color: var(--b-yellow); }
-.pane-git-track { color: var(--b-accent); }
-.ms-topbar .crumbs { display: flex; align-items: center; min-width: 0; }
+/* Git context bar (inside git-block) */
+.git-context-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 32px; padding: 4px 10px 4px 12px; border-bottom: 1px solid var(--b-line); background: var(--b-sunken); color: var(--b-text); font-size: 12px; flex: none; position: relative; }
+.git-context-bar[hidden] { display: none; }
+.git-ctx-left { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1 1 auto; }
+.git-ctx-right { display: flex; align-items: center; gap: 2px; flex: none; }
+.git-ctx-badge { flex: none; padding: 1px 6px; border-radius: 5px; font: 600 10.5px/1.4 var(--b-font-ui); letter-spacing: .02em; }
+.git-ctx-badge[hidden] { display: none; }
+.git-ctx-badge.is-wt { color: var(--b-purple); background: color-mix(in srgb, var(--b-purple) 16%, transparent); }
+.git-ctx-badge.is-main { color: var(--b-accent); background: var(--b-accent-soft); }
+.git-ctx-name { flex: none; font-weight: 600; color: var(--b-text); white-space: nowrap; }
+.git-ctx-path { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--b-muted); font: 11.5px var(--b-font-mono); }
+.git-ctx-wt-btn { max-width: 160px; }
+.git-ctx-wt-btn[hidden] { display: none; }
+.git-wt-menu { position: absolute; top: calc(100% + 4px); right: 8px; z-index: 20; width: min(440px, calc(100% - 16px)); }
+.git-wt-menu-item { height: auto; min-height: 40px; padding: 6px 9px; align-items: flex-start; }
+.git-wt-menu-text { display: flex; flex-direction: column; min-width: 0; flex: 1; gap: 2px; }
+.git-wt-menu-top { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.git-wt-menu-path { color: var(--b-muted); font: 11px var(--b-font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Per-pane git chips & multi-repo popover */
+.pane-rail-git-chip, .pane-rail-git-more {
+  display: inline-flex; align-items: center; gap: 4px; height: 20px; min-width: 0; max-width: 240px;
+  padding: 0 7px; border: 1px solid var(--b-line); border-radius: 10px;
+  background: color-mix(in srgb, var(--b-panel) 55%, transparent); color: var(--b-muted);
+  font: 500 11px/1 var(--b-font-mono); cursor: pointer; white-space: nowrap;
+  transition: background .12s, color .12s, border-color .12s;
+}
+.pane-rail-git-chip:hover, .pane-rail-git-more:hover, .pane-rail-git-more[aria-expanded="true"] {
+  background: var(--b-hover); color: var(--b-text); border-color: var(--b-line-strong);
+}
+.pane-rail-git-chip .blk-svg, .pane-rail-git-more .blk-svg { width: 12px; height: 12px; flex: none; }
+.prg-wt { padding: 1px 4px; border-radius: 4px; font: 700 9.5px/1.2 var(--b-font-ui); color: var(--b-purple); background: color-mix(in srgb, var(--b-purple) 16%, transparent); flex: none; }
+.prg-project { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--b-text); max-width: 100px; }
+.prg-sep { opacity: .55; flex: none; }
+.prg-branch { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--b-text); max-width: 110px; }
+.prg-dirty { color: var(--b-yellow); flex: none; font-weight: 600; }
+.prg-track { color: var(--b-accent); flex: none; }
+.pane-rail-git-more { flex: none; max-width: none; padding: 0 6px; }
+.prg-compact-label { display: none; align-items: center; gap: 4px; }
+.prg-caret { display: inline-flex; opacity: .75; }
+.prg-caret .blk-svg { width: 11px; height: 11px; }
+
+.pane-git-popover {
+  position: fixed; z-index: 12000; width: min(410px, calc(100vw - 20px));
+  max-height: min(460px, calc(100dvh - 24px)); gap: 4px; padding: 8px;
+}
+.pane-git-popover-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 2px 4px 6px; border-bottom: 1px solid var(--b-line); font-size: 12px; font-weight: 600; color: var(--b-text);
+}
+.pane-git-popover .blk-menu-list { max-height: 360px; }
+.pane-git-item {
+  display: flex; flex-direction: column; align-items: stretch; gap: 3px; height: auto;
+  padding: 7px 9px;
+}
+.pane-git-item-top { display: flex; align-items: center; gap: 6px; min-width: 0; width: 100%; }
+.pane-git-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; background: var(--b-line-strong); }
+.pane-git-dot.is-dirty { background: var(--b-yellow); box-shadow: 0 0 0 2px color-mix(in srgb, var(--b-yellow) 20%, transparent); }
+.pane-git-item-name { font-weight: 600; font-size: 12.5px; color: var(--b-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pane-git-src { flex: none; padding: 1px 5px; border-radius: 4px; font: 500 10px/1.3 var(--b-font-ui); color: var(--b-muted); background: var(--b-hover); }
+.pane-git-src.is-write { color: var(--b-accent); background: var(--b-accent-soft); }
+.pane-git-item-branch { margin-left: auto; max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 11.5px var(--b-font-mono); color: var(--b-text); }
+.pane-git-item-path { padding-left: 13px; color: var(--b-muted); font: 11px var(--b-font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pane-git-popover-empty { padding: 16px 8px; text-align: center; color: var(--b-muted); font-size: 12px; }
 
 /* --- browser block ------------------------------------------------------------------------ */
 

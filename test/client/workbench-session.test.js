@@ -1936,6 +1936,11 @@ describe('SeamWindowSession multi-pane workbench session', () => {
     expect(socket.sent.some((m) => m.type === 'pane-focus' && m.paneId === '%2' && Array.isArray(m.visiblePaneIds) && m.visiblePaneIds[0] === '%2')).toBe(true);
     f.win.MobileUI = { isMobile: () => false };
 
+    expect(session.panes.get('%1').rail.querySelector('.pane-git-slot')).not.toBeNull();
+    const slots = session.getPaneRailSlots();
+    expect(slots.panes.map((p) => p.paneId)).toEqual(['%1', '%2']);
+    expect(slots.panes[0].cwd).toBe('/srv/app-one');
+
     session.dispose();
     f.close();
   });

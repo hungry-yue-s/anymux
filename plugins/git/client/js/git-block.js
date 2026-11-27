@@ -104,12 +104,117 @@
     return { width: width * 14 + 4, rows: rows };
   }
 
+  function shortenHomePath(path) {
+    return String(path || '').replace(/^\/(?:Users|home)\/[^/]+(?=\/|$)/, '~');
+  }
+
+  function ancestorSegments(path, depth) {
+    var parts = String(path || '').split('/').filter(Boolean);
+    if (parts.length <= 1) return '';
+    var dirs = parts.slice(0, -1);
+    return dirs.slice(-depth).join('/');
+  }
+
+  function gitBaseLabel(st) {
+    var parts = String(st.root || '').split('/').filter(Boolean);
+    var leaf = parts[parts.length - 1] || 'Git';
+    var repoName = st.repoName || leaf;
+    if (st.isWorktree) {
+      var wtName = st.worktreeName || leaf;
+      if (wtName && wtName !== repoName) return repoName + ' · ' + wtName;
+      var parent = parts.length >= 2 ? parts[parts.length - 2] : '';
+      return repoName + ' · ' + (parent || 'WT');
+    }
+    return repoName;
+  }
+
+  var openGitBlocks = [];
+
+  function syncAllGitTitles() {
+    var byServer = new Map();
+    openGitBlocks.forEach(function (entry) {
+      var st = entry.getStatus();
+      if (!st || !st.root) return;
+      var list = byServer.get(entry.serverId);
+      if (!list) { list = []; byServer.set(entry.serverId, list); }
+      list.push({ entry: entry, status: st, base: gitBaseLabel(st) });
+    });
+
+    byServer.forEach(function (items) {
+      var counts = new Map();
+      items.forEach(function (item) {
+        counts.set(item.base, (counts.get(item.base) || 0) + 1);
+      });
+      var uniqueTitles = new Map();
+      items.forEach(function (item) {
+        if ((counts.get(item.base) || 0) <= 1) {
+          uniqueTitles.set(item, item.base);
+          return;
+        }
+        var peers = items.filter(function (other) { return other.base === item.base && other.status.root !== item.status.root; });
+        var suffix = '';
+        for (var d = 1; d <= 4; d++) {
+          var cand = ancestorSegments(item.status.root, d);
+          var collides = peers.some(function (p) { return ancestorSegments(p.status.root, d) === cand; });
+          suffix = cand;
+          if (!collides) break;
+        }
+        uniqueTitles.set(item, suffix ? item.base + ' · ' + suffix : item.base);
+      });
+
+      items.forEach(function (item) {
+        var st = item.status;
+        var branchLabel = st.detached ? '分离 HEAD' : (st.branch || '');
+        var repoName = st.repoName || st.root.split('/').filter(Boolean).pop() || 'Git';
+        var headerLine = (st.isWorktree ? '[Worktree] ' : st.hasWorktrees ? '[主仓库] ' : '')
+          + repoName
+          + (st.isWorktree && st.worktreeName && st.worktreeName !== repoName ? ' · ' + st.worktreeName : '');
+        var tipLines = [headerLine];
+        if (st.isWorktree && st.mainRoot) tipLines.push('主仓库：' + st.mainRoot);
+        tipLines.push('路径：' + st.root);
+        if (branchLabel) tipLines.push('分支：' + branchLabel);
+        item.entry.api.setTitle(uniqueTitles.get(item));
+        item.entry.api.setSubtitle(branchLabel);
+        if (typeof item.entry.api.setTooltip === 'function') item.entry.api.setTooltip(tipLines.join('\n'));
+      });
+    });
+  }
+
   function gitBlock(api) {
     var c = ui.client(api.serverId);
     var target = { path: api.params.path || '.', paneId: api.params.paneId || undefined };
     var pendingCommit = api.params.commit || null;
     var historyAnchor = pendingCommit;
     var root = el('div', 'git-block');
+
+    // --- context bar (repo / worktree identity & path) ---
+    var ctxBar = el('div', 'git-context-bar');
+    ctxBar.hidden = true;
+    var ctxLeft = el('div', 'git-ctx-left');
+    var ctxBadge = el('span', 'git-ctx-badge');
+    ctxBadge.hidden = true;
+    var ctxName = el('strong', 'git-ctx-name');
+    var ctxPath = el('span', 'git-ctx-path');
+    ctxLeft.append(ctxBadge, ctxName, ctxPath);
+    var ctxRight = el('div', 'git-ctx-right');
+    var wtBtn = button('切换 Worktree', function () { toggleWorktreeMenu(); }, { icon: 'branch', className: 'blk-btn-ghost blk-btn-small git-ctx-wt-btn' });
+    wtBtn.appendChild(el('span', 'git-branch-caret')).innerHTML = icon('chevronDown');
+    wtBtn.setAttribute('aria-haspopup', 'listbox');
+    wtBtn.setAttribute('aria-expanded', 'false');
+    wtBtn.hidden = true;
+    var copyPathBtn = iconButton('copy', '复制仓库路径', function () {
+      if (!status || !status.root) return;
+      if (window._copyToClipboard) window._copyToClipboard(status.root);
+      else if (navigator.clipboard) navigator.clipboard.writeText(status.root).catch(function () {});
+      toast('已复制路径：' + status.root);
+    });
+    var openDirBtn = iconButton('folder', '浏览仓库目录', function () {
+      if (status && status.root && window.FilePreview && FilePreview.openFile) {
+        FilePreview.openFile(status.root, null);
+      }
+    });
+    ctxRight.append(wtBtn, copyPathBtn, openDirBtn);
+    ctxBar.append(ctxLeft, ctxRight);
 
     // --- top bar ---
     var bar = el('div', 'blk-toolbar git-bar');
@@ -144,7 +249,7 @@
     var historyView = el('div', 'git-history');
     historyView.hidden = true;
     var stateBox = el('div', 'git-state');
-    root.append(bar, stateBox, changesView, historyView);
+    root.append(ctxBar, bar, stateBox, changesView, historyView);
     stateBox.appendChild(ui.spinnerLine('读取仓库'));
     changesView.hidden = true;
 
@@ -241,6 +346,8 @@
 
     var status = null;
     var disposed = false;
+    var blockEntry = { api: api, serverId: api.serverId, getStatus: function () { return status; } };
+    openGitBlocks.push(blockEntry);
     var statusJson = '';
     var selection = null; // { path, staged }
     var lastDiffKey = '';
@@ -256,7 +363,12 @@
       send: function () {
         var sent = send.apply(null, arguments);
         var done = function () { writes += 1; };
-        sent.then(done, done);
+        sent.then(function () {
+          done();
+          window.dispatchEvent(new CustomEvent('git-write-completed', {
+            detail: { serverId: api.serverId, path: (status && status.root) || target.path },
+          }));
+        }, done);
         return sent;
       },
     });
@@ -442,8 +554,8 @@
           target = { path: data.root };
           api.setParams({ path: data.root, paneId: null });
         }
-        api.setTitle(data.root.split('/').filter(Boolean).pop() || 'Git');
-        api.setSubtitle(data.detached ? '分离 HEAD' : (data.branch || ''));
+        renderContextBar();
+        syncAllGitTitles();
         renderBar();
         if (changed || force) {
           if (selection) {
@@ -480,6 +592,82 @@
         api.setSubtitle('');
       }).finally(function () { if (loading === entry) loading = null; });
       return entry.promise;
+    }
+
+    function renderContextBar() {
+      if (!status || !status.root) { ctxBar.hidden = true; return; }
+      ctxBar.hidden = false;
+      var repoName = status.repoName || status.root.split('/').filter(Boolean).pop() || 'Git';
+      if (status.isWorktree) {
+        ctxBadge.textContent = 'Worktree';
+        ctxBadge.className = 'git-ctx-badge is-wt';
+        ctxBadge.hidden = false;
+      } else if (status.hasWorktrees) {
+        ctxBadge.textContent = '主仓库';
+        ctxBadge.className = 'git-ctx-badge is-main';
+        ctxBadge.hidden = false;
+      } else {
+        ctxBadge.hidden = true;
+      }
+      ctxName.textContent = status.isWorktree && status.worktreeName && status.worktreeName !== repoName
+        ? repoName + ' · ' + status.worktreeName
+        : repoName;
+      ctxPath.textContent = status.displayPath || shortenHomePath(status.root);
+      ctxPath.title = status.root;
+      wtBtn.hidden = !(status.isWorktree || status.hasWorktrees);
+    }
+
+    var wtMenu = null;
+    function closeWorktreeMenu() {
+      if (!wtMenu) return;
+      wtMenu.remove();
+      wtMenu = null;
+      wtBtn.setAttribute('aria-expanded', 'false');
+      document.removeEventListener('mousedown', onWtOutside, true);
+    }
+    function onWtOutside(e) {
+      if (wtMenu && !wtMenu.contains(e.target) && !wtBtn.contains(e.target)) closeWorktreeMenu();
+    }
+    function toggleWorktreeMenu() {
+      if (wtMenu) { closeWorktreeMenu(); return; }
+      if (!status || !status.root) return;
+      wtMenu = el('div', 'blk-menu git-wt-menu');
+      wtBtn.setAttribute('aria-expanded', 'true');
+      var results = el('div', 'blk-menu-list');
+      results.setAttribute('role', 'listbox');
+      results.appendChild(ui.spinnerLine('读取 Worktrees'));
+      wtMenu.appendChild(results);
+      ctxBar.appendChild(wtMenu);
+      document.addEventListener('mousedown', onWtOutside, true);
+      c.get('/api/worktrees', { path: status.root }).then(function (data) {
+        if (!wtMenu) return;
+        results.replaceChildren();
+        var items = Array.isArray(data && data.worktrees) ? data.worktrees : [];
+        if (!items.length) { results.appendChild(el('div', 'blk-menu-empty', '没有关联 Worktree')); return; }
+        items.forEach(function (wt) {
+          var current = wt.path === status.root;
+          var row = el('button', 'blk-menu-item git-wt-menu-item' + (current ? ' is-active' : ''));
+          row.type = 'button';
+          row.setAttribute('role', 'option');
+          row.setAttribute('aria-selected', String(current));
+          row.innerHTML = current ? icon('check') : icon('branch');
+          var textWrap = el('div', 'git-wt-menu-text');
+          var top = el('div', 'git-wt-menu-top');
+          top.appendChild(el('span', 'blk-menu-label', wt.branch || (wt.detached ? '分离 HEAD' : 'worktree')));
+          top.appendChild(el('span', 'git-ctx-badge ' + (wt.isMain ? 'is-main' : 'is-wt'), wt.isMain ? '主仓库' : 'WT'));
+          if (wt.dirtyCount > 0) top.appendChild(el('span', 'prg-dirty', '●' + wt.dirtyCount));
+          textWrap.append(top, el('div', 'git-wt-menu-path', shortenHomePath(wt.path)));
+          row.title = wt.path;
+          row.appendChild(textWrap);
+          row.addEventListener('click', function () {
+            closeWorktreeMenu();
+            if (!current) BlockHost.open('git', { path: wt.path });
+          });
+          results.appendChild(row);
+        });
+      }).catch(function (err) {
+        if (wtMenu) results.replaceChildren(ui.errorBox(err));
+      });
     }
 
     function renderBar() {
@@ -1467,6 +1655,8 @@
       },
       dispose: function () {
         disposed = true;
+        openGitBlocks = openGitBlocks.filter(function (item) { return item !== blockEntry; });
+        syncAllGitTitles();
         diffAsked = null;
         historyLoading = null;
         clearInterval(pollTimer);
@@ -1475,6 +1665,7 @@
         if (historyResize) historyResize.disconnect();
         window.removeEventListener('focus', onFocus);
         closeBranchMenu();
+        closeWorktreeMenu();
         stopLazyDiffs();
         disposePreviews(root);
       },
@@ -1491,106 +1682,374 @@
   });
 
   // ===========================================================================
-  // Git status chip in the top bar
+  // Per-pane Git rail chips & multi-repo popover (top-left global chip removed)
   // ===========================================================================
 
-  var chip = null;
-  var chipBusy = false;
-  // Only the newest answer may be shown: opening Git asks too, and can overtake a refresh.
-  var chipAsked = 0;
+  var SOURCE_LABELS = {
+    cwd: '当前目录',
+    'agent-write': 'Agent 修改',
+    worktree: 'Worktree',
+    workspace: '工作区',
+    'agent-read': 'Agent 读取',
+  };
 
-  function ensureChip() {
-    var crumbs = document.querySelector('.ms-topbar .crumbs');
-    if (!crumbs) return null;
-    if (!chip) {
-      chip = el('button', 'pane-git-chip');
-      chip.type = 'button';
-      chip.hidden = true;
-      // What it shows can be 15 seconds old, so it is not what gets opened.
-      chip.addEventListener('click', function () { openGit(); });
+  var railAsked = 0;
+  var railBusy = false;
+  var railTimer = null;
+  var railLastByPane = new Map();
+  var openPopover = null; // { paneId, serverId, anchorEl, el, repos }
+
+  function closePopover() {
+    if (!openPopover) return;
+    if (openPopover.anchorEl) openPopover.anchorEl.setAttribute('aria-expanded', 'false');
+    openPopover.el.remove();
+    document.removeEventListener('mousedown', onPopoverOutside, true);
+    document.removeEventListener('keydown', onPopoverKeydown, true);
+    openPopover = null;
+  }
+
+  function onPopoverOutside(e) {
+    if (!openPopover) return;
+    if (openPopover.el.contains(e.target) || (openPopover.anchorEl && openPopover.anchorEl.contains(e.target))) return;
+    closePopover();
+  }
+
+  function onPopoverKeydown(e) {
+    if (!openPopover) return;
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      var anchor = openPopover.anchorEl;
+      closePopover();
+      if (anchor && anchor.focus) anchor.focus();
     }
-    if (chip.parentNode !== crumbs) crumbs.appendChild(chip);
+  }
+
+  function positionPopover(pop, anchorEl) {
+    var rect = anchorEl.getBoundingClientRect();
+    var vw = window.innerWidth || 1280;
+    var vh = window.innerHeight || 720;
+    var width = Math.min(410, vw - 20);
+    var left = Math.max(10, Math.min(rect.right - width, vw - width - 10));
+    pop.style.width = width + 'px';
+    pop.style.left = left + 'px';
+    var spaceBelow = vh - rect.bottom - 14;
+    var spaceAbove = rect.top - 14;
+    if (spaceBelow >= 240 || spaceBelow >= spaceAbove) {
+      pop.style.top = Math.min(vh - 60, rect.bottom + 4) + 'px';
+      pop.style.bottom = '';
+    } else {
+      pop.style.top = '';
+      pop.style.bottom = (vh - rect.top + 4) + 'px';
+    }
+  }
+
+  function renderPopoverBody(pop, paneId, serverId, repos, filterInput) {
+    var list = pop.querySelector('.blk-menu-list');
+    if (!list) return;
+    var q = filterInput ? filterInput.value.trim().toLowerCase() : '';
+    var filtered = repos.filter(function (r) {
+      if (!q) return true;
+      var hay = [r.repoName, r.worktreeName, r.branch, r.root, r.displayPath].filter(Boolean).join(' ').toLowerCase();
+      return hay.indexOf(q) !== -1;
+    });
+    list.replaceChildren();
+    if (!filtered.length) {
+      list.appendChild(el('div', 'pane-git-popover-empty', '没有匹配的 Git 仓库'));
+      return;
+    }
+
+    var primaryGroup = [];
+    var secondaryGroup = [];
+    filtered.forEach(function (r) {
+      if (r.source === 'cwd' || r.source === 'agent-write' || r.dirtyCount > 0) primaryGroup.push(r);
+      else secondaryGroup.push(r);
+    });
+
+    var renderGroup = function (heading, items) {
+      if (!items.length) return;
+      if (primaryGroup.length && secondaryGroup.length) {
+        list.appendChild(el('div', 'blk-menu-section', heading));
+      }
+      items.forEach(function (r) {
+        var row = el('button', 'blk-menu-item pane-git-item');
+        row.type = 'button';
+        row.setAttribute('role', 'option');
+        row.title = r.root;
+        var top = el('div', 'pane-git-item-top');
+        var dot = el('span', 'pane-git-dot' + (r.dirtyCount > 0 ? ' is-dirty' : ''));
+        var nameText = r.repoName || r.root.split(/[\\/]/).filter(Boolean).pop() || 'Git';
+        var name = el('span', 'pane-git-item-name', nameText);
+        top.append(dot, name);
+        if (r.isWorktree) top.appendChild(el('span', 'prg-wt', 'WT'));
+        if (r.source && SOURCE_LABELS[r.source]) {
+          top.appendChild(el('span', 'pane-git-src' + (r.source === 'agent-write' ? ' is-write' : ''), SOURCE_LABELS[r.source]));
+        }
+        var branch = r.detached ? 'HEAD' : (r.branch || '—');
+        top.appendChild(el('span', 'pane-git-item-branch', branch));
+        if (r.dirtyCount > 0) top.appendChild(el('span', 'prg-dirty', '●' + r.dirtyCount));
+        if (r.ahead > 0) top.appendChild(el('span', 'prg-track', '↑' + r.ahead));
+        if (r.behind > 0) top.appendChild(el('span', 'prg-track', '↓' + r.behind));
+
+        var pathLine = el('div', 'pane-git-item-path', r.displayPath || shortenHomePath(r.root));
+        row.append(top, pathLine);
+        row.addEventListener('click', function (e) {
+          e.stopPropagation();
+          closePopover();
+          openGit({ path: r.root });
+        });
+        list.appendChild(row);
+      });
+    };
+
+    renderGroup('当前与 Agent 触及', primaryGroup);
+    renderGroup('其他 Worktree 与工作区', secondaryGroup);
+
+    var firstItem = list.querySelector('.pane-git-item');
+    if (firstItem) firstItem.classList.add('is-active');
+  }
+
+  function openPaneGitPopover(paneId, serverId, anchorEl, repos) {
+    closePopover();
+    var pop = el('div', 'blk-menu pane-git-popover');
+    pop.setAttribute('role', 'dialog');
+    pop.setAttribute('aria-label', '本窗格 Git 仓库列表');
+
+    var head = el('div', 'pane-git-popover-head');
+    head.appendChild(el('span', '', '本窗格 Git 仓库 (' + repos.length + ')'));
+    head.appendChild(iconButton('refresh', '立即刷新', function (e) {
+      e.stopPropagation();
+      refreshPaneRail(true);
+    }, 'blk-btn-small'));
+    pop.appendChild(head);
+
+    var filterInput = null;
+    if (repos.length > 5) {
+      filterInput = el('input', 'blk-input');
+      filterInput.placeholder = '搜索仓库、分支或路径…';
+      filterInput.setAttribute('aria-label', '搜索仓库');
+      pop.appendChild(filterInput);
+    }
+
+    var list = el('div', 'blk-menu-list');
+    list.setAttribute('role', 'listbox');
+    pop.appendChild(list);
+
+    document.body.appendChild(pop);
+    positionPopover(pop, anchorEl);
+    anchorEl.setAttribute('aria-expanded', 'true');
+    openPopover = { paneId: paneId, serverId: serverId, anchorEl: anchorEl, el: pop, repos: repos };
+
+    renderPopoverBody(pop, paneId, serverId, repos, filterInput);
+
+    var moveActive = function (delta) {
+      var items = Array.prototype.slice.call(list.querySelectorAll('.pane-git-item'));
+      if (!items.length) return;
+      var idx = items.findIndex(function (n) { return n.classList.contains('is-active'); });
+      var next = Math.max(0, Math.min(items.length - 1, (idx < 0 ? 0 : idx + delta)));
+      items.forEach(function (n, i) {
+        n.classList.toggle('is-active', i === next);
+        if (i === next) n.scrollIntoView({ block: 'nearest' });
+      });
+    };
+
+    var keyTarget = filterInput || list;
+    if (!filterInput) list.tabIndex = 0;
+    keyTarget.addEventListener('keydown', function (e) {
+      if (e.key === 'ArrowDown') { e.preventDefault(); moveActive(1); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); moveActive(-1); }
+      else if (e.key === 'Enter') {
+        var cur = list.querySelector('.pane-git-item.is-active');
+        if (cur) { e.preventDefault(); cur.click(); }
+      }
+    });
+    if (filterInput) {
+      filterInput.addEventListener('input', function () {
+        renderPopoverBody(pop, paneId, serverId, repos, filterInput);
+      });
+      filterInput.focus({ preventScroll: true });
+    } else {
+      list.focus({ preventScroll: true });
+    }
+
+    document.addEventListener('mousedown', onPopoverOutside, true);
+    document.addEventListener('keydown', onPopoverKeydown, true);
+  }
+
+  function togglePaneGitPopover(paneId, serverId, anchorEl, repos) {
+    if (openPopover && openPopover.paneId === paneId && openPopover.anchorEl === anchorEl) {
+      closePopover();
+      return;
+    }
+    openPaneGitPopover(paneId, serverId, anchorEl, repos);
+  }
+
+  function buildPrimaryChip(repo, isMulti) {
+    var project = repo.repoName || repo.root.split(/[\\/]/).filter(Boolean).pop() || repo.root;
+    var branch = repo.detached ? 'HEAD' : (repo.branch || '—');
+    var chip = el('button', 'pane-rail-git-chip' + (isMulti ? ' is-primary' : ''));
+    chip.type = 'button';
+    chip.innerHTML = icon('branch');
+    if (repo.isWorktree) chip.appendChild(el('span', 'prg-wt', 'WT'));
+    chip.appendChild(el('span', 'prg-project', project));
+    var sep = el('span', 'prg-sep', '/');
+    sep.setAttribute('aria-hidden', 'true');
+    chip.appendChild(sep);
+    chip.appendChild(el('span', 'prg-branch', branch));
+    if (repo.dirtyCount > 0) chip.appendChild(el('span', 'prg-dirty', '●' + repo.dirtyCount));
+    if (repo.ahead > 0) chip.appendChild(el('span', 'prg-track', '↑' + repo.ahead));
+    if (repo.behind > 0) chip.appendChild(el('span', 'prg-track', '↓' + repo.behind));
+    chip.title = repo.root + ' · ' + branch + (repo.dirtyCount ? ' · ' + repo.dirtyCount + ' 个改动' : ' · 干净') + '\n点击打开 Git (' + ui.keysText('Alt+Shift+G') + ')';
+    chip.setAttribute('aria-label', 'Git 项目 ' + project + '，分支 ' + branch + '，' + (repo.dirtyCount || 0) + ' 个改动');
+    chip.addEventListener('click', function (e) {
+      e.stopPropagation();
+      openGit({ path: repo.root });
+    });
     return chip;
   }
 
-  function showChip(data) {
-    var node = ensureChip();
-    if (!node) return;
-    var project = data.root.split(/[\\/]/).filter(Boolean).pop() || data.root;
-    var branch = data.detached ? 'HEAD' : (data.branch || '—');
-    node.replaceChildren();
-    node.innerHTML = icon('branch');
-    node.appendChild(el('span', 'pane-git-project', project));
-    var separator = el('span', 'pane-git-separator', '/');
-    separator.setAttribute('aria-hidden', 'true');
-    node.appendChild(separator);
-    node.appendChild(el('span', 'pane-git-branch', branch));
-    if (data.files.length) node.appendChild(el('span', 'pane-git-dirty', '●' + data.files.length));
-    if (data.ahead) node.appendChild(el('span', 'pane-git-track', '↑' + data.ahead));
-    if (data.behind) node.appendChild(el('span', 'pane-git-track', '↓' + data.behind));
-    node.title = data.root + (data.files.length ? ' · ' + data.files.length + ' 个改动' : ' · 干净') + '\n点击打开 Git (' + ui.keysText('Alt+Shift+G') + ')';
-    node.setAttribute('aria-label', 'Git 项目 ' + project + '，分支 ' + branch + '，' + data.files.length + ' 个改动，打开 Git');
-    node.dataset.title = node.title;
-    node.classList.remove('is-stale');
-    node.hidden = false;
-  }
-
-  /**
-   * Outside a repository the chip goes. Any other failure is likely to pass: what it
-   * showed stays, dimmed, and says why it may be out of date.
-   */
-  function chipRefreshFailed(err) {
-    if (err && err.message === 'not_a_git_repository') {
-      hideChip();
+  function renderPaneSlot(pane, repos, serverId) {
+    var slot = pane.slotEl;
+    var rail = pane.railEl;
+    if (!slot || !slot.isConnected) return;
+    if (!repos || !repos.length) {
+      slot.replaceChildren();
+      slot.hidden = true;
+      if (rail) rail.classList.remove('has-pane-git', 'hide-pane-ctx');
+      if (openPopover && openPopover.paneId === pane.paneId) closePopover();
       return;
     }
-    if (!chip || chip.hidden) return;
-    chip.classList.add('is-stale');
-    chip.title = '刷新失败，显示的是上次的状态：' + errorText(err) + '\n' + (chip.dataset.title || '');
-  }
 
-  function hideChip() {
-    if (chip) chip.hidden = true;
-  }
+    var primary = repos[0];
+    var nodes = [buildPrimaryChip(primary, repos.length > 1)];
+    if (repos.length > 1) {
+      var hiddenDirty = repos.slice(1).reduce(function (sum, r) { return sum + (r.dirtyCount || 0); }, 0);
+      var totalDirty = hiddenDirty + (primary.dirtyCount || 0);
+      var moreBtn = el('button', 'pane-rail-git-more');
+      moreBtn.type = 'button';
+      moreBtn.setAttribute('aria-haspopup', 'dialog');
+      moreBtn.setAttribute('aria-expanded', String(Boolean(openPopover && openPopover.paneId === pane.paneId)));
+      moreBtn.setAttribute('aria-label', '展开本窗格全部 ' + repos.length + ' 个 Git 仓库');
+      moreBtn.title = '共 ' + repos.length + ' 个关联 Git 仓库，点击展开切换';
 
-  function refreshChip() {
-    var node = ensureChip();
-    if (!node) return;
-    var terminal = document.querySelector('.ms-app.mode-terminal');
-    var selected = ui.selectedContext();
-    if (!terminal || !selected.paneId || document.visibilityState !== 'visible') {
-      if (!terminal) node.hidden = true;
-      return;
-    }
-    if (chipBusy) return;
-    chipBusy = true;
-    var asked = ++chipAsked;
-    var isStale = function () { return ui.selectedContext().key !== selected.key; };
-    ui.focusedContext().then(function (ctx) {
-      if (ctx.focusRequestKey === selected.key && ctx.viewId === selected.viewId && ui.selectedContext().key === ctx.key) selected = ctx;
-      if (isStale()) return null;
-      return ui.client(ctx.serverId).get('/api/git/status', { path: '.', paneId: ctx.paneId }).then(function (data) {
-        // The user moved on while this was running: it describes another repository.
-        if (!isStale() && asked === chipAsked) showChip(data);
-      }, function (err) {
-        if (!isStale() && asked === chipAsked) chipRefreshFailed(err);
+      var expandLabel = el('span', 'prg-expand-label');
+      expandLabel.appendChild(document.createTextNode('+' + (repos.length - 1)));
+      if (hiddenDirty > 0) {
+        expandLabel.appendChild(document.createTextNode(' · '));
+        expandLabel.appendChild(el('span', 'prg-dirty', '●' + hiddenDirty));
+      }
+
+      var compactLabel = el('span', 'prg-compact-label');
+      compactLabel.innerHTML = icon('branch');
+      compactLabel.appendChild(el('span', '', String(repos.length)));
+      if (totalDirty > 0) compactLabel.appendChild(el('span', 'prg-dirty', '●' + totalDirty));
+
+      var caret = el('span', 'prg-caret');
+      caret.innerHTML = icon('chevronDown');
+      moreBtn.append(expandLabel, compactLabel, caret);
+
+      moreBtn.addEventListener('click', function (e) {
+        e.stopPropagation();
+        togglePaneGitPopover(pane.paneId, serverId, moreBtn, repos);
       });
-    }).catch(function () {
-      // tmux could not say which pane: what the chip shows may be another pane's.
-      if (!isStale() && asked === chipAsked) hideChip();
-    }).finally(function () {
-      chipBusy = false;
-      if (isStale()) scheduleChip();
+      nodes.push(moreBtn);
+      if (openPopover && openPopover.paneId === pane.paneId) {
+        openPopover.anchorEl = moreBtn;
+        openPopover.repos = repos;
+        renderPopoverBody(openPopover.el, pane.paneId, serverId, repos, openPopover.el.querySelector('.blk-input'));
+      }
+    } else if (openPopover && openPopover.paneId === pane.paneId) {
+      closePopover();
+    }
+
+    slot.replaceChildren.apply(slot, nodes);
+    slot.hidden = false;
+    if (rail) {
+      rail.classList.add('has-pane-git');
+      var cwdBase = String(pane.cwd || '').split(/[\\/]/).filter(Boolean).pop() || '';
+      var matchesPrimary = Boolean(cwdBase && (cwdBase === primary.repoName || cwdBase === primary.worktreeName));
+      rail.classList.toggle('hide-pane-ctx', matchesPrimary);
+    }
+  }
+
+  function fetchPaneReposFallback(client, panes) {
+    return Promise.all(panes.map(function (p) {
+      return client.get('/api/git/status', { path: '.', paneId: p.paneId }).then(function (data) {
+        if (!data || !data.root) return [p.paneId, { cwd: p.cwd || '', repos: [] }];
+        var name = data.repoName || data.root.split(/[\\/]/).filter(Boolean).pop() || 'Git';
+        return [p.paneId, {
+          cwd: p.cwd || '',
+          repos: [{
+            root: data.root,
+            mainRoot: data.mainRoot || data.root,
+            repoName: name,
+            isWorktree: !!data.isWorktree,
+            hasWorktrees: !!data.hasWorktrees,
+            worktreeName: data.worktreeName || null,
+            branch: data.branch,
+            detached: !!data.detached,
+            ahead: data.ahead || 0,
+            behind: data.behind || 0,
+            dirtyCount: Array.isArray(data.files) ? data.files.length : 0,
+            source: 'cwd',
+            displayPath: data.displayPath || shortenHomePath(data.root),
+          }],
+        }];
+      }).catch(function () {
+        return [p.paneId, { cwd: p.cwd || '', repos: [] }];
+      });
+    })).then(function (entries) {
+      var map = {};
+      entries.forEach(function (pair) { map[pair[0]] = pair[1]; });
+      return { panes: map };
     });
   }
 
-  // The chip never competes with a terminal coming up, and a navigation that
-  // changes both the route and the server asks only once.
-  var CHIP_DELAY_MS = 800;
-  var chipTimer = null;
-  function scheduleChip() {
-    clearTimeout(chipTimer);
-    chipTimer = setTimeout(refreshChip, CHIP_DELAY_MS);
+  function refreshPaneRail(force) {
+    var session = window.Workbench && typeof window.Workbench.focusedSession === 'function'
+      ? window.Workbench.focusedSession()
+      : null;
+    if (!session || typeof session.getPaneRailSlots !== 'function') {
+      closePopover();
+      return Promise.resolve();
+    }
+    var snapshot = session.getPaneRailSlots();
+    var panes = (snapshot && snapshot.panes) || [];
+    if (!panes.length || !PanelSlots.hasPlugin('git', snapshot.serverId)) {
+      closePopover();
+      return Promise.resolve();
+    }
+    if (!force && document.visibilityState !== 'visible') return Promise.resolve();
+    if (railBusy && !force) return Promise.resolve();
+
+    railBusy = true;
+    var asked = ++railAsked;
+    var serverId = snapshot.serverId;
+    var client = ui.client(serverId);
+    var paneIds = panes.map(function (p) { return p.paneId; }).join(',');
+
+    return client.get('/api/git/pane-repos', { paneIds: paneIds }).catch(function (err) {
+      if (err && err.status === 404) return fetchPaneReposFallback(client, panes);
+      throw err;
+    }).then(function (data) {
+      if (asked !== railAsked) return;
+      var paneMap = (data && data.panes) || {};
+      panes.forEach(function (pane) {
+        var info = paneMap[pane.paneId];
+        var repos = (info && info.repos) || [];
+        railLastByPane.set(pane.paneId, repos);
+        renderPaneSlot(pane, repos, serverId);
+      });
+    }).catch(function () {
+      // Transient failure keeps last known rail chips instead of flickering empty.
+    }).finally(function () {
+      railBusy = false;
+    });
+  }
+
+  function schedulePaneRail(delayMs) {
+    clearTimeout(railTimer);
+    railTimer = setTimeout(function () { refreshPaneRail(false); }, delayMs == null ? 250 : delayMs);
   }
 
   var gitOpens = 0;
@@ -1601,7 +2060,11 @@
    * opened by its root, so a block already showing it comes up with its draft, and a
    * block showing another repository is never pointed somewhere else.
    */
-  function openGit() {
+  function openGit(options) {
+    if (options && typeof options === 'object' && typeof options.path === 'string' && options.path) {
+      BlockHost.open('git', { path: options.path });
+      return;
+    }
     var open = ++gitOpens;
     var selected = ui.selectedContext();
     var moved = function () { return open !== gitOpens || ui.selectedContext().key !== selected.key; };
@@ -1616,15 +2079,12 @@
       if (ctx.focusRequestKey === selected.key && ctx.viewId === selected.viewId && ui.selectedContext().key === ctx.key) selected = ctx;
       if (moved()) { if (diagnostic) diagnostic({ code: 'GIT_STALE' }); return null; }
       phase = 'status';
-      var asked = ++chipAsked;
       return ui.client(ctx.serverId).get('/api/git/status', { path: '.', paneId: ctx.paneId }).then(function (data) {
         if (moved()) { if (diagnostic) diagnostic({ code: 'GIT_STALE' }); return; }
-        if (asked === chipAsked) showChip(data);
         phase = 'render';
         BlockHost.open('git', { path: data.root });
-      }, function (err) {
+      }, function () {
         if (moved()) return;
-        if (asked === chipAsked) chipRefreshFailed(err);
         // Keyed by the pane, and it says itself that this is not a repository, or what went wrong.
         BlockHost.open('git', { path: '.', paneId: ctx.paneId });
       });
@@ -1634,8 +2094,9 @@
     });
   }
 
-  PanelSlots.commands.register({ id: 'git', order: 20, group: 'block', title: 'Git', icon: 'git', keys: 'Alt+Shift+G', code: 'KeyG', run: openGit, keywords: 'git diff stage commit branch push pull 提交 暂存 分支 历史' });
+  PanelSlots.commands.register({ id: 'git', order: 20, group: 'block', title: 'Git', icon: 'git', keys: 'Alt+Shift+G', code: 'KeyG', run: function () { return openGit(); }, keywords: 'git diff stage commit branch push pull 提交 暂存 分支 历史' });
   Blocks.openGit = openGit;
+  Blocks._paneGit = { refresh: refreshPaneRail, schedule: schedulePaneRail, closePopover: closePopover };
 
   function openCommitNotice(notice) {
     var target = notice.target;
@@ -1745,17 +2206,30 @@
   } });
 
   // --- boot ---
-  window.addEventListener('hashchange', scheduleChip);
-  // Another machine: what is on the chip and on its way to it is about the last one.
+  window.addEventListener('hashchange', function () { closePopover(); schedulePaneRail(300); });
   window.addEventListener('terminal-target-server', function () {
-    chipAsked += 1;
-    hideChip();
-    scheduleChip();
+    railAsked += 1;
+    closePopover();
+    schedulePaneRail(300);
   });
-  window.addEventListener('terminal-pane-selected', scheduleChip);
-  window.addEventListener('workbench-focus-changed', scheduleChip);
-  document.addEventListener('visibilitychange', refreshChip);
-  setInterval(refreshChip, 15000);
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', scheduleChip);
-  else setTimeout(scheduleChip, 0);
+  window.addEventListener('workbench-panes-changed', function (e) {
+    if (e.detail && e.detail.disposed) closePopover();
+    schedulePaneRail(250);
+  });
+  window.addEventListener('workbench-focus-changed', function () { schedulePaneRail(300); });
+  window.addEventListener('pane-git-changed', function (e) {
+    var session = window.Workbench && typeof window.Workbench.focusedSession === 'function'
+      ? window.Workbench.focusedSession()
+      : null;
+    if (!session || (e.detail && e.detail.serverId && session.target && session.target.serverId !== e.detail.serverId)) return;
+    schedulePaneRail(250);
+  });
+  window.addEventListener('git-write-completed', function () { refreshPaneRail(true); });
+  window.addEventListener('resize', closePopover);
+  document.addEventListener('visibilitychange', function () {
+    if (document.visibilityState === 'visible') refreshPaneRail(false);
+  });
+  setInterval(function () { refreshPaneRail(false); }, 15000);
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function () { schedulePaneRail(400); });
+  else setTimeout(function () { schedulePaneRail(400); }, 0);
 })();

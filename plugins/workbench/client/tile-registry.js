@@ -149,6 +149,8 @@ function createDiffTile(host, ctx) {
     const embedded = mountEmbedded('git', embeddedHost, {
       serverId: ctx.serverId,
       params: diffTileParams(ctx),
+      onTitle: (title) => { if (typeof ctx.onTitle === 'function') ctx.onTitle(title); },
+      onSubtitle: (sub) => { if (typeof ctx.onSubtitle === 'function') ctx.onSubtitle(sub); },
       onClose: () => ctx.onClose?.(),
     });
     if (embedded) {
@@ -182,6 +184,7 @@ function createDiffTile(host, ctx) {
     if (disposed) return;
     const repoPath = ctx.payloadData?.path || '';
     title.textContent = repoPath ? 'Git · ' + repoPath : 'Git 工作区变更';
+    title.title = repoPath || '';
     body.replaceChildren(el(doc, 'div', 'seam-tile-empty', '正在读取 Git 状态…'));
     try {
       const qs = repoPath ? '?path=' + encodeURIComponent(repoPath) : '';

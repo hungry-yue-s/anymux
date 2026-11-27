@@ -412,6 +412,10 @@ class StatusSocket {
           }
           return;
         }
+        if (data && data.type === 'pane-git-changed') {
+          window.dispatchEvent(new CustomEvent('pane-git-changed', { detail: Object.assign({}, data, { serverId: serverId }) }));
+          return;
+        }
         if (data && data.type === 'pane-cmd') {
           if (typeof FabScene !== 'undefined') {
             var scenes = FabScene.loadScenes();
