@@ -371,18 +371,28 @@ describe('native workbench UI', () => {
     addParkedSpy(f.sessions[0]);
     expect(f.win.Api.get).not.toHaveBeenCalled();
 
-    // Switch to @2 -> @1 is parked (not disposed!)
+    // Switch to @2 -> @1 is parked (not disposed!) and stays hidden in place inside DOM container
     await f.api.render('dev', v2.id, { container: f.host });
     addParkedSpy(f.sessions[1]);
     expect(f.sessions[0].setParked).toHaveBeenCalledWith(true);
     expect(f.sessions[0].disposed).not.toBe(true);
     expect(f.sessions).toHaveLength(2);
+    const stage1 = f.host.querySelector(`[data-view-id="${v1.id}"]`);
+    const stage2 = f.host.querySelector(`[data-view-id="${v2.id}"]`);
+    expect(stage1).not.toBeNull();
+    expect(stage1.hidden).toBe(true);
+    expect(stage1.classList.contains('is-parked')).toBe(true);
+    expect(stage2.hidden).toBe(false);
 
-    // Switch back to @1 -> reuses exact same Session instance with 0 new Session constructions!
+    // Switch back to @1 -> reuses exact same Session & DOM node with 0 new Session constructions!
     await f.api.render('dev', v1.id, { container: f.host });
     expect(f.sessions).toHaveLength(2);
     expect(f.sessions[0].setParked).toHaveBeenLastCalledWith(false);
     expect(f.sessions[1].setParked).toHaveBeenCalledWith(true);
+    expect(stage1.hidden).toBe(false);
+    expect(stage1.classList.contains('is-parked')).toBe(false);
+    expect(stage2.hidden).toBe(true);
+    expect(stage2.classList.contains('is-parked')).toBe(true);
 
     // Closing or unmounting disposes both active and parked views cleanly.
     f.api.closeView(v2.id);

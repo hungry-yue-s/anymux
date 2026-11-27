@@ -8,6 +8,7 @@ for patch_file in "$SCRIPT_DIR/tmux-patches/startup-config-once.patch" \
                   "$SCRIPT_DIR/tmux-patches/native-client.patch" \
                   "$SCRIPT_DIR/tmux-patches/rich-pane.patch" \
                   "$SCRIPT_DIR/tmux-patches/control-stability.patch" \
-                  "$SCRIPT_DIR/tmux-patches/orca-backend.patch"; do
+                  "$SCRIPT_DIR/tmux-patches/orca-backend.patch" \
+                  "$SCRIPT_DIR/tmux-patches/fast-control-resize.patch"; do
   patch -t -N -p1 -d "$source_directory" < "$patch_file"
 done

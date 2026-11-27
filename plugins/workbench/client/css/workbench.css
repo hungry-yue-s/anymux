@@ -16,6 +16,7 @@
   --pane-inactive-bg: color-mix(in srgb, var(--workspace-sidebar, #16161e) 35%, var(--workspace-bg, #1a1b26));
 }
 .wb-stage [hidden], .wb-toolbar[hidden] { display: none !important; }
+.wb-stage.terminal-view.is-parked, .wb-stage.terminal-view[hidden] { display: none !important; }
 .wb-window-terminal {
   position: relative;
   display: flex;

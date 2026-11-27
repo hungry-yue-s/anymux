@@ -118,8 +118,11 @@ export function registerWorkbenchShell(global, api) {
       global.TerminalTarget.set({ serverId, viewId, provider: 'tmux' });
       if (global.state) global.state.currentTab = 'terminal';
       view.classList.add('terminal-mode');
-      view.innerHTML = '<section class="section terminal-stage" id="ms-workbench-host"></section>';
-      const host = view.firstElementChild;
+      let host = view.querySelector?.(':scope > #ms-workbench-host') || view.querySelector?.('#ms-workbench-host');
+      if (!host) {
+        view.innerHTML = '<section class="section terminal-stage" id="ms-workbench-host"></section>';
+        host = view.firstElementChild;
+      }
       if (!global.AppShell.workspace(serverId)) global.MsApp.refreshWorkspace(serverId, { shared: true });
       if (!syncHeader(serverId, null, saved)) {
         global.AppShell.setHeader(global.AppShell.server(serverId)?.name || serverId, saved.title || '工作台', '');

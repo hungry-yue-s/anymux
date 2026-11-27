@@ -21,8 +21,18 @@ import {
   readStableCellSize,
   repairPaneWebglCanvasDpr,
   resolveMinimumContrastRatio,
+  restoreReleasedPaneWebglCanvas,
   stripTerminalSelectionGutter,
 } from './terminal/rendering.js';
+import {
+  getHiddenWebglRetentionRegistry,
+  stopReleasingWebglCanvasBacking,
+} from './terminal/webgl-retention.js';
+import {
+  containerClientSizeChanged,
+  createStableGridScheduler,
+  readContainerClientSize,
+} from './terminal/reveal-fit.js';
 import {
   createLinkPtyMouseSuppressor,
   createOsc52Coalescer,
@@ -657,6 +667,7 @@ export class SeamWindowSession {
     visible = true,
     fontSize,
     fontDelta,
+    webglRetentionRegistry = null,
   }) {
     this.global = global;
     this.container = container;
@@ -714,6 +725,9 @@ export class SeamWindowSession {
     this._activeDragCleanup = null;
     this.parked = false;
     this._webglAttachHandle = null;
+    this._webglRetentionRegistry = webglRetentionRegistry || getHiddenWebglRetentionRegistry();
+    this._stableFitScheduler = null;
+    this._lastFitContainerSize = null;
     this._pendingAcks = new Map();
     this._paneInputSeqs = new Map();
     this._ackTimer = null;
@@ -1468,8 +1482,7 @@ export class SeamWindowSession {
     entry.linkMouseSuppressor = null;
     entry.linkProvider?.dispose?.();
     entry.linkProvider = null;
-    entry.webglAddon?.dispose?.();
-    entry.webglAddon = null;
+    this._disposePaneWebgl(entry);
     entry.term?.dispose?.();
     entry.term = null;
     entry.fitAddon = null;
@@ -1964,6 +1977,33 @@ export class SeamWindowSession {
     this._attachPaneLinkProvider(entry);
   }
 
+  _webglRetentionKey(entry) {
+    const scope = this.target?.windowId || this.target?.sessionId || 'window';
+    return `${scope}:${entry.paneId}`;
+  }
+
+  _disposePaneWebglImmediate(entry) {
+    if (!entry?.webglAddon) return;
+    const renderer = entry.term?._core?._renderService?._renderer?.value;
+    const canvas = renderer?._canvas ?? renderer?._gl?.canvas ?? null;
+    const gl = renderer?._gl ?? null;
+    if (canvas) stopReleasingWebglCanvasBacking(canvas);
+    const addon = entry.webglAddon;
+    entry.webglAddon = null;
+    try { addon.dispose?.(); } catch { /* ignore */ }
+    try { gl?.getExtension?.('WEBGL_lose_context')?.loseContext?.(); } catch { /* ignore */ }
+  }
+
+  _disposePaneWebgl(entry) {
+    if (!entry) return;
+    if (entry._retainedWebglKey) {
+      const key = entry._retainedWebglKey;
+      entry._retainedWebglKey = null;
+      this._webglRetentionRegistry.evict(key);
+    }
+    this._disposePaneWebglImmediate(entry);
+  }
+
   _attachWebglAddon(entry) {
     if (this.disposed || this.parked || !this.global.WebglAddon || this.panes.size > MAX_WEBGL_PANES || !entry?.term || entry.isRich || entry.webglAddon) {
       return;
@@ -1974,8 +2014,13 @@ export class SeamWindowSession {
     try {
       const addon = new this.global.WebglAddon.WebglAddon();
       addon.onContextLoss(() => {
-        addon.dispose();
-        if (entry.webglAddon === addon) entry.webglAddon = null;
+        if (entry.webglAddon !== addon) return;
+        entry.webglAddon = null;
+        if (entry._retainedWebglKey) {
+          this._webglRetentionRegistry.take(entry._retainedWebglKey);
+          entry._retainedWebglKey = null;
+        }
+        try { addon.dispose?.(); } catch { /* ignore */ }
         if (this.disposed) return;
         entry.webglRecovery?.recordLoss();
         entry.term?.refresh?.(0, Math.max(0, entry.term.rows - 1));
@@ -2005,10 +2050,48 @@ export class SeamWindowSession {
   _releaseWebglAddons() {
     this._cancelWebglAttach();
     for (const pane of this.panes.values()) {
-      if (!pane.webglAddon) continue;
-      pane.webglAddon.dispose?.();
-      pane.webglAddon = null;
+      this._disposePaneWebgl(pane);
     }
+  }
+
+  _retainHiddenWebglAddons() {
+    this._cancelWebglAttach();
+    for (const pane of this.panes.values()) {
+      if (!pane.webglAddon) continue;
+      const key = this._webglRetentionKey(pane);
+      pane._retainedWebglKey = key;
+      const renderer = pane.term?._core?._renderService?._renderer?.value;
+      const canvas = renderer?._canvas ?? renderer?._gl?.canvas ?? null;
+      const retained = this._webglRetentionRegistry.retain(key, {
+        canvas,
+        dispose: () => {
+          if (pane._retainedWebglKey === key) pane._retainedWebglKey = null;
+          this._disposePaneWebglImmediate(pane);
+        },
+      });
+      if (!retained) {
+        pane._retainedWebglKey = null;
+        this._disposePaneWebglImmediate(pane);
+      }
+    }
+  }
+
+  _restoreRetainedWebglAndRepaint() {
+    for (const pane of this.panes.values()) {
+      if (pane.isRich || !pane.term) continue;
+      const key = pane._retainedWebglKey || this._webglRetentionKey(pane);
+      this._webglRetentionRegistry.take(key);
+      pane._retainedWebglKey = null;
+      restoreReleasedPaneWebglCanvas(pane.term);
+      if (!pane.webglAddon && pane.paneId === this.activePaneId) {
+        this._attachWebglAddon(pane);
+      }
+      repairPaneWebglCanvasDpr(pane.term);
+      if (!forceRepaintThroughRenderPause(pane.term)) {
+        pane.term.refresh?.(0, Math.max(0, pane.term.rows - 1));
+      }
+    }
+    this._scheduleWebglAddons();
   }
 
   _scheduleWebglAddons() {
@@ -3856,6 +3939,10 @@ export class SeamWindowSession {
       this._cancelResizeTimer();
       return;
     }
+    const containerBox = readContainerClientSize(this.treeHost);
+    if (containerBox.width > 0 && containerBox.height > 0) {
+      this._lastFitContainerSize = containerBox;
+    }
     if (this._isMobile()) {
       const active = (this.activePaneId && this.panes.get(this.activePaneId)) || this.panes.values().next().value;
       if (active) this._syncMobileViewportTransform(active);
@@ -3919,7 +4006,58 @@ export class SeamWindowSession {
         this.lastRequestedSize = key;
         this._resizeHistory.add(key);
       }
-    }, 80);
+    }, 40);
+  }
+
+  _cancelStableFit() {
+    this._stableFitScheduler?.cancel?.();
+  }
+
+  _scheduleStableRevealFit() {
+    if (this.disposed || this.parked || !this.visible) return;
+    if (!this._stableFitScheduler) {
+      this._stableFitScheduler = createStableGridScheduler({
+        requestFrame: typeof this.global.requestAnimationFrame === 'function'
+          ? fn => this.global.requestAnimationFrame(fn)
+          : fn => this.global.setTimeout(fn, 16),
+        cancelFrame: typeof this.global.cancelAnimationFrame === 'function'
+          ? id => this.global.cancelAnimationFrame(id)
+          : id => this.global.clearTimeout(id),
+        measure: () => {
+          if (this.disposed || this.parked || !this.visible || !this.treeHost.isConnected) return null;
+          const box = readContainerClientSize(this.treeHost);
+          return box.width > 0 && box.height > 0 ? box : null;
+        },
+        onStable: () => {
+          if (!this.disposed && !this.parked && this.visible) {
+            this.fit();
+          }
+        },
+      });
+    }
+    this._stableFitScheduler.schedule();
+  }
+
+  _fitOnReveal() {
+    if (this.disposed || this.parked || !this.visible || !this.treeHost.isConnected) {
+      this._cancelResizeTimer();
+      this._cancelStableFit();
+      return;
+    }
+    const currentBox = readContainerClientSize(this.treeHost);
+    if (this._lastFitContainerSize
+      && currentBox.width > 0 && currentBox.height > 0
+      && !containerClientSizeChanged(this._lastFitContainerSize, currentBox)) {
+      this._cancelStableFit();
+      if (this._isMobile()) {
+        const active = (this.activePaneId && this.panes.get(this.activePaneId)) || this.panes.values().next().value;
+        if (active) this._syncMobileViewportTransform(active);
+      } else {
+        for (const pane of this.panes.values()) this._syncMobileViewportTransform(pane);
+      }
+      return;
+    }
+    this._scheduleStableRevealFit();
   }
 
   setParked(parked) {
@@ -3928,25 +4066,21 @@ export class SeamWindowSession {
     this.parked = next;
     if (next) {
       this._cancelResizeTimer();
-      this._releaseWebglAddons();
+      this._cancelStableFit();
+      const box = readContainerClientSize(this.treeHost);
+      if (box.width > 0 && box.height > 0) this._lastFitContainerSize = box;
+      this._retainHiddenWebglAddons();
       if (this.ws?.readyState === 1 && this.visible) {
         this._send({ type: 'visibility', visible: true, background: true });
       }
       return;
     }
+    this._cancelStableFit();
     if (this.ws?.readyState === 1 && this.visible) {
       this._send({ type: 'visibility', visible: true, background: false });
     }
-    for (const pane of this.panes.values()) {
-      if (!pane.isRich && pane.term) {
-        repairPaneWebglCanvasDpr(pane.term);
-        if (!forceRepaintThroughRenderPause(pane.term)) {
-          pane.term.refresh?.(0, Math.max(0, pane.term.rows - 1));
-        }
-      }
-    }
-    this._scheduleWebglAddons();
-    this.fit();
+    this._restoreRetainedWebglAndRepaint();
+    this._fitOnReveal();
     this._emitPanesChanged();
     if (!this.ws && this.visible && this.rendererPrepared && !this.retryTimer && !['detached', 'exited', 'invalid'].includes(this.status)) {
       this._connect();
@@ -3956,17 +4090,13 @@ export class SeamWindowSession {
   setVisible(visible) {
     if (this.visible === visible) return;
     this.visible = visible;
+    if (!visible) this._cancelStableFit();
     if (this.ws?.readyState === 1) {
       this._send({ type: 'visibility', visible, ...(visible && this.parked ? { background: true } : {}) });
     }
     if (visible && !this.parked) {
-      for (const pane of this.panes.values()) {
-        if (!pane.isRich && pane.term) {
-          repairPaneWebglCanvasDpr(pane.term);
-          forceRepaintThroughRenderPause(pane.term);
-        }
-      }
-      this.fit();
+      this._restoreRetainedWebglAndRepaint();
+      this._fitOnReveal();
       if (!this.ws && this.rendererPrepared && !this.retryTimer) this._connect();
     }
   }
@@ -4513,6 +4643,7 @@ export class SeamWindowSession {
     if (this.disposed) return;
     this.disposed = true;
     this._cancelWebglAttach();
+    this._cancelStableFit();
     this._activeDragCleanup?.(false);
     this._disconnect();
     this.global.clearTimeout(this.wheelTimer);

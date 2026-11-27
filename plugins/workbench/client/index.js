@@ -548,6 +548,20 @@ export function createWorkbench(global, options = {}) {
       owner.addedTerminalLayout = false;
     }
   }
+  function isRetainedStage(node) {
+    if (!node || typeof node !== 'object') return false;
+    if (mounted?.root === node) return true;
+    for (const cached of warmCache.values()) {
+      if (cached?.root === node) return true;
+    }
+    return false;
+  }
+  function clearNonStageChildren(container) {
+    if (!container?.childNodes) return;
+    for (const child of [...container.childNodes]) {
+      if (!isRetainedStage(child)) child.remove?.();
+    }
+  }
   function disposeOwner(owner) {
     if (!owner) return;
     owner.toolsCleanup?.(); owner.uploadCleanup?.(); for (const reader of owner.histories.values()) reader.close();
@@ -564,8 +578,10 @@ export function createWorkbench(global, options = {}) {
     global.clearTimeout(owner.hideTimer); owner.hideTimer = null;
     unbindOwnerEvents(owner);
     owner.actions.remove();
-    owner.root.remove();
     owner.session?.setParked?.(true);
+    owner.root.classList.add('is-parked');
+    owner.root.hidden = true;
+    owner.root.inert = true;
     warmCache.delete(owner.viewId);
     warmCache.set(owner.viewId, owner);
     while (warmCache.size > maxWarmViews) {
@@ -644,7 +660,11 @@ export function createWorkbench(global, options = {}) {
           mounted = cached;
           cached.host = container;
           cached.root.setAttribute('aria-label', view.title);
-          container.replaceChildren(cached.root);
+          cached.root.classList.remove('is-parked');
+          cached.root.hidden = false;
+          cached.root.inert = false;
+          clearNonStageChildren(container);
+          if (cached.root.parentNode !== container) container.append(cached.root);
           doc.body.classList.add('terminal-active');
           placeToolbar(cached);
           bindOwnerEvents(cached);
@@ -727,7 +747,7 @@ export function createWorkbench(global, options = {}) {
       owner.terminal = element('div', 'wb-window-terminal');
       owner.message = element('div', 'wb-window-message', '正在准备原生终端…'); owner.message.setAttribute('role', 'status');
       owner.root.append(owner.toolbar, owner.notice, owner.terminal, owner.message); installTools(owner);
-      container.replaceChildren(owner.root); doc.body.classList.add('terminal-active'); placeToolbar(owner);
+      clearNonStageChildren(container); container.append(owner.root); doc.body.classList.add('terminal-active'); placeToolbar(owner);
       owner.resize = () => { if (mounted === owner) { placeToolbar(owner); owner.session?.fit(); } };
       owner.visibility = () => {
         global.clearTimeout(owner.hideTimer);

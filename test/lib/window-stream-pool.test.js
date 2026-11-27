@@ -163,7 +163,7 @@ describe('ControlPool multi-pane window-stream', () => {
     expect(await lease.takeover()).toBe(true);
     expect(frames.filter(f => f.type === 'ready').at(-1)).toMatchObject({ sizeLease: 'owner', foreignClient: true });
     expect(await lease.resizeWindow(120, 40)).toBe(true);
-    expect(controls[0].commands).toContain('resize-window -t @2 -x 120 -y 40');
+    expect(controls[0].commands.some(c => c.includes('resize-window -t @2 -x 120 -y 40'))).toBe(true);
 
     // A NEW unknown foreign PID connects -> %client-session-changed revokes takeover immediately
     setClients('$1|441\n$1|888\n$1|777\n$1|999\n');
@@ -175,7 +175,7 @@ describe('ControlPool multi-pane window-stream', () => {
     pool.dispose();
   });
 
-  it('emits layout without resnapshot on selectPane, resnapshots on %layout-change resize, and recovers cleanly on %pause', async () => {
+  it('emits layout without redundant resnapshot on synced %layout-change resize, scopes notifications, and recovers cleanly on %pause', async () => {
     const { pool, controls, target, setWindowSpec } = makeFixture();
     const frames = [];
     const lease = await pool.subscribeWindow(target, f => frames.push(Buffer.isBuffer(f) ? decodeBinaryFrame(f) : f));
@@ -186,17 +186,24 @@ describe('ControlPool multi-pane window-stream', () => {
     expect(frames.filter(f => f.kind === 'snapshot')).toHaveLength(initialSnaps);
     expect(frames.filter(f => f.type === 'layout').at(-1).activePaneId).toBe('%4');
 
-    // Only %3 resizes -> only %3 re-snapshots!
+    // Synced pane resize emits layout update immediately without blocking behind capture-pane -Q!
     setWindowSpec({
       panes: [
         { id: '%3', index: 0, x: 0, y: 0, width: 90, height: 48, command: 'zsh', label: 'left', cwd: '/repo/a' },
         { id: '%4', index: 1, x: 91, y: 0, width: 79, height: 48, command: 'claude', label: 'right', cwd: '/repo/b' },
       ],
     });
+    const snapsBeforeLayout = frames.filter(f => f.kind === 'snapshot').length;
     controls[0].emit('notification', '%layout-change @2 ...');
     await new Promise(r => setTimeout(r, 20));
-    const newSnaps = frames.filter(f => f.kind === 'snapshot').slice(initialSnaps);
-    expect(newSnaps.map(s => s.paneId)).toEqual(['%3']);
+    expect(frames.filter(f => f.kind === 'snapshot')).toHaveLength(snapsBeforeLayout);
+    expect(frames.filter(f => f.type === 'layout').at(-1).panes[0].width).toBe(90);
+
+    // Notification scoped to another window (@99) does not redundantly reconcile @2
+    const layoutCountBeforeOther = frames.filter(f => f.type === 'layout').length;
+    controls[0].emit('notification', '%layout-change @99 ...');
+    await new Promise(r => setTimeout(r, 20));
+    expect(frames.filter(f => f.type === 'layout')).toHaveLength(layoutCountBeforeOther);
 
     // %pause recovery executes continue + capture-pane -Q atomically
     controls[0].emit('pause', '%4');
@@ -208,7 +215,7 @@ describe('ControlPool multi-pane window-stream', () => {
     pool.dispose();
   });
 
-  it('keeps snapshot seq monotonic across resize resyncs so client output never stalls', async () => {
+  it('keeps seq monotonic across resize layout updates and holds post-resize output until layout broadcasts', async () => {
     const { pool, controls, target, setWindowSpec } = makeFixture();
     const frames = [];
     const lease = await pool.subscribeWindow(target, f => frames.push(Buffer.isBuffer(f) ? decodeBinaryFrame(f) : f));
@@ -222,6 +229,14 @@ describe('ControlPool multi-pane window-stream', () => {
     controls[0].emit('output', '%3', Buffer.from('b'));
     expect(frames.filter(f => f.kind === 'output' && f.paneId === '%3').map(o => o.seq)).toEqual([1, 2]);
 
+    // Hold post-resize output while resize-pane runs so `layout` arrives strictly before `'c'`
+    const origCmd = controls[0].command.bind(controls[0]);
+    controls[0].command = async (text, opts) => {
+      if (text.startsWith('resize-pane -t %3 -x 70')) {
+        controls[0].emit('output', '%3', Buffer.from('c'));
+      }
+      return origCmd(text, opts);
+    };
     setWindowSpec({
       panes: [
         { id: '%3', index: 0, x: 0, y: 0, width: 70, height: 48, command: 'zsh', label: 'left', cwd: '/repo/a' },
@@ -231,14 +246,11 @@ describe('ControlPool multi-pane window-stream', () => {
     expect(await lease.resizePaneSize('%3', { cols: 70 })).toBe(true);
     expect(controls[0].commands).toContain('resize-pane -t %3 -x 70');
 
-    const resyncSnap = frames.filter(f => f.kind === 'snapshot' && f.paneId === '%3').at(-1);
-    expect(resyncSnap.seq).toBe(3);
-
-    controls[0].emit('output', '%3', Buffer.from('c'));
-    expect(frames.filter(f => f.kind === 'output' && f.paneId === '%3').at(-1)).toMatchObject({
-      seq: 4,
-    });
-    expect(frames.filter(f => f.kind === 'output' && f.paneId === '%3').at(-1).data.toString()).toBe('c');
+    const lastLayoutIdx = frames.findLastIndex(f => f.type === 'layout');
+    const cOutputIdx = frames.findLastIndex(f => f.kind === 'output' && f.paneId === '%3' && f.data.toString() === 'c');
+    expect(lastLayoutIdx).toBeGreaterThan(-1);
+    expect(cOutputIdx).toBeGreaterThan(lastLayoutIdx);
+    expect(frames[cOutputIdx].seq).toBe(3);
 
     // Atomic multi-pane resizePaneBatch executes a single tmux transaction and advances seq monotonically
     setWindowSpec({
@@ -249,15 +261,15 @@ describe('ControlPool multi-pane window-stream', () => {
     });
     expect(await lease.resizePaneBatch([{ paneId: '%3', cols: 75 }, { paneId: '%4', rows: 20 }])).toBe(true);
     expect(controls[0].commands).toContain('resize-pane -t %3 -x 75 ; resize-pane -t %4 -y 20');
-    const snapAfterBatch = frames.filter(f => f.kind === 'snapshot' && f.paneId === '%3').at(-1);
-    expect(snapAfterBatch.seq).toBe(5);
     controls[0].emit('output', '%3', Buffer.from('d'));
-    expect(frames.filter(f => f.kind === 'output' && f.paneId === '%3').at(-1)).toMatchObject({ seq: 6 });
+    expect(frames.filter(f => f.kind === 'output' && f.paneId === '%3').at(-1)).toMatchObject({ seq: 4 });
 
     // Explicit resync with forceSnapshot refreshes VT snapshot even without dimension changes (e.g. respawn-pane).
     const snapsBeforeResync = frames.filter(f => f.kind === 'snapshot' && f.paneId === '%3').length;
     expect(await lease.resync({ paneId: '%3', forceSnapshot: true })).toBe(true);
     expect(frames.filter(f => f.kind === 'snapshot' && f.paneId === '%3')).toHaveLength(snapsBeforeResync + 1);
+    controls[0].emit('output', '%3', Buffer.from('e'));
+    expect(frames.filter(f => f.kind === 'output' && f.paneId === '%3').at(-1)).toMatchObject({ seq: 6 });
 
     lease.close();
     pool.dispose();
@@ -372,6 +384,7 @@ describe('ControlPool multi-pane window-stream', () => {
       pauseAfterSec: 5,
       initialSnapshotHistoryLines: 100,
       resizeSnapshotHistoryLines: 10,
+      resizeSnapshotOnChange: true,
       createControl: () => {
         control = new (class extends EventEmitter {
           constructor() { super(); this.commands = []; this.child = { pid: 999 }; }
@@ -409,14 +422,20 @@ describe('ControlPool multi-pane window-stream', () => {
     const resizedSnap = frames.filter(f => f.kind === 'snapshot' && f.paneId === '%4').at(-1);
     expect(resizedSnap.historyLines).toBe(10);
 
-    // Post-resize SIGWINCH redraw storm (\x1b[2J\x1b[3J\x1b[H + 60KB burst) is coalesced into a single compacted 0x02 snapshot with 0 bytes of flooded 0x01 output.
+    // Moderate post-resize TUI clear+redraw bursts (e.g. 60KB < 512KB) stream live immediately without coalescing into a snapshot,
+    // while massive floods (>= 512KB) still trigger emergency burst coalescing.
+    const outputsBeforeModerate = frames.filter(f => f.kind === 'output' && f.paneId === '%4').length;
+    const snapsBeforeModerate = frames.filter(f => f.kind === 'snapshot' && f.paneId === '%4').length;
+    control.emit('output', '%4', Buffer.from('\x1b[2J\x1b[3J\x1b[H' + 'TUI_REDRAW\r\n'.repeat(4500)));
+    expect(frames.filter(f => f.kind === 'output' && f.paneId === '%4')).toHaveLength(outputsBeforeModerate + 1);
+    expect(frames.filter(f => f.kind === 'snapshot' && f.paneId === '%4')).toHaveLength(snapsBeforeModerate);
+
     const outputsBeforeBurst = frames.filter(f => f.kind === 'output' && f.paneId === '%4').length;
-    const snapsBeforeBurst = frames.filter(f => f.kind === 'snapshot' && f.paneId === '%4').length;
-    control.emit('output', '%4', Buffer.from('\x1b[2J\x1b[3J\x1b[H' + 'TURN_REPLAY\r\n'.repeat(4500)));
+    control.emit('output', '%4', Buffer.from('\x1b[2J\x1b[3J\x1b[H' + 'TURN_REPLAY\r\n'.repeat(42000)));
     expect(frames.filter(f => f.kind === 'output' && f.paneId === '%4')).toHaveLength(outputsBeforeBurst);
     await new Promise(r => setTimeout(r, 150));
     const snapsAfterBurst = frames.filter(f => f.kind === 'snapshot' && f.paneId === '%4');
-    expect(snapsAfterBurst).toHaveLength(snapsBeforeBurst + 1);
+    expect(snapsAfterBurst).toHaveLength(snapsBeforeModerate + 1);
     expect(snapsAfterBurst.at(-1).historyLines).toBe(10);
 
     // Normal small live output still streams immediately as binary 0x01 after burst settles.
@@ -764,10 +783,10 @@ describe('ControlPool multi-pane window-stream', () => {
       ],
     });
     expect(await lease.resizeWindow(81, 40)).toBe(true);
-    expect(controls[0].commands).toContain('resize-window -t @2 -x 81 -y 40');
-    const selectCmd = controls[0].commands.find((c) => c.startsWith('select-layout -t @2 '));
-    expect(selectCmd).toBeTruthy();
-    expect(selectCmd).toContain('81x40,0,0{20x40,0,0,3,60x40,21,0,4}');
+    const shrinkCmd = controls[0].commands.find((c) => c.includes('resize-window -t @2 -x 81 -y 40'));
+    expect(shrinkCmd).toBeTruthy();
+    expect(shrinkCmd).toContain("select-layout -t @2 '");
+    expect(shrinkCmd).toContain("81x40,0,0{20x40,0,0,3,60x40,21,0,4}'");
 
     // Now drag divider explicitly to 50:30 at 81 cols -> updates intent ratio to 5:3!
     setWindowSpec({
@@ -783,8 +802,9 @@ describe('ControlPool multi-pane window-stream', () => {
 
     // Re-expand 81 -> 161 cols: uses updated 5:3 intent => 100:60!
     await lease.resizeWindow(161, 40);
-    const expandCmd = controls[0].commands.filter((c) => c.startsWith('select-layout -t @2 ')).at(-1);
-    expect(expandCmd).toContain('161x40,0,0{100x40,0,0,3,60x40,101,0,4}');
+    const expandCmd = controls[0].commands.filter((c) => c.includes('resize-window -t @2 -x 161 -y 40')).at(-1);
+    expect(expandCmd).toContain("select-layout -t @2 '");
+    expect(expandCmd).toContain("161x40,0,0{100x40,0,0,3,60x40,101,0,4}'");
 
     lease.close();
     pool.dispose();

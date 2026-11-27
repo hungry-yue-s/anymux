@@ -2,6 +2,8 @@
 // theme contrast resolution, DOM block fills (U+2580..U+2595), and selection gutter stripping.
 // Ported from stablyai/orca (MIT).
 
+import { stopReleasingWebglCanvasBacking } from './webgl-retention.js';
+
 export const WEBGL_CONTEXT_LOSS_RETRY_LIMIT = 3;
 export const WEBGL_CONTEXT_LOSS_RETRY_WINDOW_MS = 60_000;
 export const LIGHT_BG_MIN_CONTRAST = 4.5;
@@ -90,6 +92,29 @@ export function repairPaneWebglCanvasDpr(term) {
   } catch {
     return 'deferred';
   }
+}
+
+/** Restore WebGL canvas backing dimensions synchronously after hidden backing release. */
+export function restoreReleasedPaneWebglCanvas(term, devicePixelSize = null) {
+  const renderer = term?._core?._renderService?._renderer?.value;
+  const canvas = renderer?._canvas ?? renderer?._gl?.canvas;
+  if (!canvas) return false;
+  const saved = stopReleasingWebglCanvasBacking(canvas);
+  const expected = renderer?.dimensions?.device?.canvas || term?._core?._renderService?.dimensions?.device?.canvas;
+  const targetW = Math.round(Number(devicePixelSize?.width) || Number(expected?.width) || Number(saved?.width) || 0);
+  const targetH = Math.round(Number(devicePixelSize?.height) || Number(expected?.height) || Number(saved?.height) || 0);
+  const needsRestore = Boolean(saved) || canvas.width === 0 || canvas.height === 0;
+  if (!needsRestore) return false;
+  if (targetW > 0 && targetH > 0) {
+    canvas.width = targetW;
+    canvas.height = targetH;
+  }
+  try {
+    renderer?.handleDevicePixelRatioChange?.();
+    renderer?.handleResize?.(term.cols, term.rows);
+    term.refresh?.(0, Math.max(0, (term.rows || 1) - 1));
+  } catch { /* ignore */ }
+  return true;
 }
 
 /** Read grid-independent cell dimensions from device pixel metrics divided by DPR. */
