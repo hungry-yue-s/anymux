@@ -1,10 +1,55 @@
 import { describe, expect, it } from 'vitest';
 import express from 'express';
 import request from 'supertest';
-import { parsePaneArgs, parseSessionsArgs, parseWorkspaceArgs, parseWorktreeArgs } from '../../bin/anymux.mjs';
+import {
+  collectSourceContext,
+  formatRetryCommand,
+  parsePaneArgs,
+  parseSessionsArgs,
+  parseTmuxServerPid,
+  parseWorkspaceArgs,
+  parseWorktreeArgs,
+} from '../../bin/anymux.mjs';
 import { createBrowserRouter } from '../../plugins/browser/index.js';
 
 describe('anymux orchestration CLI & agent-browser bridge', () => {
+  it('collects tmux server pid, pane provenance, codex thread id, and retry commands', () => {
+    expect(parseTmuxServerPid('/private/tmp/tmux-501/default,18130,3')).toBe('18130');
+    expect(parseTmuxServerPid('/tmp/sock,0,1')).toBeNull();
+    expect(parseTmuxServerPid('')).toBeNull();
+
+    expect(collectSourceContext({
+      explicitPane: '%33',
+      env: { TMUX: '/tmp/sock,1873,0', TMUX_PANE: '%0', CODEX_THREAD_ID: 'thread-123' },
+      pid: 4567,
+    })).toEqual({
+      paneId: '%33',
+      paneSource: 'arg',
+      tmuxServerPid: '1873',
+      callerPid: 4567,
+      codexThreadId: 'thread-123',
+    });
+
+    expect(collectSourceContext({
+      explicitPane: null,
+      env: { TMUX: '/tmp/sock,1873,0', TMUX_PANE: '%0', CODEX_SESSION_ID: 'sess_abc' },
+      pid: 4567,
+    })).toEqual({
+      paneId: '%0',
+      paneSource: 'env',
+      tmuxServerPid: '1873',
+      callerPid: 4567,
+      codexThreadId: 'sess_abc',
+    });
+
+    expect(collectSourceContext({ explicitPane: null, env: {}, pid: 4567 })).toEqual({
+      paneSource: 'none',
+      callerPid: 4567,
+    });
+
+    expect(formatRetryCommand(['open', '--dock', '--pane', '<PANE_ID>', '/tmp/my doc.md'], { scriptPath: '/opt/anymux/bin/anymux.mjs' }))
+      .toBe("node /opt/anymux/bin/anymux.mjs open --dock --pane '<PANE_ID>' '/tmp/my doc.md'");
+  });
   it('parses workspace, worktree, sessions, and pane CLI options accurately', () => {
     expect(parseWorkspaceArgs(['new', '--name', 'dev', '--cwd', '/repo', '--session', '$2'])).toEqual({
       sub: 'new', name: 'dev', cwd: '/repo', session: '$2',

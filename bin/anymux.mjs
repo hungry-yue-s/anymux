@@ -51,6 +51,49 @@ function currentPane() {
   return process.env.TMUX_PANE || null;
 }
 
+export function parseTmuxServerPid(tmuxEnv = process.env.TMUX) {
+  const parts = String(tmuxEnv || '').split(',');
+  if (parts.length < 3) return null;
+  const pid = parts[parts.length - 2].trim();
+  return /^\d+$/.test(pid) && Number(pid) > 0 ? pid : null;
+}
+
+export function collectSourceContext({ explicitPane = null, env = process.env, pid = process.pid } = {}) {
+  const trimmedExplicit = typeof explicitPane === 'string' && explicitPane.trim() ? explicitPane.trim() : null;
+  const trimmedEnv = typeof env?.TMUX_PANE === 'string' && env.TMUX_PANE.trim() ? env.TMUX_PANE.trim() : null;
+  const paneSource = trimmedExplicit ? 'arg' : (trimmedEnv ? 'env' : 'none');
+  const paneId = trimmedExplicit || trimmedEnv || null;
+  const tmuxServerPid = parseTmuxServerPid(env?.TMUX ?? '');
+  const rawThread = env?.CODEX_THREAD_ID || env?.CODEX_SESSION_ID || '';
+  const codexThreadId = typeof rawThread === 'string' && /^[A-Za-z0-9._-]{1,128}$/.test(rawThread.trim())
+    ? rawThread.trim() : null;
+  return {
+    ...(paneId ? { paneId } : {}),
+    paneSource,
+    ...(tmuxServerPid ? { tmuxServerPid } : {}),
+    ...(Number.isInteger(pid) && pid > 1 ? { callerPid: pid } : {}),
+    ...(codexThreadId ? { codexThreadId } : {}),
+  };
+}
+
+function quoteArg(value) {
+  const str = String(value);
+  return /^[A-Za-z0-9_./:@%+=,-]+$/.test(str) ? str : `'${str.replace(/'/g, `'\\''`)}'`;
+}
+
+export function formatRetryCommand(subcommandArgs, { scriptPath = process.argv[1] } = {}) {
+  const prefix = scriptPath ? ['node', quoteArg(scriptPath)] : ['anymux'];
+  return [...prefix, ...subcommandArgs.map(quoteArg)].join(' ');
+}
+
+function appendRetryHint(error, retryCommand) {
+  const message = error?.message || '';
+  if (/\bpreview_source_(?:ambiguous|untrusted|unavailable|invalid_pane)\b/.test(message) && message.includes('--pane')) {
+    error.message = `${message}\nRetry command:\n  ${retryCommand}`;
+  }
+  throw error;
+}
+
 function takeOption(args, names, { flag = false } = {}) {
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--') return flag ? false : null;
@@ -159,12 +202,15 @@ async function cmdOpen(args) {
   const replaces = takeOption(args, ['--replaces']);
   const kind = takeOption(args, ['--kind']);
   const owner = takeOption(args, ['--owner']);
-  const pane = takeOption(args, ['--pane', '-t']) || currentPane();
+  const explicitPane = takeOption(args, ['--pane', '-t']);
+  const sourceCtx = collectSourceContext({ explicitPane });
   const raw = rest(args)[0];
   if (!raw) die(USAGE);
   let body;
+  let retryArgs = null;
   if (/^https?:\/\//i.test(raw)) {
     body = { url: raw };
+    if (sourceCtx.paneId) body.paneId = sourceCtx.paneId;
   } else {
     const { target, fragment } = splitFragment(raw);
     body = { path: absolutePath(target) };
@@ -172,27 +218,55 @@ async function cmdOpen(args) {
       body.placement = 'dock';
       body.cwd = process.cwd();
       if (background) body.activate = false;
+      Object.assign(body, sourceCtx);
+      retryArgs = [
+        'open',
+        background ? '--background' : '--dock',
+        '--pane', '<PANE_ID>',
+        ...(replaces ? ['--replaces', absolutePath(replaces)] : []),
+        ...(kind ? ['--kind', kind] : []),
+        ...(owner ? ['--owner', owner] : []),
+        raw,
+      ];
+    } else if (sourceCtx.paneId) {
+      body.paneId = sourceCtx.paneId;
     }
     if (fragment) body.fragment = fragment;
     if (replaces) body.replaces = absolutePath(replaces);
     if (kind) body.kind = kind;
     if (owner) body.owner = owner;
   }
-  if (pane) body.paneId = pane;
-  const result = await postJson('/api/open', body);
-  process.stdout.write(`requested ${result.path || result.url}${body.placement === 'dock' ? ' (side panel, window ' + result.windowId + ')' : ''}\n`);
+  const result = await postJson('/api/open', body).catch((error) => {
+    if (retryArgs) appendRetryHint(error, formatRetryCommand(retryArgs));
+    throw error;
+  });
+  process.stdout.write(`requested ${result.path || result.url}${body.placement === 'dock' ? ` (side panel, window ${result.windowId}${result.paneId ? `, pane ${result.paneId}` : ''})` : ''}\n`);
 }
 
 async function cmdGit(args) {
   if (args.shift() !== 'show') die(USAGE);
   const background = takeOption(args, ['--background', '-b'], { flag: true });
   const repo = takeOption(args, ['--repo', '-C']) || '.';
-  const paneId = takeOption(args, ['--pane', '-t']) || currentPane();
+  const explicitPane = takeOption(args, ['--pane', '-t']);
+  const sourceCtx = collectSourceContext({ explicitPane });
   const remaining = rest(args);
   const commit = remaining[0] || 'HEAD';
   if (remaining.length > 1 || !/^(HEAD|[0-9a-f]{4,64})$/i.test(commit)) die('anymux: expected a commit hash or HEAD');
-  const data = await postJson('/api/git/open', { path: absolutePath(repo), paneId, commit, cwd: process.cwd(), activate: !background });
-  process.stdout.write(`requested commit ${data.commit} in ${data.path} (window ${data.windowId}${background ? ', background' : ''})\n`);
+  const absRepo = absolutePath(repo);
+  const retryArgs = [
+    'git', 'show', commit,
+    ...(background ? ['--background'] : []),
+    '--repo', absRepo,
+    '--pane', '<PANE_ID>',
+  ];
+  const data = await postJson('/api/git/open', {
+    path: absRepo,
+    commit,
+    cwd: process.cwd(),
+    activate: !background,
+    ...sourceCtx,
+  }).catch((error) => appendRetryHint(error, formatRetryCommand(retryArgs)));
+  process.stdout.write(`requested commit ${data.commit} in ${data.path} (window ${data.windowId}${data.paneId ? `, pane ${data.paneId}` : ''}${background ? ', background' : ''})\n`);
 }
 
 async function cmdDoc(args) {
