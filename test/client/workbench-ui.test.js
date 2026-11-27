@@ -525,12 +525,18 @@ describe('native workbench UI', () => {
     await f.api.render('dev', view.id, { container: f.host });
     const session = f.sessions[0];
 
-    // Quick buttons exist in actions bar before the ⋯ menu and prevent mousedown focus steal
+    // Quick buttons exist in actions bar before the ⋯ menu; layout reveals on >=2 panes; mousedown preserves focus
     const quickBtns = [...f.win.document.querySelectorAll('.wb-quick-action')].map((b) => b.dataset.wbQuick);
-    expect(quickBtns).toEqual(['split-h', 'files', 'git']);
-    const splitQuick = f.win.document.querySelector('.wb-quick-action[data-wb-quick="split-h"]');
+    expect(quickBtns).toEqual(['layout', 'files']);
+    const layoutQuick = f.win.document.querySelector('.wb-quick-action[data-wb-quick="layout"]');
+    expect(layoutQuick.hidden).toBe(true);
+    session.options.onPaneCount(2);
+    expect(layoutQuick.hidden).toBe(false);
+    session.options.onPaneCount(1);
+    expect(layoutQuick.hidden).toBe(true);
+    const filesQuick = f.win.document.querySelector('.wb-quick-action[data-wb-quick="files"]');
     const md = new f.win.MouseEvent('mousedown', { bubbles: true, cancelable: true });
-    splitQuick.dispatchEvent(md);
+    filesQuick.dispatchEvent(md);
     expect(md.defaultPrevented).toBe(true);
 
     // Mobile pinned keyboard dismiss sits in tools outside quick-keys and blurs active textarea

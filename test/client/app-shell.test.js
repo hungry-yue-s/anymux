@@ -342,7 +342,7 @@ describe('AppShell sidebar preferences', () => {
   it('clamps the width to the resizer range', () => {
     const ctx = loadShell();
     expect(ctx.Shell.setSidebarWidth(50)).toBe(220);
-    expect(ctx.Shell.setSidebarWidth(9999)).toBe(360);
+    expect(ctx.Shell.setSidebarWidth(9999)).toBe(420);
     expect(ctx.Shell.setSidebarWidth(248.6)).toBe(249);
   });
 

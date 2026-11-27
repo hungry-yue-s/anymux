@@ -47,7 +47,7 @@ describe('Store initial state', () => {
       },
       ui: {
         sidebarCollapsed: true,
-        sidebarWidth: 248,
+        sidebarWidth: 272,
         expandedSessionIdsByServer: {},
         terminalModeByServer: {},
         lastStatusServerId: null,
@@ -194,7 +194,7 @@ describe('Store ui prefs persistence', () => {
     const { Store } = loadStore({ tmux_ui_prefs: '{not json' });
     expect(() => Store.loadUiPrefs()).not.toThrow();
     expect(Store.getState().ui.sidebarCollapsed).toBe(true);
-    expect(Store.getState().ui.sidebarWidth).toBe(248);
+    expect(Store.getState().ui.sidebarWidth).toBe(272);
   });
 
   it('tolerates absent prefs', () => {
@@ -204,7 +204,7 @@ describe('Store ui prefs persistence', () => {
   });
 
   it('clamps a persisted sidebar width into the usable range', () => {
-    for (const [stored, expected] of [[9999, 360], [10, 220], ['300', 300], [248.6, 249]]) {
+    for (const [stored, expected] of [[9999, 420], [10, 220], ['300', 300], [248.6, 249]]) {
       const { Store } = loadStore({ tmux_ui_prefs: JSON.stringify({ sidebarWidth: stored }) });
       Store.loadUiPrefs();
       expect(Store.getState().ui.sidebarWidth).toBe(expected);
@@ -228,7 +228,7 @@ describe('Store ui prefs persistence', () => {
 
     const ui = Store.getState().ui;
     expect(ui.sidebarCollapsed).toBe(true);
-    expect(ui.sidebarWidth).toBe(248);
+    expect(ui.sidebarWidth).toBe(272);
     expect(ui.expandedSessionIdsByServer).toEqual({});
     expect(ui.terminalModeByServer).toEqual({});
     expect(ui.lastStatusServerId).toBeNull();
@@ -374,7 +374,7 @@ describe('Store storage resilience', () => {
   it('tolerates a non-object payload', () => {
     const { Store } = loadStore({ tmux_ui_prefs: '"nope"' });
     Store.loadUiPrefs();
-    expect(Store.getState().ui.sidebarWidth).toBe(248);
+    expect(Store.getState().ui.sidebarWidth).toBe(272);
   });
 
   it('survives a throwing localStorage', () => {

@@ -31,7 +31,7 @@ var LayoutPicker = (function () {
     var style = document.createElement('style');
     style.id = 'layout-picker-styles';
     style.textContent = [
-      '.lp-backdrop{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);z-index:100;align-items:center;justify-content:center;}',
+      '.lp-backdrop{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);z-index:12000;align-items:center;justify-content:center;}',
       '.lp-backdrop.show{display:flex;}',
       '.lp-picker{position:relative;display:flex;flex-direction:column;gap:0;}',
 
@@ -174,7 +174,9 @@ var LayoutPicker = (function () {
   // ─── Open / Close / Toggle ───
   function open() {
     if (isOpen) return;
-    if (!state.currentSession || state.currentWindow == null) {
+    var hasTarget = typeof TerminalTarget !== 'undefined' && Boolean(TerminalTarget.windowId);
+    var hasLegacy = typeof state !== 'undefined' && Boolean(state.currentSession) && state.currentWindow != null;
+    if (!hasTarget && !hasLegacy) {
       if (typeof _showToast === 'function') _showToast('No active window', 2000);
       return;
     }

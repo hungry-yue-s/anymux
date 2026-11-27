@@ -2,9 +2,9 @@
 body {
   color:var(--workspace-text,var(--text-primary));
   --text-muted:var(--workspace-muted,var(--text-secondary));
-  --workspace-chrome-height:36px;
+  --workspace-chrome-height:42px;
 }
-html.tmux-native-titlebar body { --workspace-chrome-height:36px; }
+html.tmux-native-titlebar body { --workspace-chrome-height:42px; }
 .ms-app,.ms-modal-backdrop,.ms-popover,.cmd-palette-overlay,.notification-panel {
   --bg-primary:var(--workspace-bg); --bg-deep:var(--workspace-sidebar);
   --bg-card:var(--workspace-panel); --bg-hover:var(--workspace-hover);
@@ -27,41 +27,41 @@ html.tmux-native-titlebar body { --workspace-chrome-height:36px; }
 }
 .workspace-chrome:has(.wb-workbench-menu[open],.workspace-terminal-more[open],.workspace-pane-picker[open]) { z-index:95; }
 .workspace-chrome .brand {
-  height:100%; min-height:0; padding:0 8px 0 12px; gap:6px; border:0; border-right:1px solid var(--workspace-line);
+  height:100%; min-height:0; padding:0 10px 0 14px; gap:8px; border:0; border-right:1px solid var(--workspace-line);
   background:color-mix(in srgb,var(--workspace-sidebar) 70%,var(--workspace-bg)); overflow:hidden;
 }
 .workspace-chrome .brand-mark { display:none; }
 .workspace-chrome .brand-meta { display:none; }
 .workspace-chrome .brand-copy { flex:1; min-width:0; }
-.workspace-chrome .brand-name { font-size:13px; font-weight:600; letter-spacing:-.02em; }
+.workspace-chrome .brand-name { font-size:13.5px; font-weight:600; letter-spacing:-.02em; }
 .workspace-chrome .sidebar-toggle {
-  width:26px; height:26px; min-width:26px; flex:0 0 26px; border:0;
-  background:none; border-radius:6px; color:var(--workspace-muted); font-size:16px;
+  width:30px; height:30px; min-width:30px; flex:0 0 30px; border:0;
+  background:none; border-radius:7px; color:var(--workspace-muted); font-size:16px;
 }
 .workspace-chrome .sidebar-toggle:hover { color:var(--workspace-text); background:var(--workspace-hover); }
-.workspace-chrome .sidebar-toggle svg { width:15px; height:15px; }
+.workspace-chrome .sidebar-toggle svg { width:16px; height:16px; }
 .workspace-chrome .sidebar-toggle .sidebar-panel { stroke:none; fill:currentColor; opacity:0; }
 .workspace-chrome .sidebar-toggle[aria-expanded="true"] .sidebar-panel { opacity:.2; }
 .workspace-chrome .ms-topbar,.workspace-chrome .ms-topbar.terminal-layout {
-  display:flex; align-items:center; gap:10px; position:relative; top:auto;
+  display:flex; align-items:center; gap:4px; position:relative; top:auto;
   grid-row:auto; grid-column:auto; width:100%; height:100%; min-height:0;
-  margin:0; padding:0 12px; border:0; border-radius:0; background:none;
+  margin:0; padding:0 14px; border:0; border-radius:0; background:none;
   box-shadow:none; backdrop-filter:none; -webkit-backdrop-filter:none;
 }
 .workspace-chrome .crumbs,.workspace-chrome .terminal-layout .crumbs {
-  display:flex; align-items:center; gap:8px; min-width:0; flex:1; text-align:left;
+  display:flex; align-items:center; gap:7px; min-width:0; flex:1; margin-right:6px; text-align:left;
 }
-.workspace-chrome .window-context { display:flex; align-items:center; gap:8px; min-width:0; flex:0 1 auto; }
+.workspace-chrome .window-context { display:flex; align-items:center; gap:7px; min-width:0; flex:0 1 auto; }
 .workspace-chrome .window-context.copyable { cursor:copy; border-radius:4px; }
 .workspace-chrome .window-context.copyable:hover { background:var(--workspace-hover); }
 .workspace-chrome .window-context.copyable:focus-visible { outline:2px solid var(--accent-blue); outline-offset:3px; }
 .workspace-chrome .ms-topbar .crumb {
   display:block; overflow:hidden; text-overflow:ellipsis;
-  white-space:nowrap; color:var(--workspace-muted); font-size:11px; line-height:1.4;
+  white-space:nowrap; color:var(--workspace-muted); font-size:12.5px; line-height:1.4;
 }
-.workspace-chrome .crumb:not(:empty)::after { content:"/"; margin-left:8px; color:var(--workspace-line-strong); }
+.workspace-chrome .crumb:not(:empty)::after { content:"/"; margin-left:7px; color:var(--workspace-line-strong); }
 .workspace-chrome .page-title,.workspace-chrome .terminal-layout .page-title {
-  margin:0; min-width:0; font-size:12.5px; font-weight:600; line-height:1.4;
+  margin:0; min-width:0; font-size:13.5px; font-weight:600; line-height:1.4;
   letter-spacing:-.01em; text-shadow:none; white-space:nowrap;
   overflow:hidden; text-overflow:ellipsis; color:var(--workspace-text);
 }
@@ -70,38 +70,31 @@ html.tmux-native-titlebar body { --workspace-chrome-height:36px; }
   display:flex; align-items:center; gap:4px; flex-shrink:0; flex-wrap:nowrap;
   padding:0; margin:0; border:0; background:none; border-radius:0; box-shadow:none;
 }
+.workspace-chrome .top-actions:not(:empty) {
+  padding-right:8px; margin-right:4px; border-right:1px solid var(--workspace-line);
+}
 .workspace-chrome .terminal-tool-btn,.workspace-chrome .terminal-tool-button,
 .workspace-chrome .workspace-notification,.workspace-chrome .wb-icon-button {
-  display:inline-flex; align-items:center; justify-content:center; flex:0 0 26px;
-  width:26px; min-width:26px; height:26px; min-height:26px; padding:0;
-  border:0; border-radius:6px; background:none; box-shadow:none; color:var(--workspace-muted);
+  display:inline-flex; align-items:center; justify-content:center; flex:0 0 30px;
+  width:30px; min-width:30px; height:30px; min-height:30px; padding:0;
+  border:0; border-radius:7px; background:none; box-shadow:none; color:var(--workspace-muted);
 }
-.workspace-chrome .wb-icon-button.wb-quick-action.has-label {
-  flex:0 0 auto; width:auto; gap:5px; padding:0 7px; font-size:11.5px; font-weight:500; white-space:nowrap;
-}
-.workspace-chrome .wb-quick-action.has-label svg { width:14px; height:14px; flex:none; }
-@media (max-width:1180px) {
-  .workspace-chrome .wb-quick-label { display:none; }
-  .workspace-chrome .wb-icon-button.wb-quick-action.has-label { flex:0 0 26px; width:26px; padding:0; }
-}
-@media (max-width:1320px) {
-  body.fp-side-open .workspace-chrome .wb-quick-label { display:none; }
-  body.fp-side-open .workspace-chrome .wb-icon-button.wb-quick-action.has-label { flex:0 0 26px; width:26px; padding:0; }
-}
-body.fp-side-open .workspace-chrome .wb-dock-toggle { color:var(--workspace-accent); background:var(--workspace-hover); }
+.workspace-chrome .wb-icon-button[hidden] { display:none; }
+.workspace-chrome .wb-icon-button svg,.workspace-chrome .workspace-notification svg { width:16px; height:16px; }
 .workspace-chrome .terminal-tool-btn:hover,.workspace-chrome .workspace-notification:hover,.workspace-chrome .wb-icon-button:hover {
   color:var(--workspace-text); background:var(--workspace-hover);
 }
 .needs-you-pill {
-  display:inline-flex; align-items:center; gap:5px; height:24px; padding:0 8px;
+  display:inline-flex; align-items:center; gap:6px; height:28px; padding:0 10px;
   border:1px solid color-mix(in srgb,var(--accent-yellow,#e0af68) 45%,transparent);
   border-radius:999px;
   background:color-mix(in srgb,var(--accent-yellow,#e0af68) 14%,transparent);
   color:var(--accent-yellow,#e0af68);
-  font-size:11px; font-weight:600; white-space:nowrap; cursor:pointer; flex:none;
+  font-size:12px; font-weight:600; white-space:nowrap; cursor:pointer; flex:none;
 }
 .needs-you-pill[hidden] { display:none; }
 .needs-you-pill:hover { background:color-mix(in srgb,var(--accent-yellow,#e0af68) 22%,transparent); }
+.workspace-chrome .ms-topbar:has(.needs-you-pill:not([hidden])) .workspace-notification { display:none; }
 .workspace-chrome .terminal-mode-toggle {
   padding:2px; gap:2px; border:1px solid var(--workspace-line); border-radius:8px; background:none;
 }
@@ -109,13 +102,13 @@ body.fp-side-open .workspace-chrome .wb-dock-toggle { color:var(--workspace-acce
   color:var(--workspace-accent); background:var(--workspace-hover); box-shadow:none;
 }
 .workspace-jump {
-  display:inline-flex; align-items:center; gap:6px; height:24px; max-width:148px;
-  flex-shrink:0; border:1px solid var(--workspace-line); background:none;
-  color:var(--workspace-muted); padding:0 7px; border-radius:6px; font-size:11.5px; white-space:nowrap;
+  display:inline-flex; align-items:center; justify-content:center; width:30px; min-width:30px; height:30px;
+  flex:0 0 30px; border:0; background:none;
+  color:var(--workspace-muted); padding:0; border-radius:7px; white-space:nowrap;
 }
-.workspace-jump svg { width:13px; height:13px; fill:none; stroke:currentColor; stroke-width:1.6; }
-.workspace-jump kbd { font:10.5px/1 -apple-system,BlinkMacSystemFont,sans-serif; padding-left:4px; }
-.workspace-jump:hover { border-color:var(--workspace-line-strong); color:var(--workspace-text); }
+.workspace-jump span,.workspace-jump kbd { display:none; }
+.workspace-jump svg { width:16px; height:16px; fill:none; stroke:currentColor; stroke-width:1.75; }
+.workspace-jump:hover { background:var(--workspace-hover); color:var(--workspace-text); }
 /* Unified spineless sidebar when expanded; 44px pure icon rail when collapsed in terminal mode. */
 .ms-app .ms-sidebar {
   grid-row:2; grid-column:1; position:relative; top:auto; min-height:0; height:auto; max-height:none;
@@ -161,31 +154,31 @@ body.fp-side-open .workspace-chrome .wb-dock-toggle { color:var(--workspace-acce
 .ms-app .tree-section-head .provider-badge { display:none; }
 .ms-app .tree { grid-template-columns:minmax(0,1fr); min-width:0; gap:10px; }
 .ms-app .tree-session-group,.ms-app .tree-session-group.active { min-width:0; padding:0; border:0; background:none; box-shadow:none; }
-.ms-app .tree-session-row,.ms-app .tree-session-row.active { min-width:0; min-height:30px; padding:0; gap:4px; background:none; border:0; }
+.ms-app .tree-session-row,.ms-app .tree-session-row.active { min-width:0; min-height:32px; padding:0; gap:4px; background:none; border:0; }
 .ms-app .tree-session-row>.tree-item,.ms-app .tree-session-row.active>.tree-item {
-  min-height:30px; padding:4px 2px; gap:6px; grid-template-columns:10px minmax(0,1fr);
-  background:none; color:var(--workspace-muted); font-size:12.5px; font-weight:500;
+  min-height:32px; padding:4px 2px; gap:6px; grid-template-columns:10px minmax(0,1fr);
+  background:none; color:var(--workspace-muted); font-size:13px; font-weight:500;
 }
-.ms-app .tree-session-group.active .tree-session-row>.tree-item { font-size:14px; font-weight:600; color:var(--workspace-text); letter-spacing:-.015em; }
+.ms-app .tree-session-group.active .tree-session-row>.tree-item { font-size:14.5px; font-weight:600; color:var(--workspace-text); letter-spacing:-.015em; }
 .ms-app .tree-session-row .tree-item>span:nth-child(2),.ms-app .tree-item-name { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .ms-app .tree-session-row .tree-item>span:first-child { font-size:10px; color:var(--workspace-muted); }
 .ms-app .tree-session-row .cmd,.ms-app .tree-session-row .tree-create-window { display:none; }
 .ms-app .tree-window-list { grid-template-columns:minmax(0,1fr); min-width:0; padding:2px 0 2px 10px; margin-left:5px; gap:2px; background:none; border:0; border-left:1px solid var(--workspace-line); }
-.ms-app .tree-window-row { display:flex; align-items:center; min-width:0; gap:2px; padding:0; border-radius:6px; }
-.ms-app .tree-window-row>.tree-item { flex:1; min-width:0; min-height:28px; display:flex; align-items:center; justify-content:space-between; gap:6px; padding:4px 8px; border-radius:6px; background:none; color:var(--workspace-muted); font-size:12.5px; }
+.ms-app .tree-window-row { display:flex; align-items:center; min-width:0; gap:2px; padding:0; border-radius:7px; }
+.ms-app .tree-window-row>.tree-item { flex:1; min-width:0; min-height:32px; display:flex; align-items:center; justify-content:space-between; gap:6px; padding:5px 9px; border-radius:7px; background:none; color:var(--workspace-muted); font-size:13px; }
 .ms-app .tree-window-row>.tree-item.active { background:var(--workspace-accent); color:var(--workspace-bg); box-shadow:none; font-weight:550; }
 .ms-app .tree-window-row>.tree-item.active::before { display:none; }
 /* The window's name comes first: its process gives way, never the other way round. */
 .tree-window-row .tree-item-name { flex:1 1 auto; min-width:0; }
 .tree-window-row .cmd { flex:0 4 auto; min-width:0; max-width:45%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.ms-app .tree-window-list .cmd { font-size:10px; color:var(--workspace-muted); opacity:1; }
+.ms-app .tree-window-list .cmd { font-size:10.5px; color:var(--workspace-muted); opacity:1; }
 .ms-app .tree-window-row>.tree-item.active .cmd { color:inherit; }
 .ms-app .tree-item:hover { background:var(--workspace-hover); }
-.ms-app .tree-menu-button,.ms-app .tree-create-window { display:inline-flex; align-items:center; justify-content:center; flex:0 0 22px; width:22px; height:26px; border:0; border-radius:5px; color:var(--workspace-muted); background:none; font-size:16px; cursor:pointer; }
+.ms-app .tree-menu-button,.ms-app .tree-create-window { display:inline-flex; align-items:center; justify-content:center; flex:0 0 24px; width:24px; height:28px; border:0; border-radius:5px; color:var(--workspace-muted); background:none; font-size:16px; cursor:pointer; }
 .ms-app .tree-menu-button:hover,.ms-app .tree-menu-button:focus-visible { background:var(--workspace-hover); color:var(--workspace-text); }
 .ms-app.mode-terminal:not(.sidebar-collapsed) .ms-sidebar {
   grid-template-columns:auto minmax(0,1fr);
-  grid-template-rows:minmax(0,1fr) 36px;
+  grid-template-rows:minmax(0,1fr) 42px;
 }
 .ms-app.mode-terminal:not(.sidebar-collapsed) .ms-sidebar .server-context {
   display:contents;
@@ -194,44 +187,47 @@ body.fp-side-open .workspace-chrome .wb-dock-toggle { color:var(--workspace-acce
   grid-row:1; grid-column:1/-1; padding:10px 10px 6px; min-width:0; min-height:0; overflow-y:auto; overflow-x:hidden;
 }
 .ms-app.mode-terminal:not(.sidebar-collapsed) .ms-sidebar .sidebar-footer {
-  grid-row:2; grid-column:1; height:36px; padding:0 4px 0 8px; gap:2px; border-top:1px solid var(--workspace-line);
+  grid-row:2; grid-column:1; height:42px; padding:0 4px 0 8px; gap:4px; border-top:1px solid var(--workspace-line);
   background:color-mix(in srgb,var(--workspace-bg) 80%,var(--workspace-sidebar));
 }
 .ms-app.mode-terminal:not(.sidebar-collapsed) .sidebar-footer .nav-item {
-  flex:0 0 26px; width:26px; height:26px; min-height:26px; padding:0;
+  flex:0 0 30px; width:30px; height:30px; min-height:30px; padding:0;
 }
+.ms-app.mode-terminal:not(.sidebar-collapsed) .sidebar-footer .nav-item .ms-icon { width:16px; height:16px; }
 .ms-app.mode-terminal:not(.sidebar-collapsed) .sidebar-footer .nav-item span { display:none; }
 .ms-app.mode-terminal:not(.sidebar-collapsed) .ms-sidebar .server-switcher {
-  grid-row:2; grid-column:2; height:36px; min-height:36px; margin:0;
-  padding:0 10px 0 6px; width:100%; min-width:0;
+  grid-row:2; grid-column:2; height:42px; min-height:42px; margin:0;
+  padding:0 12px 0 6px; width:100%; min-width:0;
   display:inline-flex; align-items:center; justify-content:flex-end; gap:6px;
   border-top:1px solid var(--workspace-line);
   background:color-mix(in srgb,var(--workspace-bg) 80%,var(--workspace-sidebar));
 }
+.ms-app.mode-terminal:not(.sidebar-collapsed) .server-switcher strong { font-size:12.5px; }
 .ms-app.mode-settings.sidebar-collapsed { --ms-sidebar-effective-width:var(--ms-sidebar-width); }
-.ms-app.mode-terminal.sidebar-collapsed { --ms-sidebar-effective-width:44px; }
+.ms-app.mode-terminal.sidebar-collapsed { --ms-sidebar-effective-width:54px; }
 .ms-app.mode-terminal.sidebar-collapsed .workspace-chrome .brand { padding:0; justify-content:center; }
 .ms-app.mode-terminal.sidebar-collapsed .workspace-chrome .brand-copy { display:none; }
-.ms-app.mode-terminal.sidebar-collapsed .ms-sidebar { grid-template-columns:44px; grid-template-rows:minmax(0,1fr); }
+.ms-app.mode-terminal.sidebar-collapsed .ms-sidebar { grid-template-columns:54px; grid-template-rows:minmax(0,1fr); }
 .ms-app.mode-terminal.sidebar-collapsed .ms-sidebar .server-context,
 .ms-app.mode-terminal.sidebar-collapsed .ms-sidebar .sidebar-resizer { display:none; }
 .ms-app.mode-terminal.sidebar-collapsed .ms-sidebar .sidebar-footer {
   grid-column:1; grid-row:1; flex-direction:column; align-items:center; justify-content:flex-start;
-  gap:8px; padding:10px 4px 12px; border-top:0;
+  gap:10px; padding:12px 6px 14px; border-top:0;
 }
 .ms-app.mode-terminal.sidebar-collapsed .sidebar-footer .nav-rail-search { display:inline-flex; }
 .ms-app.mode-terminal.sidebar-collapsed .sidebar-footer .nav-item {
-  width:32px; height:32px; min-height:32px; flex:0 0 32px; padding:0; justify-content:center;
+  width:36px; height:36px; min-height:36px; flex:0 0 36px; padding:0; border-radius:8px; justify-content:center;
 }
+.ms-app.mode-terminal.sidebar-collapsed .sidebar-footer .nav-item .ms-icon { width:18px; height:18px; }
 .ms-app.mode-terminal.sidebar-collapsed .sidebar-footer .nav-item span { display:none; }
 .ms-app.mode-terminal.sidebar-collapsed .sidebar-footer .nav-item:last-child { margin-top:auto; }
 .ms-app.mode-terminal.sidebar-collapsed .sidebar-footer .nav-item:last-child::after {
-  content:""; position:absolute; right:5px; bottom:5px; width:6px; height:6px;
+  content:""; position:absolute; right:6px; bottom:6px; width:6px; height:6px;
   border-radius:50%; background:var(--accent-green,#9ece6a);
   box-shadow:0 0 0 1.5px var(--workspace-sidebar);
 }
 .ms-app.sidebar-collapsed .brand-copy { display:none; }
-/* No window or pane bars consume the work surface. All remaining height is terminal. */
+/* All remaining height is terminal. */
 .ms-app:is(.mode-terminal,.mode-status,.mode-settings) .ms-main {
   grid-row:2; grid-column:2; position:relative; display:grid;
   grid-template-columns:minmax(0,1fr) auto; grid-template-rows:minmax(0,1fr);
@@ -250,16 +246,16 @@ body.fp-side-open .workspace-chrome .wb-dock-toggle { color:var(--workspace-acce
   .ms-app.mode-terminal .ms-main { overflow:visible; }
   .ms-app.mode-terminal .fp-dock:not(.fp-side-maximized) {
     position:relative; z-index:36;
-    margin-top:calc(var(--workspace-chrome-height,36px) * -1);
-    height:calc(100% + var(--workspace-chrome-height,36px));
+    margin-top:calc(var(--workspace-chrome-height,42px) * -1);
+    height:calc(100% + var(--workspace-chrome-height,42px));
   }
 }
 .ms-app .fp-dock-restore { position:absolute; grid-column:auto; grid-row:auto; top:50%; right:0; transform:translateY(-50%); width:auto; height:auto; margin:0; box-shadow:none; }
 /* Native disclosure controls preserve the live terminal listeners. */
 .workspace-terminal-more,.workspace-pane-picker { position:relative; flex-shrink:0; }
 .workspace-pane-picker[hidden] { display:none; }
-.workspace-terminal-more>summary,.workspace-pane-picker>summary { display:flex; align-items:center; justify-content:center; gap:7px; height:28px; padding:0 7px; border-radius:6px; color:var(--workspace-muted); font-size:12px; cursor:pointer; list-style:none; }
-.workspace-terminal-more>summary { width:28px; padding:0; }
+.workspace-terminal-more>summary,.workspace-pane-picker>summary { display:flex; align-items:center; justify-content:center; gap:7px; height:30px; padding:0 7px; border-radius:7px; color:var(--workspace-muted); font-size:12px; cursor:pointer; list-style:none; }
+.workspace-terminal-more>summary { width:30px; padding:0; }
 .workspace-terminal-more>summary::-webkit-details-marker,.workspace-pane-picker>summary::-webkit-details-marker { display:none; }
 .workspace-pane-picker>summary>.ms-icon { width:12px; height:12px; }
 .workspace-pane-current { max-width:120px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -379,9 +375,7 @@ html[data-backdrop-active] :is(.ms-modal,.ms-popover,.ms-sidebar-context-menu,.c
 button { touch-action:manipulation; }
 @media (prefers-reduced-motion:reduce) { .ms-app *,.cmd-palette-overlay * { animation:none!important; transition:none!important; } }
 @media (max-width:1200px) {
-  .workspace-jump span,.workspace-jump kbd { display:none; }
-  .workspace-jump { width:28px; padding:0; justify-content:center; border:0; }
-  .workspace-chrome .ms-topbar,.workspace-chrome .ms-topbar.terminal-layout { gap:8px; padding-inline:12px; }
+  .workspace-chrome .ms-topbar,.workspace-chrome .ms-topbar.terminal-layout { gap:4px; padding-inline:12px; }
   .ms-app .ms-content { padding:28px; }
   .ms-app.mode-terminal .ms-content.terminal-mode { padding:0; }
 }
@@ -557,7 +551,7 @@ button { touch-action:manipulation; }
 .tree-agent-row > .tree-agent-btn {
   flex: 1;
   min-width: 0;
-  min-height: 28px;
+  min-height: 30px;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -566,7 +560,7 @@ button { touch-action:manipulation; }
   border-radius: 6px;
   background: transparent;
   color: var(--workspace-muted);
-  font-size: 12px;
+  font-size: 12.5px;
   text-align: left;
   cursor: pointer;
 }

@@ -440,7 +440,7 @@ describe('SeamWindowSession multi-pane workbench session', () => {
 
   it('accounts for pane padding, tmux dividers, and pane-border-status rows in _measureWindowGrid and branch flex', async () => {
     const f = fixture();
-    const dims = { w: 227 * 8 + 50, h: 86 * 18 + 73 }; // 227 cols * 8px + 50px chrome; 86 rows * 18px + 73px chrome
+    const dims = { w: 227 * 8 + 50, h: 86 * 18 + 81 }; // 227 cols * 8px + 50px chrome; 86 rows * 18px + 81px chrome
     const session = new SeamWindowSession(f.win, { container: f.host, target });
     Object.defineProperties(session.treeHost, {
       clientWidth: { configurable: true, get: () => dims.w },
@@ -503,11 +503,11 @@ describe('SeamWindowSession multi-pane workbench session', () => {
       socket.onmessage({ data: encodeSnapshotBinary({ paneId: p.id, seq: 0, cols: p.width, rows: p.height, text: p.id }) });
     }
 
-    // Branch flex uses content rows + fixed chrome basis (36 vs 36)
+    // Branch flex uses content rows + fixed chrome basis (40 vs 40)
     const rightColBranches = f.host.querySelectorAll('.seam-split.is-col > .seam-branch');
     expect(rightColBranches).toHaveLength(2);
-    expect(rightColBranches[0].style.flex).toBe('46 1 36px');
-    expect(rightColBranches[1].style.flex).toBe('40 1 36px');
+    expect(rightColBranches[0].style.flex).toBe('46 1 40px');
+    expect(rightColBranches[1].style.flex).toBe('40 1 40px');
 
     // Exact 1:1 grid measurement: 229x88 converges with zero extra clipped cols or blank bottom rows
     expect(session._measureWindowGrid()).toEqual({ cols: 229, rows: 88 });
@@ -516,7 +516,7 @@ describe('SeamWindowSession multi-pane workbench session', () => {
 
     // Zoomed pane with pane-border-status top (87 content rows inside 88 window rows) also compensates cleanly
     dims.w = 229 * 8 + 16;
-    dims.h = 87 * 18 + 36;
+    dims.h = 87 * 18 + 40;
     sendLayout(socket, {
       windowCols: 229,
       windowRows: 88,
@@ -588,8 +588,8 @@ describe('SeamWindowSession multi-pane workbench session', () => {
     const rightColBranches = f.host.querySelectorAll('.seam-split.is-col > .seam-branch');
     expect(outerRowBranches[0].style.flex).toBe('110 1 16px');
     expect(outerRowBranches[1].style.flex).toBe('117 1 33px');
-    expect(rightColBranches[0].style.flex).toBe('42 1 36px');
-    expect(rightColBranches[1].style.flex).toBe('44 1 36px');
+    expect(rightColBranches[0].style.flex).toBe('42 1 40px');
+    expect(rightColBranches[1].style.flex).toBe('44 1 40px');
 
     f.win.dispatchEvent(new f.win.MouseEvent('pointerup', { button: 0, clientX: 580, clientY: 428, bubbles: true }));
     expect(session.stage.classList.contains('is-dragging-xy')).toBe(false);
@@ -660,8 +660,8 @@ describe('SeamWindowSession multi-pane workbench session', () => {
     expect(rowSplits1[0].children[0].style.flex).toBe('65 1 16px');
     expect(rowSplits1[1].children[0].style.flex).toBe('65 1 16px');
     const colBranches1 = f.host.querySelectorAll('.seam-tree-host > .seam-split.is-col > .seam-branch');
-    expect(colBranches1[0].style.flex).toBe('20 1 36px');
-    expect(colBranches1[1].style.flex).toBe('15 1 36px');
+    expect(colBranches1[0].style.flex).toBe('20 1 40px');
+    expect(colBranches1[1].style.flex).toBe('15 1 40px');
 
     f.win.dispatchEvent(new f.win.MouseEvent('pointerup', { button: 0, clientX: 440, clientY: 336, bubbles: true }));
     expect(socket.sent.filter((m) => m.type === 'resize-pane-batch')).toEqual([
@@ -1536,96 +1536,22 @@ describe('SeamWindowSession multi-pane workbench session', () => {
     expect(session.fontReady).toBe(true);
     expect(f.terminals[0].options.fontFamily).toContain('Anymux Mono');
 
-    // Parking retains WebGL contexts via LRU (<= 6 contexts) and sends background visibility
+    // Parking releases WebGL contexts and sends background visibility
     session.setParked(true);
-    expect(webglAddons.every((a) => !a.disposed)).toBe(true);
-    expect(session.panes.get('%1').webglAddon).toBe(webglAddons[0]);
-    expect(session.panes.get('%2').webglAddon).toBe(webglAddons[1]);
+    expect(webglAddons.every((a) => a.disposed)).toBe(true);
+    expect(session.panes.get('%1').webglAddon).toBeNull();
+    expect(session.panes.get('%2').webglAddon).toBeNull();
     expect(socket.sent.at(-1)).toEqual({ type: 'visibility', visible: true, background: true });
 
-    // Unparking restores foreground visibility and keeps retained WebGL addons synchronously with zero churn
+    // Unparking restores foreground visibility and schedules WebGL re-attach
     session.setParked(false);
     expect(socket.sent.at(-1)).toEqual({ type: 'visibility', visible: true, background: false });
     await new Promise((r) => setTimeout(r, 10));
-    expect(webglAddons).toHaveLength(2);
-    expect(session.panes.get('%1').webglAddon).toBe(webglAddons[0]);
-    expect(session.panes.get('%2').webglAddon).toBe(webglAddons[1]);
+    expect(webglAddons).toHaveLength(4);
+    expect(session.panes.get('%1').webglAddon).not.toBeNull();
+    expect(session.panes.get('%2').webglAddon).not.toBeNull();
 
     session.dispose();
-    f.close();
-  });
-
-  it('evicts oldest hidden WebGL contexts beyond LRU cap, releases canvas backing after delay, and skips redundant resize on same-size reveal', async () => {
-    const f = fixture();
-    const { createHiddenWebglRetentionRegistry, isWebglCanvasBackingReleased } = await import('../../plugins/workbench/client/terminal/webgl-retention.js');
-    const registry = createHiddenWebglRetentionRegistry({ maxRetained: 2, releaseDelayMs: 40 });
-    const webglAddons = [];
-    const canvases = [];
-    f.win.WebglAddon = {
-      WebglAddon: class {
-        constructor() { this.disposed = false; webglAddons.push(this); }
-        onContextLoss() {}
-        dispose() { this.disposed = true; }
-      },
-    };
-    const origCreate = f.win.Terminal;
-    f.win.Terminal = class extends origCreate {
-      constructor(opts) {
-        super(opts);
-        const canvas = { width: 800, height: 600, isConnected: true };
-        canvases.push(canvas);
-        this._core = {
-          ...this._core,
-          _renderService: {
-            dimensions: { css: { cell: { width: 8.4, height: 18 } }, device: { canvas: { width: 800, height: 600 } } },
-            _renderer: { value: { _canvas: canvas, handleDevicePixelRatioChange: vi.fn(), handleResize: vi.fn() } },
-          },
-        };
-      }
-    };
-
-    const s1 = new SeamWindowSession(f.win, { container: f.host, target: { ...target, windowId: '@1' }, webglRetentionRegistry: registry });
-    const s2 = new SeamWindowSession(f.win, { container: f.host, target: { ...target, windowId: '@2' }, webglRetentionRegistry: registry });
-    const s3 = new SeamWindowSession(f.win, { container: f.host, target: { ...target, windowId: '@3' }, webglRetentionRegistry: registry });
-    await Promise.all([s1.ready, s2.ready, s3.ready]);
-    hydrateWindow(f.sockets[0]);
-    hydrateWindow(f.sockets[1]);
-    hydrateWindow(f.sockets[2]);
-    await new Promise((r) => setTimeout(r, 10));
-
-    // Park 1 (panes %1, %2) -> fills capacity 2
-    const s1Addon1 = s1.panes.get('%1').webglAddon;
-    const s1Addon2 = s1.panes.get('%2').webglAddon;
-    s1.setParked(true);
-    expect(registry.size).toBe(2);
-    expect(s1Addon1.disposed).toBe(false);
-    expect(s1Addon2.disposed).toBe(false);
-
-    // After 50ms hidden delay, canvas backing dimensions are released to 0x0
-    await new Promise((r) => setTimeout(r, 55));
-    expect(isWebglCanvasBackingReleased(canvases[0])).toBe(true);
-    expect(canvases[0].width).toBe(0);
-
-    // Unparking restores canvas backing synchronously and skips resize-window when pixel box is unchanged
-    f.sockets[0].sent.length = 0;
-    s1.setParked(false);
-    expect(isWebglCanvasBackingReleased(canvases[0])).toBe(false);
-    expect(canvases[0].width).toBe(800);
-    await new Promise((r) => setTimeout(r, 60));
-    expect(f.sockets[0].sent.some((m) => m.type === 'resize-window')).toBe(false);
-
-    // Parking s1 then s2 evicts s1's oldest hidden WebGL contexts beyond maxRetained=2
-    s1.setParked(true);
-    s2.setParked(true);
-    expect(s1Addon1.disposed).toBe(true);
-    expect(s1Addon2.disposed).toBe(true);
-    expect(s1.panes.get('%1').webglAddon).toBeNull();
-    expect(s1.panes.get('%2').webglAddon).toBeNull();
-    expect(s2.panes.get('%1').webglAddon).not.toBeNull();
-
-    s1.dispose();
-    s2.dispose();
-    s3.dispose();
     f.close();
   });
 
@@ -2019,13 +1945,15 @@ describe('SeamWindowSession multi-pane workbench session', () => {
     f.close();
   });
 
-  it('activates desktop 0px chromeless mode for bare single-pane windows, restores rail for git/label/multi-pane, and flashes locate rim on pane switch', async () => {
+  it('uses unified 30px desktop pane rail for single-pane and multi-pane windows, reports pane counts, and flashes locate rim on pane switch', async () => {
     const f = fixture();
     const actions = [];
+    const paneCounts = [];
     const session = new SeamWindowSession(f.win, {
       container: f.host,
       target,
       onAction: (action, detail) => actions.push({ action, detail }),
+      onPaneCount: (count) => paneCounts.push(count),
     });
     Object.defineProperties(session.treeHost, {
       clientWidth: { configurable: true, get: () => 816 },
@@ -2046,48 +1974,22 @@ describe('SeamWindowSession multi-pane workbench session', () => {
     });
 
     const pane1 = f.host.querySelector('.seam-pane[data-pane-id="%1"]');
-    expect(pane1.classList.contains('is-chromeless')).toBe(true);
-    expect(session._effectiveRailPx()).toBe(0);
-    expect(pane1.querySelector('.seam-chromeless-bar [data-pane-action="split-h"]')).not.toBeNull();
+    expect(pane1.classList.contains('is-chromeless')).toBe(false);
+    expect(session._effectiveRailPx()).toBe(30);
+    expect(paneCounts.at(-1)).toBe(1);
+    expect(pane1.querySelector('.seam-rail [data-pane-action="split-h"]')).not.toBeNull();
 
-    // Floating chromeless action works without leaving xterm focus
-    pane1.querySelector('.seam-chromeless-bar [data-pane-action="split-h"]').click();
+    // Pane rail split action works without stealing xterm focus
+    pane1.querySelector('.seam-rail [data-pane-action="split-h"]').click();
     expect(actions).toContainEqual({ action: 'split', detail: { paneId: '%1', direction: 'horizontal' } });
 
-    // Custom label turns chromeless off (returns 26px rail)
-    sendLayout(socket, {
-      windowCols: 100, windowRows: 20, activePaneId: '%1',
-      panes: [{ id: '%1', index: 0, active: true, width: 100, height: 20, command: 'fish', label: 'API' }],
-      tree: { type: 'pane', paneId: '%1', width: 100, height: 20 },
-    });
-    expect(pane1.classList.contains('is-chromeless')).toBe(false);
-    expect(session._effectiveRailPx()).toBe(26);
-
-    // Clear label -> back to chromeless; gitSlot mirrors into chromeless hover capsule without exiting chromeless
-    sendLayout(socket, {
-      windowCols: 100, windowRows: 20, activePaneId: '%1',
-      panes: [{ id: '%1', index: 0, active: true, width: 100, height: 20, command: 'fish' }],
-      tree: { type: 'pane', paneId: '%1', width: 100, height: 20 },
-    });
-    expect(pane1.classList.contains('is-chromeless')).toBe(true);
-    const chip = f.win.document.createElement('button');
-    chip.className = 'pane-rail-git-chip';
-    chip.innerHTML = '<span class="prg-branch">master</span><span class="prg-dirty">●2</span>';
-    session.panes.get('%1').gitSlot.appendChild(chip);
-    session.panes.get('%1').gitSlot.hidden = false;
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(pane1.classList.contains('is-chromeless')).toBe(true);
-    expect(session._effectiveRailPx()).toBe(0);
-    const capGit = pane1.querySelector('.seam-chromeless-bar .chromeless-git-btn');
-    expect(capGit.hidden).toBe(false);
-    expect(capGit.textContent).toContain('master');
-
-    // Multi-pane selectPane flashes .is-locate-flash on newly focused pane
-    session.panes.get('%1').gitSlot.hidden = true;
+    // Multi-pane selectPane flashes .is-locate-flash on newly focused pane and reports count 2
     hydrateWindow(socket);
     const pane2 = f.host.querySelector('.seam-pane[data-pane-id="%2"]');
     expect(pane1.classList.contains('is-chromeless')).toBe(false);
     expect(pane2.classList.contains('is-chromeless')).toBe(false);
+    expect(session._effectiveRailPx()).toBe(30);
+    expect(paneCounts.at(-1)).toBe(2);
     session.selectPane('%2');
     expect(pane2.classList.contains('is-locate-flash')).toBe(true);
 

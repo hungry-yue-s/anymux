@@ -13,8 +13,8 @@
   var MONITOR_VISIBILITY_KEYS = ['showPerformance', 'showClaude', 'showCodex'];
   var REQUEST_MAPS = { workspace: 'workspaceByServerId', metrics: 'metricsByServerId' };
   var SIDEBAR_MIN_WIDTH = 220;
-  var SIDEBAR_MAX_WIDTH = 360;
-  var SIDEBAR_DEFAULT_WIDTH = 248;
+  var SIDEBAR_MAX_WIDTH = 420;
+  var SIDEBAR_DEFAULT_WIDTH = 272;
   var TERMINAL_MODES = ['tab', 'split'];
 
   var listeners = [];

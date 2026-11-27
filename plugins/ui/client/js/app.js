@@ -561,9 +561,11 @@ document.addEventListener('keydown', function (e) {
       FilePreview.openFromBuffer(state.currentPane);
     }
   }
-  // Ctrl+L: toggle layout picker (terminal view only)
-  if ((e.ctrlKey || e.metaKey) && e.key === 'l' && !e.shiftKey && !e.altKey) {
-    if (state.currentTab === 'terminal' && state.currentSession && _isValidWindowIndex(state.currentWindow)) {
+  // Ctrl+L / Cmd+L: toggle layout picker (both legacy terminal and native workbench)
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'l' && !e.shiftKey && !e.altKey) {
+    var hasLegacyTerm = state.currentTab === 'terminal' && state.currentSession && _isValidWindowIndex(state.currentWindow);
+    var hasNativeTerm = typeof TerminalTarget !== 'undefined' && Boolean(TerminalTarget.windowId) && document.body.classList.contains('terminal-active');
+    if (hasLegacyTerm || hasNativeTerm) {
       e.preventDefault();
       if (typeof LayoutPicker !== 'undefined') LayoutPicker.toggle();
     }

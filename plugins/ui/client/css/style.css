@@ -2008,7 +2008,7 @@ textarea:focus-visible {
 .ms-app {
   position: relative;
   z-index: 1;
-  --ms-sidebar-width: 248px;
+  --ms-sidebar-width: 272px;
   --ms-status-sidebar-width: 304px;
   --ms-sidebar-effective-width: var(--ms-sidebar-width);
   display: grid;
@@ -2021,7 +2021,7 @@ textarea:focus-visible {
 }
 
 .ms-app.sidebar-collapsed {
-  --ms-sidebar-effective-width: 44px;
+  --ms-sidebar-effective-width: 54px;
 }
 
 /* Status mode carries the server overview list, so it needs its own width.
@@ -4246,7 +4246,7 @@ textarea:focus-visible {
 /* The Swift window shares one header with the web workspace. Reserve the
    system traffic lights; keep browser and older native layouts unchanged. */
 html.tmux-native-titlebar .brand {
-  height: 36px;
+  height: 42px;
   min-height: 0;
   padding: 0 12px 0 80px;
 }

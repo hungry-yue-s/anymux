@@ -285,7 +285,8 @@ body.blk-dragging iframe, body.blk-resizing iframe, body.fp-side-resizing iframe
 .git-branch-caret { display: inline-flex; color: var(--b-muted); }
 .git-branch-caret .blk-svg { width: 13px; height: 13px; }
 .git-branch-btn[aria-expanded="true"] { background: var(--b-hover); }
-.git-track { display: inline-flex; gap: 4px; align-items: center; }
+.git-track { display: inline-flex; flex: none; gap: 4px; align-items: center; white-space: nowrap; }
+.git-track > * { flex: none; white-space: nowrap; }
 .git-refresh-failed.blk-btn { color: var(--b-yellow); }
 .git-refresh-failed[hidden] { display: none; }
 .git-state { flex: 1; min-height: 0; overflow: auto; }
