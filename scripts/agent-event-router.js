@@ -137,8 +137,10 @@ const paneId = args.paneId || args['pane-id'] || input.paneId || input.pane_id |
 if (!paneId && !session && !windowId && !process.env.TMUX && !process.env.TMUX_PANE) {
   process.exit(0);
 }
+const envConversationId = process.env.ANTIGRAVITY_CONVERSATION_ID || '';
 const payload = {
   ...input,
+  ...(envConversationId && !input.conversationId && !input.conversation_id ? { conversationId: envConversationId } : {}),
   agent: args.agent || input.agent || input.source || 'agent',
   event,
   session,

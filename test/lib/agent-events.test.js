@@ -219,6 +219,29 @@ describe('agent event normalization', () => {
       lastMessage: 'RPC failure',
     });
   });
+
+  it('normalizes conversationId, conversation_id, and thread_id into pane sessionId and clears on SessionEnd', () => {
+    const service = new AgentEventService();
+    const a = normalizeAgentEvent({ agent: 'antigravity', event: 'PreInvocation', conversationId: 'conv-123' });
+    const b = normalizeAgentEvent({ agent: 'codex', event: 'SessionStart', thread_id: 'thr-456' });
+    expect(a.sessionId).toBe('conv-123');
+    expect(b.sessionId).toBe('thr-456');
+
+    service.ingest({
+      agent: 'antigravity',
+      event: 'SessionStart',
+      paneId: '%8',
+      conversationId: 'conv-123',
+    });
+    expect(service.getPaneState('%8').sessionId).toBe('conv-123');
+
+    service.ingest({
+      agent: 'antigravity',
+      event: 'SessionEnd',
+      paneId: '%8',
+    });
+    expect(service.getPaneState('%8').sessionId).toBe('');
+  });
 });
 
 describe('agent events API', () => {

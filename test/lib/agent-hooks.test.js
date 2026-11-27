@@ -53,7 +53,7 @@ describe('AgentHookManager', () => {
     const paths = await manager.refreshManagedScript();
     expect(paths.scriptPath).toBe(join(dataDir, 'agent-hooks', 'agent-event-router.mjs'));
     const script = await readFile(paths.scriptPath, 'utf8');
-    expect(script).toContain('anymux-managed-hook-router v3');
+    expect(script).toContain('anymux-managed-hook-router v4');
     if (process.platform !== 'win32') {
       const mode = (await stat(paths.scriptPath)).mode & 0o777;
       expect(mode & 0o100).toBe(0o100);
@@ -260,10 +260,15 @@ describe('AgentHookManager', () => {
     expect(agyCfg['claude-mem']).toBeTruthy();
     expect(agyCfg['orca-status']).toBeTruthy();
     expect(agyCfg['anymux-status']).toBeTruthy();
+    expect(agyCfg['anymux-status'].SessionStart[0].command).toContain('--event session_start');
+    expect(agyCfg['anymux-status'].SessionStart[0].command).toContain("--stdout-json '{}'");
     expect(agyCfg['anymux-status'].PreInvocation[0].command).toContain("--stdout-json '{}'");
     expect(agyCfg['anymux-status'].Stop[0].command).toContain('{"decision":""}');
     expect(agyCfg['anymux-status'].PreToolUse[0].matcher).toBe('*');
     expect(agyCfg['anymux-status'].PreToolUse[0].hooks[0].command).not.toContain('--stdout-json');
+
+    const routerScript = await readFile(manager.scriptPath, 'utf8');
+    expect(routerScript).toContain('ANTIGRAVITY_CONVERSATION_ID');
 
     const dshYml = await readFile(join(root, '.dsh', 'cordis.patch.yml'), 'utf8');
     expect(dshYml).toContain('orca-agent-hooks');
@@ -276,7 +281,7 @@ describe('AgentHookManager', () => {
     expect(dshJson.hooks.Stop[0].hooks[0].command).toContain('--agent dsh --event agent_stop');
 
     const st = await manager.status();
-    expect(st.agents.find((a) => a.agent === 'antigravity')).toMatchObject({ state: 'installed', installedEvents: 5, totalEvents: 5 });
+    expect(st.agents.find((a) => a.agent === 'antigravity')).toMatchObject({ state: 'installed', installedEvents: 6, totalEvents: 6 });
     expect(st.agents.find((a) => a.agent === 'dsh')).toMatchObject({ state: 'installed', installedEvents: 7, totalEvents: 7 });
 
     // Second reconcile makes zero changes and creates zero backups
