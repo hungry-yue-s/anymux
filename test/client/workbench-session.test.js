@@ -1536,22 +1536,96 @@ describe('SeamWindowSession multi-pane workbench session', () => {
     expect(session.fontReady).toBe(true);
     expect(f.terminals[0].options.fontFamily).toContain('Anymux Mono');
 
-    // Parking releases WebGL contexts and sends background visibility
+    // Parking retains WebGL contexts via LRU (<= 6 contexts) and sends background visibility
     session.setParked(true);
-    expect(webglAddons.every((a) => a.disposed)).toBe(true);
-    expect(session.panes.get('%1').webglAddon).toBeNull();
-    expect(session.panes.get('%2').webglAddon).toBeNull();
+    expect(webglAddons.every((a) => !a.disposed)).toBe(true);
+    expect(session.panes.get('%1').webglAddon).toBe(webglAddons[0]);
+    expect(session.panes.get('%2').webglAddon).toBe(webglAddons[1]);
     expect(socket.sent.at(-1)).toEqual({ type: 'visibility', visible: true, background: true });
 
-    // Unparking restores foreground visibility and schedules WebGL re-attach
+    // Unparking restores foreground visibility and keeps retained WebGL addons synchronously with zero churn
     session.setParked(false);
     expect(socket.sent.at(-1)).toEqual({ type: 'visibility', visible: true, background: false });
     await new Promise((r) => setTimeout(r, 10));
-    expect(webglAddons).toHaveLength(4);
-    expect(session.panes.get('%1').webglAddon).not.toBeNull();
-    expect(session.panes.get('%2').webglAddon).not.toBeNull();
+    expect(webglAddons).toHaveLength(2);
+    expect(session.panes.get('%1').webglAddon).toBe(webglAddons[0]);
+    expect(session.panes.get('%2').webglAddon).toBe(webglAddons[1]);
 
     session.dispose();
+    f.close();
+  });
+
+  it('evicts oldest hidden WebGL contexts beyond LRU cap, releases canvas backing after delay, and skips redundant resize on same-size reveal', async () => {
+    const f = fixture();
+    const { createHiddenWebglRetentionRegistry, isWebglCanvasBackingReleased } = await import('../../plugins/workbench/client/terminal/webgl-retention.js');
+    const registry = createHiddenWebglRetentionRegistry({ maxRetained: 2, releaseDelayMs: 40 });
+    const webglAddons = [];
+    const canvases = [];
+    f.win.WebglAddon = {
+      WebglAddon: class {
+        constructor() { this.disposed = false; webglAddons.push(this); }
+        onContextLoss() {}
+        dispose() { this.disposed = true; }
+      },
+    };
+    const origCreate = f.win.Terminal;
+    f.win.Terminal = class extends origCreate {
+      constructor(opts) {
+        super(opts);
+        const canvas = { width: 800, height: 600, isConnected: true };
+        canvases.push(canvas);
+        this._core = {
+          ...this._core,
+          _renderService: {
+            dimensions: { css: { cell: { width: 8.4, height: 18 } }, device: { canvas: { width: 800, height: 600 } } },
+            _renderer: { value: { _canvas: canvas, handleDevicePixelRatioChange: vi.fn(), handleResize: vi.fn() } },
+          },
+        };
+      }
+    };
+
+    const s1 = new SeamWindowSession(f.win, { container: f.host, target: { ...target, windowId: '@1' }, webglRetentionRegistry: registry });
+    const s2 = new SeamWindowSession(f.win, { container: f.host, target: { ...target, windowId: '@2' }, webglRetentionRegistry: registry });
+    const s3 = new SeamWindowSession(f.win, { container: f.host, target: { ...target, windowId: '@3' }, webglRetentionRegistry: registry });
+    await Promise.all([s1.ready, s2.ready, s3.ready]);
+    hydrateWindow(f.sockets[0]);
+    hydrateWindow(f.sockets[1]);
+    hydrateWindow(f.sockets[2]);
+    await new Promise((r) => setTimeout(r, 10));
+
+    // Park 1 (panes %1, %2) -> fills capacity 2
+    const s1Addon1 = s1.panes.get('%1').webglAddon;
+    const s1Addon2 = s1.panes.get('%2').webglAddon;
+    s1.setParked(true);
+    expect(registry.size).toBe(2);
+    expect(s1Addon1.disposed).toBe(false);
+    expect(s1Addon2.disposed).toBe(false);
+
+    // After 50ms hidden delay, canvas backing dimensions are released to 0x0
+    await new Promise((r) => setTimeout(r, 55));
+    expect(isWebglCanvasBackingReleased(canvases[0])).toBe(true);
+    expect(canvases[0].width).toBe(0);
+
+    // Unparking restores canvas backing synchronously and skips resize-window when pixel box is unchanged
+    f.sockets[0].sent.length = 0;
+    s1.setParked(false);
+    expect(isWebglCanvasBackingReleased(canvases[0])).toBe(false);
+    expect(canvases[0].width).toBe(800);
+    await new Promise((r) => setTimeout(r, 60));
+    expect(f.sockets[0].sent.some((m) => m.type === 'resize-window')).toBe(false);
+
+    // Parking s1 then s2 evicts s1's oldest hidden WebGL contexts beyond maxRetained=2
+    s1.setParked(true);
+    s2.setParked(true);
+    expect(s1Addon1.disposed).toBe(true);
+    expect(s1Addon2.disposed).toBe(true);
+    expect(s1.panes.get('%1').webglAddon).toBeNull();
+    expect(s1.panes.get('%2').webglAddon).toBeNull();
+    expect(s2.panes.get('%1').webglAddon).not.toBeNull();
+
+    s1.dispose();
+    s2.dispose();
+    s3.dispose();
     f.close();
   });
 
