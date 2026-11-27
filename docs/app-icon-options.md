@@ -1,12 +1,33 @@
 # Anymux 应用图标方案集
 
-优先比较最新的 **I–N**。每版提供大图、48px 缩小预览和设计含义；点击大图可查看原始图片。
+优先比较最新的 **O–T**。每版提供大图、48px 缩小预览和设计含义；点击大图可查看原始图片。
 
 所有图片均由内置生图生成，已随文档保存在仓库中，使用相对路径引用。下文描述的是设计意图；缩小预览用于比较轮廓和对比，macOS 实际呈现还受系统圆角、留白和材质处理影响。
 
-**当前状态：K「切面 T」已选用为应用与网页图标；以下保留全部方案供比较。**
+**当前状态：S「工业折角 A」已选用为应用与网页图标；以下保留全部方案供比较。**
 
-## 最新方案 · I–N
+## 最新方案 · O–T（Anymux 品牌重设计）
+
+| **O · 切面 A** | **P · 轨线拼格** | **Q · 汇流双轨** |
+| :---: | :---: | :---: |
+| [![O 切面 A方案图](assets/app-icons/previews/o-cut-a-200.png)](assets/app-icons/o-cut-a.png) | [![P 轨线拼格方案图](assets/app-icons/previews/p-seam-panes-200.png)](assets/app-icons/p-seam-panes.png) | [![Q 汇流双轨方案图](assets/app-icons/previews/q-mux-conduit-200.png)](assets/app-icons/q-mux-conduit.png) |
+| ![O 48px预览](assets/app-icons/previews/o-cut-a-48.png) | ![P 48px预览](assets/app-icons/previews/p-seam-panes-48.png) | ![Q 48px预览](assets/app-icons/previews/q-mux-conduit-48.png) |
+
+| **R · 接续视窗** | **S · 工业折角 A** | **T · 霜玻叠境** |
+| :---: | :---: | :---: |
+| [![R 接续视窗方案图](assets/app-icons/previews/r-continuous-portal-200.png)](assets/app-icons/r-continuous-portal.png) | [![S 工业折角 A方案图](assets/app-icons/previews/s-industrial-a-200.png)](assets/app-icons/s-industrial-a.png) | [![T 霜玻叠境方案图](assets/app-icons/previews/t-frosted-monolith-200.png)](assets/app-icons/t-frosted-monolith.png) |
+| ![R 48px预览](assets/app-icons/previews/r-continuous-portal-48.png) | ![S 48px预览](assets/app-icons/previews/s-industrial-a-48.png) | ![T 48px预览](assets/app-icons/previews/t-frosted-monolith-48.png) |
+
+| 方案 | 设计含义 |
+| --- | --- |
+| **O · 切面 A** | 直接承接 K 的暖象牙白陶瓷质感，将字母 T 升级为 Anymux 的 A，并用翡翠绿光标切开横杠。 |
+| **P · 轨线拼格** | 呼应原生多窗格引擎「轨线 · Seam」与 tmux 三分屏，以暗钛黑窗格缝隙与 `>` 光标表达工作台形态。 |
+| **Q · 汇流双轨** | 致敬 Forest Ink 墨绿底色，两条暖米白会话轨道汇入同一主干并接玉翠绿激活段，抽象表达 Any + mux 复用。 |
+| **R · 接续视窗** | 深午夜蓝底色上一大一小双视窗由香槟琥珀金轨线连接，象征桌面与手机接续及终端旁分栏预览。 |
+| **S · 工业折角 A** | 精密仪器极简风：深暖石墨底、骨白立体折角 A/推进箭头与朱橙状态点，极小尺寸下辨识度突出；这是当前已采用的方向。 |
+| **T · 霜玻叠境** | 深冷翠底色上叠加三片半透明磨砂玉白玻璃构成 A 形结构，中心透出清冽薄荷微光，契合现代 macOS 光学美学。 |
+
+## 历史方案 · I–N
 
 | **I · 会话扣** | **J · 熔橙命令** | **K · 切面 T** |
 | :---: | :---: | :---: |
@@ -22,7 +43,7 @@
 | --- | --- |
 | **I · 会话扣** | 用白色与玉绿的直角括号相互扣合，表达 tmux 会话的连接、脱离与持续运行。 |
 | **J · 熔橙命令** | 将终端提示符连接成一笔折返的黑色符号，以橙色背景突出命令输入这一核心操作。 |
-| **K · 切面 T** | 以非对称的黑色 T 指向 Terminal 与 Tmux，并用绿色光标标记正在等待输入的终端状态；这是当前已采用的方向。 |
+| **K · 切面 T** | 以非对称的黑色 T 指向 Terminal 与 Tmux，并用绿色光标标记正在等待输入的终端状态；此前 Tmux Panel 阶段曾采用的方向。 |
 | **L · 蓝紫分岔** | 通过一根主干分出两条开放支路，表达同一工作入口下并行展开的会话与任务。 |
 | **M · 终端印章** | 以终端框和 >_ 明确项目用途，右上角的叠框缺口引入多个终端会话的意象。 |
 | **N · 黑白工作区** | 以左侧主面板和右侧上下两格表现终端主区、分屏及辅助内容的组合，绿色光标标记当前活动位置。 |
