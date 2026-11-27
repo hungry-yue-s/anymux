@@ -181,7 +181,7 @@ describe('AgentIcons & AgentStatus UI integration', () => {
     expect(w.Api.post).toHaveBeenCalledWith('/api/agent-status/ack', { paneId: '%2', windowId: '@1', sessionId: '$1' });
   });
 
-  it('merges zero-config attention panes into NotificationPanel.needsYou() and auto-clears stale items when working', () => {
+  it('merges zero-config attention panes into NotificationPanel.needsYou() and auto-clears stale items when working', async () => {
     const w = bootSidebarDom({ extraScripts: ['plugins/notifications/client/js/notifications.js'] });
     w.Store.setWorkspace('local', {
       provider: 'tmux',
@@ -203,6 +203,38 @@ describe('AgentIcons & AgentStatus UI integration', () => {
     expect(waiting).toHaveLength(1);
     expect(waiting[0]).toMatchObject({ paneId: '%5', state: 'waiting_attention', _ephemeral: true });
     expect(w.document.getElementById('ms-needs-you-pill').hidden).toBe(false);
+
+    // Ephemeral Needs-You items MUST still render in NotificationPanel when _notifications is empty,
+    // and Jump / Reply / Dismiss must resolve the ephemeral card cleanly.
+    const bell = w.document.createElement('button');
+    w.document.body.appendChild(bell);
+    w.NotificationPanel.render({ stopPropagation() {} }, bell);
+    const panel = w.document.getElementById('notification-panel');
+    expect(panel).not.toBeNull();
+    expect(panel.querySelector('.notification-empty')).toBeNull();
+    expect(panel.querySelector('.notification-needs-you-item')).not.toBeNull();
+
+    // Prefill reply from ephemeral card resolves waitingList before _notifications
+    w.fetch = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ success: true }) });
+    const replyInput = panel.querySelector('.notification-reply-input');
+    replyInput.value = 'yes proceed';
+    panel.querySelector('.notification-reply-form').dispatchEvent(new w.Event('submit', { bubbles: true, cancelable: true }));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(w.fetch).toHaveBeenCalledWith(
+      '/api/agent-docs/reply',
+      expect.objectContaining({ method: 'POST', body: JSON.stringify({ paneId: '%5', text: 'yes proceed', serverInstance: '1:1' }) }),
+    );
+
+    // Dismiss button acknowledges attention pane and clears pill
+    panel.querySelector('.notification-dismiss-btn').click();
+    expect(w.NotificationPanel.needsYou()).toHaveLength(0);
+    expect(w.Api.post).toHaveBeenCalledWith('/api/agent-status/ack', {
+      paneId: '%5',
+      windowId: '@1',
+      sessionId: '$1',
+      includeAttention: true,
+    });
+    w.NotificationPanel.close();
 
     // Also test stale persisted notification cleared when agent transitions back to working
     w.NotificationPanel.handleServerPush([

@@ -1,16 +1,18 @@
 #!/usr/bin/env node
+// anymux-managed-hook-router v6
 
 import http from 'node:http';
 import https from 'node:https';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { adoptLegacyEnv, appDir } from '../lib/legacy-names.js';
+import { appendSpoolRecord } from '../lib/agent-hooks/spool.js';
 
 adoptLegacyEnv();
 
 function parseArgs(argv) {
   const args = { bell: false };
-  for (let i = 2; i < argv.length; i++) {
+  for (let i = 2; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === '--no-bell') {
       args.bell = false;
@@ -118,7 +120,13 @@ function postJson(url, payload, token) {
       timeout: 4000,
     }, (res) => {
       res.resume();
-      res.on('end', resolve);
+      res.on('end', () => {
+        if ((res.statusCode || 0) >= 400) {
+          reject(new Error(`HTTP ${res.statusCode}`));
+          return;
+        }
+        resolve();
+      });
     });
     req.on('timeout', () => {
       req.destroy(new Error('request timed out'));
@@ -136,8 +144,11 @@ function parseTmuxServerPid(tmuxEnv) {
 }
 
 const args = parseArgs(process.argv);
+if (args['stdout-json']) {
+  process.stdout.write(`${args['stdout-json']}\n`);
+}
 const input = await readStdin();
-const event = args.event || input.hook_event_name || input.event || 'notification';
+const event = args.event || input.hook_event_name || input.hookEventName || input.event || 'notification';
 const session = args.session || input.session || input.tmux_session || '';
 const windowId = args.windowId || args['window-id'] || input.windowId || input.window_id || '';
 const paneId = args.paneId || args['pane-id'] || input.paneId || input.pane_id || process.env.TMUX_PANE || '';
@@ -175,7 +186,14 @@ const panelToken = args.panelToken || args['panel-token'] || process.env.ANYMUX_
 const monitorUrl = args.monitorUrl || args['monitor-url'] || process.env.AGENT_MONITOR_URL || '';
 const monitorToken = args.monitorToken || args['monitor-token'] || process.env.AGENT_MONITOR_TOKEN || '';
 
-await Promise.allSettled([
+const results = await Promise.allSettled([
   postJson(panelUrl, payload, panelToken),
   postJson(monitorUrl, payload, monitorToken),
 ]);
+if (panelUrl && results[0]?.status === 'rejected') {
+  try {
+    appendSpoolRecord(join(effectiveConfigDir, 'agent-hook-spool.jsonl'), payload);
+  } catch {
+    // Spooling is best effort.
+  }
+}

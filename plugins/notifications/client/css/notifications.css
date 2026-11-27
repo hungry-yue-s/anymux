@@ -218,7 +218,8 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.notification-jump-btn {
+.notification-jump-btn,
+.notification-dismiss-btn {
   height: 22px;
   padding: 0 8px;
   border: 1px solid var(--workspace-line-strong, var(--border));
@@ -229,7 +230,11 @@
   font-weight: 500;
   cursor: pointer;
 }
-.notification-jump-btn:hover { background: var(--workspace-hover, var(--bg-hover)); }
+.notification-dismiss-btn {
+  color: var(--workspace-muted, var(--text-secondary));
+}
+.notification-jump-btn:hover,
+.notification-dismiss-btn:hover { background: var(--workspace-hover, var(--bg-hover)); }
 .notification-needs-you-msg {
   margin-top: 4px;
   font-size: 11.5px;

@@ -40,6 +40,15 @@ export function apply(ctx) {
   ctx.effect(() => ctx.node.setCapability('controlTerminal', () => pool.capability()), 'control-terminal.capability');
   ctx.effect(() => ctx.node.setCapability('windowStream', () => pool.windowStreamCapability()), 'control-terminal.window-capability');
   ctx.effect(() => ctx.node.setCapability('richPane', () => pool.richPaneCapability()), 'control-terminal.rich-pane-capability');
+  ctx.inject(['agentEvents'], (innerCtx) => {
+    innerCtx.effect(() => pool.onProgramStatus((ev) => {
+      if (!ev || (ev.source !== 'osc7501' && ev.source !== 'osc133' && ev.source !== 'bel')) return;
+      const res = innerCtx.agentEvents.ingest(ev, { notify: ev.source === 'osc7501' });
+      if (res?.event && !res.duplicate && !res.yielded && !res.ignored) {
+        innerCtx.emit('status/agent-state', res.event);
+      }
+    }), 'control-terminal.program-status');
+  });
   ctx.effect(() => () => { service.dispose(); pool.dispose(); }, 'control-terminal.sessions');
   ctx.provide('controlTerminals', Object.freeze({ pool, gateway, windowGateway, service }));
 }

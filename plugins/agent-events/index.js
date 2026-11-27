@@ -4,10 +4,12 @@
 // status monitor uses them for pane state; with the notifications plugin
 // loaded they also become notices.
 
+import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { AgentEventService, extractTmuxServerPid } from '../../lib/agent-events.js';
 import { createAgentEventsRouter } from '../../lib/api/agent-events.js';
+import { drainSpoolFile } from '../../lib/agent-hooks/spool.js';
 import { canonicalAgentType, isSafeAgentSessionId } from '../../lib/session-protection/catalog.js';
 
 const execFileAsync = promisify(execFile);
@@ -98,8 +100,22 @@ export function apply(ctx, options = {}) {
   const service = new AgentEventService();
   const inspectWorktree = options.inspectDirtyWorktree || inspectDirtyWorktree;
   let activeTmux = options.tmux || null;
+  let dockStore = null;
+  let workspaceService = null;
   const boundPaneAgents = new Map();
   const validator = createTmuxEventValidator({ getTmux: () => activeTmux });
+  ctx.inject(['dock'], (innerCtx) => {
+    dockStore = innerCtx.dock;
+    innerCtx.effect(() => () => {
+      if (dockStore === innerCtx.dock) dockStore = null;
+    }, 'agent-events.dock');
+  });
+  ctx.inject(['workspace'], (innerCtx) => {
+    workspaceService = innerCtx.workspace;
+    innerCtx.effect(() => () => {
+      if (workspaceService === innerCtx.workspace) workspaceService = null;
+    }, 'agent-events.workspace');
+  });
   ctx.inject(['tmux'], (innerCtx) => {
     activeTmux = innerCtx.tmux;
     validator.invalidate();
@@ -115,6 +131,22 @@ export function apply(ctx, options = {}) {
     ctx.effect(() => () => {
       if (service.notificationStore === ctx.notifications) service.notificationStore = null;
     }, 'agent-events.notices');
+  });
+  ctx.inject(['launch'], (innerCtx) => {
+    const spoolPath = join(innerCtx.launch.configDir, 'agent-hook-spool.jsonl');
+    let disposed = false;
+    innerCtx.effect(() => () => { disposed = true; }, 'agent-events.spool');
+    void drainSpoolFile(spoolPath, async (record) => {
+      if (disposed) return;
+      const check = await validator.validate(record).catch(() => ({ ignore: false, patch: null }));
+      if (disposed || check?.ignore) return;
+      const merged = check?.patch ? { ...record, ...check.patch } : record;
+      const result = service.ingest(merged, { notify: false, isReplay: true });
+      if (result?.event && !result.duplicate) {
+        syncPaneAgentBinding(activeTmux, result.event, boundPaneAgents).catch(() => {});
+        ctx.emit('status/agent-state', result.event);
+      }
+    }).catch(() => {});
   });
   ctx.on('status/tmux-restarted', () => {
     boundPaneAgents.clear();
@@ -135,6 +167,46 @@ export function apply(ctx, options = {}) {
       if (ev.state !== 'agent_stopped' && ev.state !== 'waiting_attention') return;
       const dirty = await inspectWorktree(ev.cwd);
       if (!dirty) return;
+      let persistence = {};
+      if (dockStore && workspaceService) {
+        const ws = await workspaceService.getWorkspace().catch(() => null);
+        if (ws && ws.instanceId) {
+          let matchSession = null;
+          let matchWin = null;
+          for (const session of ws.sessions || []) {
+            for (const win of session.windows || []) {
+              const hit = (ev.windowId && win.id === ev.windowId)
+                || (ev.paneId && (win.panes || []).some((pane) => pane.id === ev.paneId));
+              if (hit) { matchSession = session; matchWin = win; break; }
+            }
+            if (matchWin) break;
+          }
+          if (matchWin) {
+            const recorded = await dockStore.recordGitArrival({
+              path: dirty.repoRoot,
+              commit: 'WORKTREE',
+              dirtyCount: dirty.dirtyCount,
+              paneId: ev.paneId || null,
+              windowId: matchWin.id,
+              instanceId: ws.instanceId,
+              sessionId: matchSession?.id || '',
+              sessionName: matchSession?.name || '',
+              windowIndex: matchWin.index ?? null,
+              windowName: matchWin.name || '',
+              activate: false,
+            }).catch(() => null);
+            if (recorded) {
+              persistence = {
+                instanceId: ws.instanceId,
+                windowId: matchWin.id,
+                dockRevision: recorded.revision,
+                noticeId: recorded.notice?.id || null,
+                serverPersisted: true,
+              };
+            }
+          }
+        }
+      }
       ctx.emit('status/event', {
         type: 'open-git',
         path: dirty.repoRoot,
@@ -143,6 +215,7 @@ export function apply(ctx, options = {}) {
         paneId: ev.paneId || undefined,
         windowId: ev.windowId || undefined,
         activate: false,
+        ...persistence,
       });
     },
   }));

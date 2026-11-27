@@ -652,7 +652,7 @@
       var list = [];
       Object.keys(snap.panes).forEach(function (paneId) {
         var entry = snap.panes[paneId];
-        if (!entry || (entry.status !== 'permission' && entry.status !== 'failed')) return;
+        if (!entry || entry.dismissed || (entry.status !== 'permission' && entry.status !== 'failed')) return;
         var loc = locByPane[paneId] || {};
         list.push(Object.assign({}, entry, loc, { serverId: sid, paneId: paneId }));
       });
@@ -695,11 +695,18 @@
         });
       }
 
+      var includeAttention = Boolean(t.includeAttention);
       var changed = false;
       Object.keys(targetPaneIds).forEach(function (pid) {
         var entry = snap.panes[pid];
-        if (entry && entry.status === 'done' && entry.unread) {
+        if (!entry) return;
+        if (entry.status === 'done' && entry.unread) {
           entry.unread = false;
+          changed = true;
+        } else if (includeAttention && (entry.status === 'permission' || entry.status === 'failed')) {
+          entry.unread = false;
+          entry.dismissed = true;
+          entry.status = 'idle';
           changed = true;
         }
       });
@@ -726,11 +733,13 @@
       _notifyUi(false);
 
       if (global.Api && typeof global.Api.post === 'function' && typeof global.Api.nodeUrl === 'function') {
-        global.Api.post(global.Api.nodeUrl(sid, '/api/agent-status/ack'), {
+        var ackPayload = {
           paneId: t.paneId || '',
           windowId: t.windowId || '',
           sessionId: t.sessionId || '',
-        }).catch(function () {});
+        };
+        if (includeAttention) ackPayload.includeAttention = true;
+        global.Api.post(global.Api.nodeUrl(sid, '/api/agent-status/ack'), ackPayload).catch(function () {});
       }
     },
 

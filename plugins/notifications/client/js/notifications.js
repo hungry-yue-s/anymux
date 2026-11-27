@@ -75,6 +75,10 @@ var NotificationPanel = (function () {
       if (!_documents.some(function (n) { return n.id === id; })) delete _documentOpeners[id];
     });
     _saveDocuments();
+    if (!notice.skipServerSync && window.DockSync && typeof window.DockSync.sendNoticeOp === 'function'
+      && !(window.DockSync.isApplyingRemote && window.DockSync.isApplyingRemote())) {
+      window.DockSync.sendNoticeOp(entry.serverId, { type: 'upsert', notice: entry });
+    }
     _updateBadge();
     _syncAttention();
     if (_isOpen) _rerenderPanel();
@@ -161,7 +165,14 @@ var NotificationPanel = (function () {
         }
         _notifications.unshift(n);
         if (!n.read) _attentionUntil[n.id] = Date.now() + 2400;
-        if (!isCurrentWindow) _postNativeNotification(n);
+        if (!isCurrentWindow) {
+          var activePaneFocused = document.visibilityState !== 'hidden'
+            && window.Workbench
+            && typeof window.Workbench.context === 'function'
+            && n.paneId
+            && window.Workbench.context().paneId === n.paneId;
+          if (!activePaneFocused) _postNativeNotification(n);
+        }
       }
     }
     _updateBadge();
@@ -177,8 +188,21 @@ var NotificationPanel = (function () {
       delete _attentionUntil[id];
       _updateBadge();
       _syncAttention();
-      if (isPreview(n)) _saveDocuments();
-      else _serverMarkRead(id);
+      if (isPreview(n)) {
+        _saveDocuments();
+        if (window.DockSync && typeof window.DockSync.sendNoticeOp === 'function'
+          && !(window.DockSync.isApplyingRemote && window.DockSync.isApplyingRemote())) {
+          window.DockSync.sendNoticeOp(n.serverId, {
+            type: 'mark-read',
+            id: n.id,
+            path: n.path,
+            noticeType: n.type,
+            commit: n.commit || null,
+            instanceId: n.target && n.target.instanceId,
+            windowId: n.target && n.target.windowId,
+          });
+        }
+      } else _serverMarkRead(id);
     }
   }
 
@@ -188,6 +212,11 @@ var NotificationPanel = (function () {
     _documentOpeners = Object.create(null);
     _attentionUntil = Object.create(null);
     _saveDocuments();
+    if (window.DockSync && typeof window.DockSync.sendNoticeOp === 'function'
+      && !(window.DockSync.isApplyingRemote && window.DockSync.isApplyingRemote())) {
+      var activeServer = (window.Api && Api.activeServerId && Api.activeServerId()) || 'local';
+      window.DockSync.sendNoticeOp(activeServer, { type: 'clear' });
+    }
     _updateBadge();
     _syncAttention();
     _serverClearAll();
@@ -224,6 +253,7 @@ var NotificationPanel = (function () {
           state: entry.status === 'failed' ? 'failed' : 'waiting_attention',
           source: entry.agentType || entry.appKind || 'agent',
           session: entry.session || '',
+          sessionId: entry.sessionId || '',
           windowIndex: entry.windowIndex ?? '',
           windowId: entry.windowId || '',
           windowName: entry.windowName || '',
@@ -436,11 +466,12 @@ var NotificationPanel = (function () {
       html += '</div>';
     }
 
-    if (_notifications.length === 0) {
+    var esc = typeof escapeHtml === 'function' ? escapeHtml : function (v) { return String(v == null ? '' : v); };
+    var waitingList = needsYou();
+
+    if (_notifications.length === 0 && waitingList.length === 0) {
       html += '<div class="notification-empty">暂无通知</div>';
     } else {
-      var esc = typeof escapeHtml === 'function' ? escapeHtml : function (v) { return String(v == null ? '' : v); };
-      var waitingList = needsYou();
       if (waitingList.length > 0) {
         html += '<div class="notification-needs-you" aria-label="待处理 Agent">';
         html += '<div class="notification-needs-you-head"><span>◆ 待处理 (' + waitingList.length + ')</span></div>';
@@ -451,6 +482,7 @@ var NotificationPanel = (function () {
           html += '<span class="notification-needs-you-target">' + esc(label) + '</span>';
           html += '<span class="notification-item-time">' + _relativeTime(n.timestamp) + '</span>';
           html += '<button type="button" class="notification-jump-btn" data-jump-id="' + esc(n.id) + '">跳转</button>';
+          html += '<button type="button" class="notification-dismiss-btn" data-dismiss-id="' + esc(n.id) + '" aria-label="忽略此提醒">忽略</button>';
           html += '</div>';
           html += '<div class="notification-needs-you-msg">' + esc(_notificationText(n)) + '</div>';
           if (n.paneId) {
@@ -463,27 +495,34 @@ var NotificationPanel = (function () {
         });
         html += '</div>';
       }
-      html += '<div class="notification-list">';
-      _notifications.forEach(function (n) {
-        var readClass = n.read ? ' notification-item-read' : '';
-        var staleClass = _isStaleAgentNotice(n) ? ' notification-item-stale' : '';
-        html += '<div class="notification-item' + readClass + staleClass + '" role="button" tabindex="0" data-notif-id="' + (typeof escapeHtml === 'function' ? escapeHtml(n.id) : n.id) +
-          '" data-session="' + (typeof escapeHtml === 'function' ? escapeHtml(n.session) : n.session) +
-          '" data-window-index="' + n.windowIndex + '">';
-        html += '<div class="notification-item-header">';
-        var hasWindowIndex = n.windowIndex !== '' && n.windowIndex !== null && n.windowIndex !== undefined;
-        var displayName = n.windowName
-          ? (hasWindowIndex ? n.windowIndex + ': ' : '') + n.windowName
-          : (hasWindowIndex ? 'window ' + n.windowIndex : (n.session || n.source || 'agent'));
-        html += '<span class="notification-item-target">' + (typeof escapeHtml === 'function' ? escapeHtml(displayName) : displayName) + '</span>';
-        html += '<span class="notification-item-time">' + _relativeTime(n.timestamp) + '</span>';
+      if (_notifications.length > 0) {
+        html += '<div class="notification-list">';
+        _notifications.forEach(function (n) {
+          var readClass = n.read ? ' notification-item-read' : '';
+          var staleClass = _isStaleAgentNotice(n) ? ' notification-item-stale' : '';
+          html += '<div class="notification-item' + readClass + staleClass + '" role="button" tabindex="0" data-notif-id="' + esc(n.id) +
+            '" data-session="' + esc(n.session) +
+            '" data-window-index="' + n.windowIndex + '">';
+          html += '<div class="notification-item-header">';
+          var hasWindowIndex = n.windowIndex !== '' && n.windowIndex !== null && n.windowIndex !== undefined;
+          var displayName = n.windowName
+            ? (hasWindowIndex ? n.windowIndex + ': ' : '') + n.windowName
+            : (hasWindowIndex ? 'window ' + n.windowIndex : (n.session || n.source || 'agent'));
+          html += '<span class="notification-item-target">' + esc(displayName) + '</span>';
+          html += '<span class="notification-item-time">' + _relativeTime(n.timestamp) + '</span>';
+          html += '</div>';
+          var text = _notificationText(n);
+          html += '<div class="notification-item-command">' + esc(text) + '</div>';
+          html += '</div>';
+        });
         html += '</div>';
-        var text = _notificationText(n);
-        html += '<div class="notification-item-command">' + (typeof escapeHtml === 'function' ? escapeHtml(text) : text) + '</div>';
-        html += '</div>';
-      });
-      html += '</div>';
+      }
     }
+
+    var findNoticeById = function (id) {
+      return waitingList.find(function (n) { return n.id === id; })
+        || _notifications.find(function (n) { return n.id === id; });
+    };
 
     container.innerHTML = html;
     container.querySelector('.notification-clear-btn').addEventListener('click', function (event) {
@@ -497,10 +536,31 @@ var NotificationPanel = (function () {
       btn.addEventListener('click', function (event) {
         event.stopPropagation();
         var id = btn.getAttribute('data-jump-id');
-        var notice = _notifications.find(function (n) { return n.id === id; });
+        var notice = findNoticeById(id);
         if (!notice) return;
         _jumpToNotice(notice);
         _closePanel();
+      });
+    });
+
+    container.querySelectorAll('.notification-dismiss-btn').forEach(function (btn) {
+      btn.addEventListener('click', function (event) {
+        event.stopPropagation();
+        var id = btn.getAttribute('data-dismiss-id');
+        var notice = findNoticeById(id);
+        if (!notice) return;
+        if (notice.paneId && window.AgentStatus && typeof AgentStatus.acknowledge === 'function') {
+          var sid = notice.serverId || (window.Api && Api.activeServerId && Api.activeServerId()) || 'local';
+          AgentStatus.acknowledge(sid, {
+            paneId: notice.paneId,
+            windowId: notice.windowId || '',
+            sessionId: notice.sessionId || '',
+            includeAttention: true,
+          });
+        }
+        if (!notice._ephemeral) markRead(notice.id);
+        _updateBadge();
+        if (_isOpen) _rerenderPanel();
       });
     });
 
@@ -510,7 +570,7 @@ var NotificationPanel = (function () {
         event.preventDefault();
         event.stopPropagation();
         var id = form.getAttribute('data-reply-id');
-        var notice = _notifications.find(function (n) { return n.id === id; });
+        var notice = findNoticeById(id);
         var input = form.querySelector('.notification-reply-input');
         var text = input ? input.value : '';
         if (!notice || !text.trim()) return;
@@ -626,6 +686,14 @@ var NotificationPanel = (function () {
         delete _attentionUntil[n.id];
       });
       _saveDocuments();
+      if (window.DockSync && typeof window.DockSync.sendNoticeOp === 'function'
+        && !(window.DockSync.isApplyingRemote && window.DockSync.isApplyingRemote())) {
+        window.DockSync.sendNoticeOp(notice.serverId, {
+          type: 'dismiss-window',
+          instanceId: notice.target.instanceId,
+          windowId: notice.target.windowId,
+        });
+      }
       _syncAttention();
     }
     if (window.AppShell && AppShell.closeMobileWorkspaceSheet) AppShell.closeMobileWorkspaceSheet({ restoreFocus: false });
@@ -674,7 +742,15 @@ var NotificationPanel = (function () {
       n.reminderSeen = true;
       delete _attentionUntil[n.id];
     });
-    if (changed) _saveDocuments();
+    if (changed) {
+      _saveDocuments();
+      if (window.DockSync && typeof window.DockSync.sendNoticeOp === 'function'
+        && !(window.DockSync.isApplyingRemote && window.DockSync.isApplyingRemote())) {
+        window.DockSync.sendNoticeOp(notice.serverId, notice.target
+          ? { type: 'dismiss-window', instanceId: notice.target.instanceId, windowId: notice.target.windowId }
+          : { type: 'dismiss-window', id: notice.id });
+      }
+    }
     _syncAttention();
   }
 
@@ -792,6 +868,65 @@ var NotificationPanel = (function () {
     }
   });
 
+  function syncServerPreviews(serverId, serverNotices) {
+    if (!serverId || !Array.isArray(serverNotices)) return;
+    var normalized = [];
+    var seen = Object.create(null);
+    serverNotices.forEach(function (raw) {
+      if (!raw || !isPreview(raw) || typeof raw.path !== 'string') return;
+      var entry = Object.assign({}, raw, { serverId: serverId });
+      if (entry.target && typeof entry.target === 'object') {
+        entry.target = Object.assign({}, entry.target, { serverId: serverId });
+      }
+      var key = previewKey(entry);
+      if (seen[key]) return;
+      seen[key] = true;
+      normalized.push(entry);
+    });
+    _documents = normalized
+      .concat(_documents.filter(function (n) { return (n.serverId || 'local') !== serverId; }))
+      .sort(function (a, b) { return b.timestamp - a.timestamp; })
+      .slice(0, 50);
+    _notifications = _notifications.filter(function (n) { return !isPreview(n); }).concat(_documents)
+      .sort(function (a, b) { return b.timestamp - a.timestamp; });
+    _saveDocuments();
+    _updateBadge();
+    _syncAttention();
+    if (_isOpen) _rerenderPanel();
+  }
+
+  function reloadLocalPreviews() {
+    try {
+      var savedDocuments = JSON.parse(window.localStorage.getItem(DOCUMENT_KEY) || '[]');
+      var seen = Object.create(null);
+      if (Array.isArray(savedDocuments)) {
+        _documents = savedDocuments.filter(function (n) {
+          if (!n || !isPreview(n) || typeof n.id !== 'string' || typeof n.path !== 'string') return false;
+          var key = previewKey(n);
+          if (seen[key]) return false;
+          seen[key] = true;
+          return true;
+        }).slice(0, 50);
+      }
+    } catch (_) {}
+    _notifications = _notifications.filter(function (n) { return !isPreview(n); }).concat(_documents)
+      .sort(function (a, b) { return b.timestamp - a.timestamp; });
+    _updateBadge();
+    _syncAttention();
+    if (_isOpen) _rerenderPanel();
+  }
+
+  function forgetServerPreviews(serverId) {
+    if (!serverId) return;
+    _documents = _documents.filter(function (n) { return (n.serverId || 'local') !== serverId; });
+    _notifications = _notifications.filter(function (n) { return !isPreview(n); }).concat(_documents)
+      .sort(function (a, b) { return b.timestamp - a.timestamp; });
+    _saveDocuments();
+    _updateBadge();
+    _syncAttention();
+    if (_isOpen) _rerenderPanel();
+  }
+
   return {
     addDocument: addDocument,
     addPreview: addDocument,
@@ -808,6 +943,9 @@ var NotificationPanel = (function () {
     close: _closePanel,
     updateBadge: _updateBadge,
     handleServerPush: handleServerPush,
+    syncServerPreviews: syncServerPreviews,
+    reloadLocalPreviews: reloadLocalPreviews,
+    forgetServerPreviews: forgetServerPreviews,
     refresh: _fetchAll,
     syncAttention: _syncAttention,
   };
