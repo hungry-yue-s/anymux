@@ -245,6 +245,30 @@ describe('AppShell sidebar tree', () => {
     original.focus();
     ctx.Store.setHealth('local', { state: 'online', latencyMs: 4, capabilities: {} });
     ctx.Shell.render();
+    expect(ctx.document.querySelector('[data-window="@2"] .tree-item')).toBe(original);
+    expect(ctx.document.activeElement).toBe(original);
+
+    ctx.Store.setWorkspace('local', {
+      serverId: 'local',
+      provider: 'tmux',
+      transport: 'local',
+      persistence: 'tmux',
+      pendingProvider: null,
+      revision: 2,
+      actions: TMUX_ACTIONS,
+      sessions: [
+        {
+          id: '$0',
+          name: 'DataAnt',
+          active: true,
+          windows: [
+            { id: '@0', index: 1, name: '三绿-v2', active: true, panes: [{ id: '%95', command: 'codex' }] },
+            { id: '@2', index: 2, name: '风控点总结', active: false, panes: [{ id: '%12', command: 'fish' }] },
+          ],
+        },
+      ],
+    });
+    ctx.Shell.render();
     const replacement = ctx.document.querySelector('[data-window="@2"] .tree-item');
     expect(replacement).not.toBe(original);
     expect(original.isConnected).toBe(false);

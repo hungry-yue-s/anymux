@@ -277,4 +277,60 @@ describe('AgentIcons & AgentStatus UI integration', () => {
     expect(workingDsh.status).toBe('working');
     expect(workingDsh.label).toBe('🐋 解释 MAS 的 HWID');
   });
+
+  it('preserves working .agent-spinner DOM node across latency/updatedAt updates and phase-locks fresh spinners', () => {
+    const w = bootSidebarDom();
+    w.document.body.insertAdjacentHTML('beforeend', '<div class="server-context" id="ms-server-context"></div>');
+    w.Store.setServers([{ id: 'local', name: 'local', kind: 'local' }]);
+    w.Store.setHealth('local', { state: 'online', latencyMs: 12, capabilities: {} });
+    const baseTs = Math.floor(Date.now() / 15000) * 15000 + 2000;
+    w.Store.setWorkspace('local', {
+      provider: 'tmux',
+      instanceId: '1:1',
+      actions: {},
+      sessions: [{
+        id: '$1',
+        name: 'work',
+        windows: [{ id: '@1', index: 0, name: 'dev', panes: [{ id: '%1', index: 0, command: 'agy', active: true }] }],
+      }],
+    });
+    w.Store.setRoute({ name: 'terminal', params: { serverId: 'local', sessionId: '$1', windowId: '@1', paneId: '%1' } });
+    w.AgentStatus.setSnapshot('local', {
+      hasAgents: true,
+      serverInstance: '1:1',
+      updatedAt: baseTs,
+      panes: {
+        '%1': { paneId: '%1', agentType: 'antigravity', appKind: 'antigravity', status: 'working', prompt: '继续', shortModel: 'gemini-4', updatedAt: baseTs },
+      },
+      windows: { '@1': { windowId: '@1', status: 'working', appKind: 'antigravity', agentCount: 1, updatedAt: baseTs } },
+      sessions: { '$1': { sessionId: '$1', sessionName: 'work', status: 'working', appKind: 'antigravity', agentCount: 1, updatedAt: baseTs } },
+    });
+
+    w.AppShell.render();
+    const spinner = w.document.querySelector('#ms-server-context .agent-state-ico.is-working span.agent-spinner');
+    expect(spinner).not.toBeNull();
+    expect(spinner.querySelector('svg')).not.toBeNull();
+    expect(spinner.style.animationDelay).toMatch(/^-\d+ms$/);
+
+    // Deterministic SVG gradient UID when scoped
+    expect(w.AgentIcons.appIcon('omp', 'pane-%1')).toBe(w.AgentIcons.appIcon('omp', 'pane-%1'));
+
+    // Latency change + minor updatedAt tick within 15s bucket updates switcher only, preserving the exact spinner node
+    w.Store.setHealth('local', { state: 'online', latencyMs: 48, capabilities: {} });
+    w.AgentStatus.setSnapshot('local', {
+      hasAgents: true,
+      serverInstance: '1:1',
+      updatedAt: baseTs + 3000,
+      panes: {
+        '%1': { paneId: '%1', agentType: 'antigravity', appKind: 'antigravity', status: 'working', prompt: '继续', shortModel: 'gemini-4', updatedAt: baseTs + 3000 },
+      },
+      windows: { '@1': { windowId: '@1', status: 'working', appKind: 'antigravity', agentCount: 1, updatedAt: baseTs + 3000 } },
+      sessions: { '$1': { sessionId: '$1', sessionName: 'work', status: 'working', appKind: 'antigravity', agentCount: 1, updatedAt: baseTs + 3000 } },
+    });
+    w.AppShell.render();
+
+    const sameSpinner = w.document.querySelector('#ms-server-context .agent-state-ico.is-working span.agent-spinner');
+    expect(sameSpinner).toBe(spinner);
+    expect(w.document.querySelector('#ms-server-context .server-switcher small').textContent).toContain('48ms');
+  });
 });

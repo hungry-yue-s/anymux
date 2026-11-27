@@ -624,6 +624,49 @@ describe('StatusMonitor', () => {
       expect(lateStore.invalidateForServer).toHaveBeenCalledWith('3000:1700000800');
     });
 
+    it('suppresses redundant agent-status broadcasts when hooks only bump updatedAt without visible change', async () => {
+      let now = 1_700_000_100_000;
+      vi.setSystemTime(now);
+      const agentEvents = new AgentEventService({ now: () => now });
+      const snapshotServerState = vi.fn().mockResolvedValue({
+        serverInstance: '4000:1700000000',
+        sessions: [{ id: '$1', name: 'work', windows: 1, attached: true, lastActivity: '1' }],
+        windowsBySession: new Map([['$1', [{ id: '@1', index: 0, name: 'dev', active: true, width: 80, height: 24, bell: false, activity: 1 }]]]),
+        paneCommandsBySession: new Map([['$1', [{ windowIndex: 0, paneId: '%1', command: 'claude', path: '/repo', pid: 4001 }]]]),
+      });
+      monitor = new StatusMonitor({ agentEvents, scanProcesses: async () => new Map(), snapshotServerState });
+      const ws = createMockWs();
+      monitor.subscribe(ws);
+
+      const ev1 = agentEvents.ingest({
+        agent: 'claude',
+        event: 'PreToolUse',
+        paneId: '%1',
+        windowId: '@1',
+        tmuxServerPid: '4000',
+        prompt: 'Optimize spinner',
+        model: 'claude-opus-4-5',
+      });
+      monitor.handleAgentEvent(ev1.event);
+      await monitor.poll();
+      ws.send.mockClear();
+
+      // Rapid PostToolUse 250ms later only changes updatedAt; semantic snapshot is identical
+      now += 250;
+      vi.setSystemTime(now);
+      const ev2 = agentEvents.ingest({
+        agent: 'claude',
+        event: 'PostToolUse',
+        paneId: '%1',
+        windowId: '@1',
+        tmuxServerPid: '4000',
+      });
+      monitor.handleAgentEvent(ev2.event);
+      await monitor.poll();
+
+      expect(sent(ws, 'agent-status')).toHaveLength(0);
+    });
+
     it('does not broadcast when plain shell stays idle', async () => {
       monitor = new StatusMonitor({ scanProcesses: async () => new Map() });
       const ws = createMockWs();

@@ -355,7 +355,8 @@ button { touch-action:manipulation; }
 }
 
 @keyframes agent-spin {
-  to { transform: rotate(360deg); }
+  from { transform: rotate(0deg) translateZ(0); }
+  to { transform: rotate(360deg) translateZ(0); }
 }
 
 .agent-state-ico {
@@ -369,7 +370,19 @@ button { touch-action:manipulation; }
 }
 .agent-state-ico > svg { width: 13px; height: 13px; display: block; }
 .agent-state-ico.is-working { color: var(--agent-working); }
-.agent-state-ico.is-working .agent-spinner { animation: agent-spin 0.9s linear infinite; transform-origin: center; }
+.agent-state-ico.is-working .agent-spinner {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 13px;
+  height: 13px;
+  transform-origin: 50% 50%;
+  will-change: transform;
+  backface-visibility: hidden;
+  contain: layout style;
+  animation: agent-spin 0.85s linear infinite;
+}
+.agent-state-ico.is-working .agent-spinner > svg { width: 13px; height: 13px; display: block; }
 .agent-state-ico.is-permission { color: var(--agent-permission); }
 .agent-state-ico.is-failed { color: var(--agent-failed); }
 .agent-state-ico.is-done { color: var(--agent-done); }

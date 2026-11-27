@@ -220,10 +220,44 @@
           + esc(this._latencyOf(health)) + '</small></span>'
           + '<span>⌄</span></button>';
 
-        html = '<div class="subnav">' + this._renderTree(serverId, route) + '</div>' + switcher;
+        var treeHtml = this._renderTree(serverId, route);
+        var first = context.firstElementChild;
+        if (context._sidebarMode === 'terminal' && context.childElementCount >= 2 && first && first.classList.contains('subnav')) {
+          if (first._lastTreeHtml !== treeHtml) {
+            first._lastTreeHtml = treeHtml;
+            first.innerHTML = treeHtml;
+            if (global.AgentIcons && typeof global.AgentIcons.syncSpinnerPhases === 'function') {
+              global.AgentIcons.syncSpinnerPhases(first);
+            }
+          }
+          if (context._lastSwitcherHtml !== switcher) {
+            context._lastSwitcherHtml = switcher;
+            var last = context.lastElementChild;
+            if (last && last !== first) {
+              var tmp = global.document.createElement('div');
+              tmp.innerHTML = switcher;
+              if (tmp.firstElementChild) context.replaceChild(tmp.firstElementChild, last);
+            }
+          }
+          return;
+        }
+
+        context._sidebarMode = 'terminal';
+        context._lastSidebarHtml = '';
+        context._lastSwitcherHtml = switcher;
+        context.innerHTML = '<div class="subnav">' + treeHtml + '</div>' + switcher;
+        if (context.firstElementChild) {
+          context.firstElementChild._lastTreeHtml = treeHtml;
+          if (global.AgentIcons && typeof global.AgentIcons.syncSpinnerPhases === 'function') {
+            global.AgentIcons.syncSpinnerPhases(context.firstElementChild);
+          }
+        }
+        return;
       }
-      if (context._lastSidebarHtml === html && context.childElementCount > 0) return;
+      if (context._sidebarMode === mode && context._lastSidebarHtml === html && context.childElementCount > 0) return;
+      context._sidebarMode = mode;
       context._lastSidebarHtml = html;
+      context._lastSwitcherHtml = '';
       context.innerHTML = html;
     },
 
@@ -455,10 +489,11 @@
         var subagentHtml = info.subagentCount > 0
           ? '<span class="agent-row-subagents" title="活跃子代理">×' + esc(String(info.subagentCount)) + '</span>'
           : '';
+        var tsBucket = info.updatedAt ? Math.floor(Number(info.updatedAt) / 15000) * 15000 : 0;
         var metaHtml = (modelText || relTime)
           ? '<span class="agent-row-meta">'
             + (modelText ? '<span class="agent-row-model">' + esc(modelText) + '</span>' : '')
-            + (relTime ? '<span class="agent-row-time" data-ts="' + esc(String(info.updatedAt || '')) + '">' + esc(relTime) + '</span>' : '')
+            + (relTime ? '<span class="agent-row-time" data-ts="' + esc(String(tsBucket || '')) + '">' + esc(relTime) + '</span>' : '')
             + '</span>'
           : '';
 
@@ -467,7 +502,7 @@
           + navAttrs
           + ' title="' + esc(tooltipText) + '">'
           + global.AgentIcons.statusIcon(info.status, info.unread)
-          + global.AgentIcons.appIcon(info.appKind || info.agentType || 'shell')
+          + global.AgentIcons.appIcon(info.appKind || info.agentType || 'shell', 'pane-' + pane.id)
           + '<span class="agent-row-title">' + esc(titleText) + '</span>'
           + subagentHtml
           + metaHtml
@@ -508,7 +543,7 @@
         : '';
       var appKind = (winAgent && winAgent.appKind)
         || (global.AgentIcons && displayPane ? global.AgentIcons.resolveKind(displayPane.command || displayPane.name, displayPane.agentType) : '');
-      var winAppHtml = (!childAgentRows && appKind && global.AgentIcons) ? global.AgentIcons.appIcon(appKind) : '';
+      var winAppHtml = (!childAgentRows && appKind && global.AgentIcons) ? global.AgentIcons.appIcon(appKind, 'win-' + win.id) : '';
       var stateCls = winAgent && winAgent.status === 'permission'
         ? ' is-attention'
         : (winAgent && winAgent.status === 'failed'

@@ -2,7 +2,7 @@
   "serve": ["."],
   "head": [
     { "order": 50, "style": "/css/style.css?v=60" },
-    { "order": 51, "style": "/css/workspace.css?v=5" },
+    { "order": 51, "style": "/css/workspace.css?v=6" },
     { "order": 53, "style": "/css/mobile.css?v=7" },
     { "order": 56, "style": "/css/blocks.css?v=2" },
     { "order": 57, "style": "/css/context-menu.css?v=1" }
@@ -14,7 +14,7 @@
     { "order": 70, "script": "/js/router.js?v=4" },
     { "order": 80, "script": "/js/store.js?v=4" },
     { "order": 84, "script": "/js/agent-icons-data.js?v=1" },
-    { "order": 85, "script": "/js/agent-status.js?v=3" },
+    { "order": 85, "script": "/js/agent-status.js?v=4" },
     { "order": 90, "script": "/js/api.js?v=3" },
     { "order": 100, "script": "/js/terminal-target.js?v=5" },
     { "order": 175, "script": "/js/blocks-kit.js" },
@@ -22,7 +22,7 @@
     { "order": 200, "script": "/js/mobile-ui.js?v=2" },
     { "order": 320, "script": "/js/app.js?v=18" },
     { "order": 330, "script": "/js/command-palette.js?v=5" },
-    { "order": 350, "script": "/js/app-shell.js?v=20" },
+    { "order": 350, "script": "/js/app-shell.js?v=21" },
     { "order": 360, "script": "/js/servers.js?v=15" },
     { "order": 365, "script": "/js/management-page.js" },
     { "order": 385, "script": "/js/context-menu.js?v=1" },

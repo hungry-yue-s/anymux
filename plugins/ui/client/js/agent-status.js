@@ -302,7 +302,9 @@
     db: '<ellipse cx="12" cy="6.8" rx="6.5" ry="2.6" stroke="currentColor" stroke-width="1.6" fill="none"/><path d="M5.5 6.8v10.4c0 1.4 2.9 2.6 6.5 2.6s6.5-1.2 6.5-2.6V6.8M5.5 12c0 1.4 2.9 2.6 6.5 2.6s6.5-1.2 6.5-2.6" stroke="currentColor" stroke-width="1.5" fill="none"/>',
   };
 
-  function appIcon(kind) {
+  var SPINNER_PERIOD_MS = 850;
+
+  function appIcon(kind, uidKey) {
     var raw = String(kind || 'shell').trim().toLowerCase().replace(/[_\s]+/g, '-');
     var clean = AGENT_ALIASES[raw] || raw;
     var agentCls = isAgentKind(clean) ? ' is-agent' : '';
@@ -311,7 +313,10 @@
       var spec = lib.svg[clean];
       var svgBody = spec.body;
       if (svgBody.indexOf('{{UID}}') >= 0) {
-        svgBody = svgBody.replace(/\{\{UID\}\}/g, String(++_svgUid));
+        var suffix = uidKey
+          ? escAttr(String(uidKey).replace(/[^A-Za-z0-9_-]+/g, '-'))
+          : String(++_svgUid);
+        svgBody = svgBody.replace(/\{\{UID\}\}/g, suffix);
       }
       return '<span class="agent-app-icon is-kind-' + escAttr(clean) + agentCls + '" aria-hidden="true">'
         + '<svg viewBox="' + escAttr(spec.viewBox || '0 0 24 24') + '" fill="none" aria-hidden="true" focusable="false">' + svgBody + '</svg>'
@@ -336,8 +341,11 @@
     if (!status || status === 'idle' || status === 'session_ended') return '';
     if (status === 'working') {
       return '<span class="agent-state-ico is-working" aria-hidden="true" title="Agent 正在执行">'
-        + '<svg class="agent-spinner" viewBox="0 0 16 16" fill="none" aria-hidden="true" focusable="false">'
-        + '<circle cx="8" cy="8" r="5.4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-dasharray="22 14"/></svg>'
+        + '<span class="agent-spinner">'
+        + '<svg viewBox="0 0 16 16" fill="none" aria-hidden="true" focusable="false">'
+        + '<circle cx="8" cy="8" r="5.5" stroke="currentColor" stroke-opacity="0.22" stroke-width="1.8"/>'
+        + '<circle cx="8" cy="8" r="5.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-dasharray="14 22"/></svg>'
+        + '</span>'
         + '</span>';
     }
     if (status === 'permission' || status === 'waiting') {
@@ -376,6 +384,21 @@
         + '</span>';
     }
     return '';
+  }
+
+  function syncSpinnerPhases(root) {
+    var scope = root || global.document;
+    if (!scope || typeof scope.querySelectorAll !== 'function') return;
+    var now = (global.performance && typeof global.performance.now === 'function')
+      ? global.performance.now()
+      : Date.now();
+    var delay = '-' + Math.round(now % SPINNER_PERIOD_MS) + 'ms';
+    var nodes = scope.querySelectorAll('.agent-state-ico.is-working .agent-spinner');
+    for (var i = 0; i < nodes.length; i += 1) {
+      if (!nodes[i].style.animationDelay) {
+        nodes[i].style.animationDelay = delay;
+      }
+    }
   }
 
   function labelOf(kind) {
@@ -745,6 +768,7 @@
     isAgentKind: isAgentKind,
     appIcon: appIcon,
     statusIcon: statusIcon,
+    syncSpinnerPhases: syncSpinnerPhases,
     labelOf: labelOf,
     stripTitle: stripTitle,
     formatShortModel: formatShortModel,
