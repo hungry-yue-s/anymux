@@ -389,9 +389,14 @@
 
       var self = this;
       var params = (route && route.params) || {};
+      var focused = global.Blocks && global.Blocks.ui && typeof global.Blocks.ui.selectedContext === 'function'
+        ? global.Blocks.ui.selectedContext()
+        : null;
+      var activeSessionId = params.sessionId
+        || (focused && focused.onTerminal && focused.serverId === serverId ? focused.sessionId : null);
       var tree = sessions.map(function (session) {
-        var expanded = global.Store.isSessionExpanded(serverId, session.id) || params.sessionId === session.id;
-        var isActive = params.sessionId === session.id;
+        var expanded = global.Store.isSessionExpanded(serverId, session.id) || activeSessionId === session.id;
+        var isActive = activeSessionId === session.id;
         var sessionAgent = global.AgentStatus && typeof global.AgentStatus.getSession === 'function'
           ? global.AgentStatus.getSession(serverId, session)
           : null;
@@ -607,13 +612,18 @@
       if (isTerminal) {
         var params = route.params || {};
         var workspace = this.workspace(serverId);
-        var session = this._findSession(workspace, params.sessionId);
-        var win = this._findWindow(session, params.windowId);
-        title.textContent = win ? (win.index + ' ' + win.name) : '选择工作区';
-        subtitle.textContent = session ? session.name : (server ? server.name : serverId);
-        if (terminalView(route)) {
-          title.textContent = terminalView(route).title(route);
-          subtitle.textContent = server ? server.name : serverId;
+        var entry = terminalView(route);
+        if (entry) {
+          var ctx = typeof entry.currentContext === 'function' ? entry.currentContext() : null;
+          var wbSession = this._findSession(workspace, ctx && ctx.sessionId);
+          var wbWin = this._findWindow(wbSession, ctx && ctx.windowId);
+          title.textContent = wbWin ? (wbWin.index + ' ' + wbWin.name) : entry.title(route);
+          subtitle.textContent = wbSession ? wbSession.name : (server ? server.name : serverId);
+        } else {
+          var session = this._findSession(workspace, params.sessionId);
+          var win = this._findWindow(session, params.windowId);
+          title.textContent = win ? (win.index + ' ' + win.name) : '选择工作区';
+          subtitle.textContent = session ? session.name : (server ? server.name : serverId);
         }
       } else {
         title.textContent = this._titleFor(route);
@@ -626,11 +636,12 @@
       global.document.querySelectorAll('[data-terminal-home]').forEach(function (home) {
         home.dataset.route = global.Router.serialize({ name: 'terminal', params: { serverId: serverId } });
       });
-      var files = global.document.querySelector('.mobile-dock [data-action="mobile-files"]');
-      if (files) {
-        files.disabled = !isTerminal || !this.mobilePaneId(route);
-        files.title = files.disabled ? '进入终端后浏览文件' : '浏览当前窗格目录';
-      }
+      var filesDisabled = !isTerminal || !this.mobilePaneId(route);
+      var filesTitle = filesDisabled ? '进入终端后浏览文件' : '浏览当前窗格目录';
+      global.document.querySelectorAll('.mobile-dock [data-action="mobile-files"], .ms-mobile-sheet-nav [data-action="mobile-files"]').forEach(function (files) {
+        files.disabled = filesDisabled;
+        files.title = filesTitle;
+      });
       this._syncMobileTriggers();
     },
 
@@ -668,7 +679,68 @@
       if (!tree) return;
       var route = global.Store.getState().route || {};
       tree.innerHTML = this._renderTree(this.activeServerId(), route, true);
-      el('ms-mobile-workspace-sheet').classList.toggle('has-terminal', route.name === 'terminal' || !!terminalView(route));
+      var sheet = el('ms-mobile-workspace-sheet');
+      var isTerm = route.name === 'terminal' || !!terminalView(route);
+      if (sheet) {
+        sheet.classList.toggle('has-terminal', isTerm);
+        var existingNav = sheet.querySelector('.ms-mobile-sheet-nav');
+        if (isTerm) {
+          if (!existingNav) {
+            var nav = global.document.createElement('nav');
+            nav.className = 'ms-mobile-sheet-nav';
+            nav.setAttribute('aria-label', '工作台快捷切换');
+            nav.innerHTML = '<button type="button" data-action="mobile-files"><svg class="ms-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 3h8a2 2 0 0 1 2 2v9H3Z"/></svg><span>文件</span></button>'
+              + '<button type="button" data-route="#/servers">' + icon('gauge') + '<span>状态</span></button>'
+              + '<button type="button" data-route="#/settings">' + icon('settings') + '<span>设置</span></button>';
+            var serverBtn = sheet.querySelector('.mobile-menu-server');
+            if (serverBtn) sheet.insertBefore(nav, serverBtn);
+            else sheet.appendChild(nav);
+            var self = this;
+            var sheetFilesBtn = nav.querySelector('[data-action="mobile-files"]');
+            if (sheetFilesBtn) {
+              sheetFilesBtn.addEventListener('click', function () {
+                if (!sheetFilesBtn.disabled) self.closeMobileWorkspaceSheet({ restoreFocus: false });
+              });
+            }
+          }
+          var navFiles = sheet.querySelector('.ms-mobile-sheet-nav [data-action="mobile-files"]');
+          if (navFiles) {
+            navFiles.disabled = !this.mobilePaneId(route);
+            navFiles.title = navFiles.disabled ? '进入终端后浏览文件' : '浏览当前窗格目录';
+          }
+        } else if (existingNav) {
+          existingNav.remove();
+        }
+      }
+      var filter = el('ms-mobile-workspace-filter');
+      if (filter) this._applyMobileWorkspaceFilter(filter.value);
+    },
+
+    _applyMobileWorkspaceFilter: function (rawQuery) {
+      var tree = el('ms-mobile-workspace-tree');
+      if (!tree) return;
+      var q = String(rawQuery || '').trim().toLowerCase();
+      var groups = tree.querySelectorAll('.tree-session-group');
+      for (var i = 0; i < groups.length; i += 1) {
+        var group = groups[i];
+        var sessRow = group.querySelector('.tree-session-row');
+        var sessName = ((sessRow && sessRow.getAttribute('data-entity-name')) || '').toLowerCase();
+        var sessMatch = !q || sessName.indexOf(q) >= 0;
+        var winRows = group.querySelectorAll('.tree-window-row');
+        var anyWinMatch = false;
+        for (var j = 0; j < winRows.length; j += 1) {
+          var row = winRows[j];
+          var winName = (row.getAttribute('data-entity-name') || row.textContent || '').toLowerCase();
+          var hit = !q || sessMatch || winName.indexOf(q) >= 0;
+          row.hidden = !hit;
+          var agentList = row.nextElementSibling;
+          if (agentList && agentList.classList && agentList.classList.contains('tree-agent-list')) {
+            agentList.hidden = !hit;
+          }
+          if (hit) anyWinMatch = true;
+        }
+        group.hidden = !(sessMatch || anyWinMatch);
+      }
     },
 
     _syncMobileWorkspaceSheet: function (route) {
@@ -698,9 +770,12 @@
       sheet.setAttribute('role', 'dialog');
       sheet.setAttribute('aria-modal', 'true');
       sheet.setAttribute('aria-label', '会话与窗口');
+      var self = this;
       sheet.innerHTML = '<div class="ms-mobile-workspace-head">'
         + '<div><strong>会话与窗口</strong><small>选择窗口，继续工作</small></div>'
         + '<button class="icon-btn" data-action="mobile-workspace-close" aria-label="关闭菜单">×</button>'
+        + '</div><div class="ms-mobile-workspace-search">'
+        + '<input type="search" id="ms-mobile-workspace-filter" class="ms-mobile-workspace-filter" placeholder="筛选会话或窗口…" aria-label="筛选会话或窗口">'
         + '</div><div id="ms-mobile-workspace-tree" class="ms-mobile-workspace-tree"></div>'
         + '<div id="ms-mobile-workspace-tools" class="ms-mobile-workspace-tools"></div>'
         + '<button class="ms-btn mobile-menu-server" data-action="mobile-server">切换服务器 · '
@@ -714,15 +789,23 @@
       if (global.NotificationPanel && global.NotificationPanel.syncAttention) global.NotificationPanel.syncAttention();
       this._syncNav(route);
       this._moveMobileToolsToSheet();
+      var filterInput = el('ms-mobile-workspace-filter');
+      if (filterInput) {
+        filterInput.addEventListener('input', function () {
+          self._applyMobileWorkspaceFilter(filterInput.value);
+        });
+      }
       var trigger = this._mobileWorkspaceTrigger();
       if (trigger) trigger.setAttribute('aria-expanded', 'true');
       this._syncMobileTriggers();
 
-      var self = this;
       overlay.addEventListener('click', function () { self.closeMobileWorkspaceSheet(); });
       this._mobileWorkspaceKeydown = function (event) {
         if (event.key === 'Tab') {
-          var targets = Array.from(sheet.querySelectorAll('button:not(:disabled),a[href],input,select,textarea,summary,[tabindex="0"]'));
+          var targets = Array.from(sheet.querySelectorAll('*')).filter(function (node) {
+            return (node.matches('button,input,select,textarea') && !node.disabled)
+              || node.matches('a[href],summary,[tabindex="0"]');
+          });
           var first = targets[0];
           var last = targets[targets.length - 1];
           if (!first) return;
@@ -1067,6 +1150,13 @@
   // tmuxPanelAction: a native app from before the rename.
   var nativeActions = nativeHandlers && (nativeHandlers.anymuxAction || nativeHandlers.tmuxPanelAction);
   var chrome = global.document.querySelector('.workspace-chrome');
+  if (chrome) {
+    chrome.addEventListener('mousedown', function (event) {
+      if (event.target.closest('.sidebar-toggle, .top-actions button, .workspace-notification, .needs-you-pill')) {
+        event.preventDefault();
+      }
+    });
+  }
   if (nativeActions && chrome) {
     var pendingTitlebar = false;
     var lastTitlebar = null;

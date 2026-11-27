@@ -6,25 +6,29 @@
   .mobile-terminal-controls {
     display: flex;
     align-items: center;
-    gap: 8px;
-    flex: 0 0 60px;
+    gap: 5px;
+    flex: 0 0 auto;
+    min-height: 48px;
     min-width: 0;
-    padding: 7px 12px 8px;
+    padding: 5px max(8px, env(safe-area-inset-right, 0px)) calc(5px + env(safe-area-inset-bottom, 0px)) max(8px, env(safe-area-inset-left, 0px));
     border-top: 1px solid var(--workspace-line, var(--border-subtle));
     color: var(--workspace-text, var(--text-primary));
     background: var(--workspace-bg, var(--bg-primary));
+  }
+  html.mobile-keyboard-open .mobile-terminal-controls {
+    padding-bottom: 5px;
   }
   .mobile-terminal-controls button {
     appearance: none;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    gap: 7px;
-    min-width: 44px;
-    height: 44px;
-    padding: 0 12px;
+    gap: 6px;
+    min-width: 36px;
+    height: 36px;
+    padding: 0 9px;
     border: 1px solid var(--workspace-line, var(--border));
-    border-radius: 12px;
+    border-radius: 9px;
     color: inherit;
     background: var(--workspace-panel, var(--bg-card));
     font: 600 12px/1 -apple-system, BlinkMacSystemFont, sans-serif;
@@ -32,7 +36,18 @@
     -webkit-tap-highlight-color: transparent;
     transition: background .15s, border-color .15s;
   }
-  .mobile-terminal-controls svg { width: 20px; height: 20px; flex-shrink: 0; }
+  .mobile-terminal-controls .wb-mobile-kbd-dismiss {
+    display: none;
+    flex: 0 0 36px;
+    width: 36px;
+    min-width: 36px;
+    padding: 0;
+  }
+  .mobile-terminal-controls .wb-mobile-kbd-dismiss svg { width: 17px; height: 17px; }
+  html.mobile-keyboard-open .mobile-terminal-controls .wb-mobile-kbd-dismiss {
+    display: inline-flex;
+  }
+  .mobile-terminal-controls svg { width: 18px; height: 18px; flex-shrink: 0; }
   .mobile-terminal-controls .fab-tool {
     position: static;
     inset: auto;

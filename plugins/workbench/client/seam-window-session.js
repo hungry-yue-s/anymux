@@ -416,8 +416,8 @@ function commandKind(command) {
   return 'shell';
 }
 
-const PANE_RAIL_PX = 28;
-const MOBILE_PANE_RAIL_PX = 38;
+const PANE_RAIL_PX = 26;
+const MOBILE_PANE_RAIL_PX = 0;
 const PANE_PAD_X = 16;
 const PANE_PAD_Y = 10;
 const PANE_MIN_PAD_X = 8; // left padding before canvas; right 8px is compressible breathing room
@@ -704,6 +704,7 @@ export class SeamWindowSession {
     this._resizeHistory = new Set();
     this._resizeHistoryEnv = null;
     this._settledViewportEnv = null;
+    this._mobilePaneDrawerOpen = false;
     this.cleanups = [];
     this.panes = new Map();
     this.context = null;
@@ -1637,17 +1638,48 @@ export class SeamWindowSession {
       this.onAction('history', { paneId });
     });
 
+    const takeovers = doc.createElement('div');
     const takeoverEl = doc.createElement('div');
     takeoverEl.className = 'seam-pane-takeover';
     takeoverEl.hidden = true;
 
-    el.append(rail, body, historyPill, takeoverEl);
+    const chromelessBar = doc.createElement('div');
+    chromelessBar.className = 'seam-chromeless-bar';
+    chromelessBar.append(
+      makeBtn('split-h', '左右分窗', PANE_ICONS.splitH, 'is-secondary'),
+      makeBtn('split-v', '上下分窗', PANE_ICONS.splitV, 'is-secondary'),
+      makeBtn('menu', '窗格菜单', PANE_ICONS.more, ''),
+    );
+    chromelessBar.addEventListener('mousedown', (event) => {
+      if (event.target.closest('button')) event.preventDefault();
+    });
+    chromelessBar.addEventListener('click', (event) => {
+      const btn = event.target.closest('[data-pane-action]');
+      if (!btn) return;
+      event.stopPropagation();
+      const action = btn.dataset.paneAction;
+      if (action === 'split-h') this.onAction('split', { paneId, direction: 'horizontal' });
+      else if (action === 'split-v') this.onAction('split', { paneId, direction: 'vertical' });
+      else if (action === 'menu') this._openPaneRailMenu(paneId, { anchor: btn });
+    });
+
+    let gitSlotObserver = null;
+    if (typeof this.global.MutationObserver === 'function') {
+      gitSlotObserver = new this.global.MutationObserver(() => this._syncChromelessState());
+      gitSlotObserver.observe(gitSlot, { attributes: true, attributeFilter: ['hidden'] });
+    }
+
+    el.append(rail, chromelessBar, body, historyPill, takeoverEl);
+    void takeovers;
 
     entry = {
       paneId,
       meta: { ...meta },
       el,
       rail,
+      chromelessBar,
+      gitSlotObserver,
+      _locateTimer: null,
       body,
       historyPill,
       takeoverEl,
@@ -1716,6 +1748,9 @@ export class SeamWindowSession {
       else this.onFocus();
     };
     el.addEventListener('pointerdown', focusThisPane, true);
+    rail.addEventListener('mousedown', (event) => {
+      if (event.target.closest('button')) event.preventDefault();
+    });
     rail.addEventListener('click', (event) => {
       if (event.target.closest('.pane-git-slot')) return;
       const btn = event.target.closest('[data-pane-action]');
@@ -1732,17 +1767,17 @@ export class SeamWindowSession {
       else if (action === 'menu') this._openPaneRailMenu(paneId, { anchor: btn });
       else if (action === 'close') {
         if (this.panes.size <= 1) this.onAction('close-window', { paneId });
-        else { actions.hidden = true; confirmBox.hidden = false; el.classList.add('is-confirming'); }
+        else { actions.hidden = true; confirmBox.hidden = false; el.classList.add('is-confirming'); this._syncChromelessState(); }
       }
     });
     confirmYes.addEventListener('click', (event) => {
       event.stopPropagation();
-      confirmBox.hidden = true; actions.hidden = false; el.classList.remove('is-confirming');
+      confirmBox.hidden = true; actions.hidden = false; el.classList.remove('is-confirming'); this._syncChromelessState();
       this.onAction('close-pane', { paneId });
     });
     confirmNo.addEventListener('click', (event) => {
       event.stopPropagation();
-      confirmBox.hidden = true; actions.hidden = false; el.classList.remove('is-confirming');
+      confirmBox.hidden = true; actions.hidden = false; el.classList.remove('is-confirming'); this._syncChromelessState();
     });
     titleEl.addEventListener('dblclick', (event) => {
       event.stopPropagation();
@@ -2005,9 +2040,45 @@ export class SeamWindowSession {
     return { isRich: false, agentInfo, resolvedKind };
   }
 
+  _isPaneChromeless(entry) {
+    if (!entry || this._isMobile() || this.panes.size !== 1) return false;
+    if (entry.isRich) return false;
+    if (entry.meta?.label && String(entry.meta.label).trim()) return false;
+    if (entry.gitSlot && !entry.gitSlot.hidden) return false;
+    if (entry.el?.classList?.contains('is-confirming') || entry.titleEl?.hidden) return false;
+    return true;
+  }
+
+  _effectiveRailPx() {
+    if (this._isMobile()) return MOBILE_PANE_RAIL_PX;
+    if (this.panes.size === 1) {
+      const sole = this.panes.values().next().value;
+      if (this._isPaneChromeless(sole)) return 0;
+    }
+    return PANE_RAIL_PX;
+  }
+
+  _syncChromelessState() {
+    let changed = false;
+    for (const entry of this.panes.values()) {
+      const next = this._isPaneChromeless(entry);
+      const prev = entry.el.classList.contains('is-chromeless');
+      if (prev !== next) {
+        entry.el.classList.toggle('is-chromeless', next);
+        changed = true;
+      }
+    }
+    if (changed && !this.disposed && this.status === 'live') {
+      this._resetResizeGuard();
+      this.fit();
+    }
+  }
+
   _updatePaneMeta(entry, meta) {
     const prevCwd = entry.meta?.cwd;
-    entry.meta = { ...entry.meta, ...meta };
+    entry.meta = meta && meta !== entry.meta && 'id' in meta
+      ? { ...entry.meta, ...meta, label: meta.label ?? null }
+      : { ...entry.meta, ...meta };
     const idx = Number.isInteger(entry.meta.index) ? entry.meta.index : Number(entry.paneId.slice(1)) || 0;
     const agentIcons = this.global.AgentIcons;
     const { isRich, agentInfo, resolvedKind } = this._resolvePaneAgentVisual(entry);
@@ -2080,6 +2151,7 @@ export class SeamWindowSession {
     if (!isRich && entry.opened && prevCwd !== entry.meta.cwd) {
       this._attachPaneLinkProvider(entry);
     }
+    this._syncChromelessState();
   }
 
   _syncAgentVisuals() {
@@ -2103,6 +2175,7 @@ export class SeamWindowSession {
         entry.zoomBtn.innerHTML = PANE_ICONS[zoomKey];
       }
     }
+    this._syncChromelessState();
   }
 
   _renderLeaseBar() {
@@ -2393,29 +2466,19 @@ export class SeamWindowSession {
   _renderMobilePaneBar() {
     const doc = this.global.document;
     if (!this._isMobile() || this.panes.size <= 1) {
+      this._mobilePaneDrawerOpen = false;
       this.mobilePaneBar.hidden = true;
       this.mobilePaneBar.replaceChildren();
       return;
     }
     this.mobilePaneBar.hidden = false;
-    const tabs = doc.createElement('div');
-    tabs.className = 'seam-mobile-pane-tabs';
     const sorted = [...this.panes.values()].sort((a, b) => (a.meta?.index ?? 0) - (b.meta?.index ?? 0));
-    for (const entry of sorted) {
-      const btn = doc.createElement('button');
-      btn.type = 'button';
-      const isActive = entry.paneId === this.activePaneId;
-      btn.className = 'seam-mobile-pane-tab' + (isActive ? ' is-active' : '');
-      btn.setAttribute('role', 'tab');
-      btn.setAttribute('aria-selected', String(isActive));
-      btn.dataset.paneId = entry.paneId;
-      const num = doc.createElement('span');
-      num.className = 'pane-num';
-      num.textContent = String(Number.isInteger(entry.meta?.index) ? entry.meta.index : Number(entry.paneId.slice(1)) || 0);
-      const name = doc.createElement('span');
-      name.className = 'seam-mobile-pane-name';
-      name.textContent = entry.titleEl?.textContent || entry.meta?.command || ('窗格 ' + num.textContent);
-      const agentIcons = this.global.AgentIcons;
+    const activeIdx = Math.max(0, sorted.findIndex((item) => item.paneId === this.activePaneId));
+    const activeEntry = sorted[activeIdx] || sorted[0];
+    const agentIcons = this.global.AgentIcons;
+
+    const formatNum = (entry) => String(Number.isInteger(entry.meta?.index) ? entry.meta.index : Number(entry.paneId.slice(1)) || 0);
+    const buildIconNode = (entry) => {
       const { isRich, agentInfo, resolvedKind } = this._resolvePaneAgentVisual(entry);
       if (!isRich && agentIcons?.appIcon) {
         const icoWrap = doc.createElement('span');
@@ -2425,20 +2488,144 @@ export class SeamWindowSession {
           ? agentIcons.statusIcon(st, agentInfo.unread)
           : '';
         icoWrap.innerHTML = stHtml + agentIcons.appIcon(resolvedKind);
-        btn.append(num, icoWrap, name);
-      } else {
-        btn.append(num, name);
+        return { icoWrap, agentInfo };
       }
+      return { icoWrap: null, agentInfo };
+    };
+
+    const bar = doc.createElement('div');
+    bar.className = 'seam-mobile-pane-bar';
+
+    const pill = doc.createElement('div');
+    pill.className = 'seam-mobile-pane-pill';
+
+    const prevBtn = doc.createElement('button');
+    prevBtn.type = 'button';
+    prevBtn.className = 'seam-mobile-pane-step is-prev';
+    prevBtn.setAttribute('aria-label', '上一个窗格');
+    prevBtn.innerHTML = '<svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>';
+    prevBtn.addEventListener('click', () => {
+      const target = sorted[(activeIdx - 1 + sorted.length) % sorted.length];
+      if (target) this.selectPane(target.paneId);
+    });
+
+    const currentBtn = doc.createElement('button');
+    currentBtn.type = 'button';
+    currentBtn.className = 'seam-mobile-pane-current';
+    currentBtn.setAttribute('aria-label', '切换窗格列表');
+    currentBtn.setAttribute('aria-expanded', String(Boolean(this._mobilePaneDrawerOpen)));
+    const { icoWrap: activeIco } = buildIconNode(activeEntry);
+    const activeTitle = doc.createElement('span');
+    activeTitle.className = 'seam-mobile-pane-current-name';
+    activeTitle.textContent = activeEntry.titleEl?.textContent || activeEntry.meta?.command || ('窗格 ' + formatNum(activeEntry));
+    const activeIdxEl = doc.createElement('span');
+    activeIdxEl.className = 'seam-mobile-pane-current-idx';
+    activeIdxEl.textContent = (activeIdx + 1) + '/' + sorted.length;
+    if (activeIco) currentBtn.append(activeIco);
+    currentBtn.append(activeTitle, activeIdxEl);
+
+    const nextBtn = doc.createElement('button');
+    nextBtn.type = 'button';
+    nextBtn.className = 'seam-mobile-pane-step is-next';
+    nextBtn.setAttribute('aria-label', '下一个窗格');
+    nextBtn.innerHTML = '<svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>';
+    nextBtn.addEventListener('click', () => {
+      const target = sorted[(activeIdx + 1) % sorted.length];
+      if (target) this.selectPane(target.paneId);
+    });
+
+    pill.append(prevBtn, currentBtn, nextBtn);
+
+    const countBtn = doc.createElement('button');
+    countBtn.type = 'button';
+    countBtn.className = 'seam-mobile-pane-count';
+    countBtn.setAttribute('aria-label', '所有窗格 (' + sorted.length + ')');
+    countBtn.setAttribute('aria-expanded', String(Boolean(this._mobilePaneDrawerOpen)));
+    const otherAttention = sorted.some((entry) => {
+      if (entry.paneId === this.activePaneId) return false;
+      if (entry.el.classList.contains('is-needs-you')) return true;
+      const st = this._resolvePaneAgentVisual(entry).agentInfo?.status;
+      return st === 'permission' || st === 'failed';
+    });
+    if (otherAttention) countBtn.classList.add('has-attention');
+    countBtn.textContent = String(sorted.length);
+
+    const addBtn = doc.createElement('button');
+    addBtn.type = 'button';
+    addBtn.className = 'seam-mobile-pane-add';
+    addBtn.setAttribute('aria-label', '横向分割新窗格');
+    addBtn.innerHTML = '<svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>';
+    addBtn.addEventListener('click', () => {
+      this.onAction('split', { direction: 'horizontal', paneId: activeEntry.paneId });
+    });
+
+    bar.append(pill, countBtn, addBtn);
+
+    const drawer = doc.createElement('div');
+    drawer.className = 'seam-mobile-pane-drawer';
+    drawer.hidden = !this._mobilePaneDrawerOpen;
+
+    const tabs = doc.createElement('div');
+    tabs.className = 'seam-mobile-pane-tabs';
+    for (const entry of sorted) {
+      const row = doc.createElement('div');
+      row.className = 'seam-mobile-pane-row';
+      const btn = doc.createElement('button');
+      btn.type = 'button';
+      const isActive = entry.paneId === this.activePaneId;
+      btn.className = 'seam-mobile-pane-tab' + (isActive ? ' is-active' : '');
+      btn.setAttribute('role', 'tab');
+      btn.setAttribute('aria-selected', String(isActive));
+      btn.dataset.paneId = entry.paneId;
+      const num = doc.createElement('span');
+      num.className = 'pane-num';
+      num.textContent = formatNum(entry);
+      const name = doc.createElement('span');
+      name.className = 'seam-mobile-pane-name';
+      name.textContent = entry.titleEl?.textContent || entry.meta?.command || ('窗格 ' + num.textContent);
+      const { icoWrap } = buildIconNode(entry);
+      if (icoWrap) btn.append(num, icoWrap, name);
+      else btn.append(num, name);
       if (entry.el.classList.contains('is-needs-you')) {
         const dot = doc.createElement('span');
         dot.className = 'seam-mobile-pane-dot';
         dot.setAttribute('aria-hidden', 'true');
         btn.append(dot);
       }
-      btn.addEventListener('click', () => this.selectPane(entry.paneId));
-      tabs.append(btn);
+      btn.addEventListener('click', () => {
+        this._mobilePaneDrawerOpen = false;
+        this.selectPane(entry.paneId);
+      });
+
+      const rowMenu = doc.createElement('button');
+      rowMenu.type = 'button';
+      rowMenu.className = 'seam-mobile-pane-row-menu';
+      rowMenu.setAttribute('aria-label', '窗格操作');
+      rowMenu.innerHTML = PANE_ICONS.more;
+      rowMenu.addEventListener('click', (event) => {
+        event.stopPropagation();
+        this._mobilePaneDrawerOpen = false;
+        drawer.hidden = true;
+        currentBtn.setAttribute('aria-expanded', 'false');
+        countBtn.setAttribute('aria-expanded', 'false');
+        this._openPaneRailMenu(entry.paneId, { anchor: rowMenu });
+      });
+
+      row.append(btn, rowMenu);
+      tabs.append(row);
     }
-    this.mobilePaneBar.replaceChildren(tabs);
+    drawer.append(tabs);
+
+    const toggleDrawer = () => {
+      this._mobilePaneDrawerOpen = !this._mobilePaneDrawerOpen;
+      drawer.hidden = !this._mobilePaneDrawerOpen;
+      currentBtn.setAttribute('aria-expanded', String(this._mobilePaneDrawerOpen));
+      countBtn.setAttribute('aria-expanded', String(this._mobilePaneDrawerOpen));
+    };
+    currentBtn.addEventListener('click', toggleDrawer);
+    countBtn.addEventListener('click', toggleDrawer);
+
+    this.mobilePaneBar.replaceChildren(bar, drawer);
   }
 
   _layoutTopologyKey() {
@@ -2463,7 +2650,7 @@ export class SeamWindowSession {
   }
 
   _branchFlex(child, dir) {
-    const metrics = measureLayoutMetrics(child, this.panes, this._cellMetrics(), this._isMobile() ? MOBILE_PANE_RAIL_PX : PANE_RAIL_PX);
+    const metrics = measureLayoutMetrics(child, this.panes, this._cellMetrics(), this._effectiveRailPx());
     return dir === 'col'
       ? (metrics.contentRows + ' 1 ' + metrics.chromeH + 'px')
       : (metrics.contentCols + ' 1 ' + metrics.chromeW + 'px');
@@ -2695,6 +2882,7 @@ export class SeamWindowSession {
       }
     }
     this._treeTopologyKey = nextKey;
+    this._syncChromelessState();
     this._syncJunctions();
     if (hadFocus && this.activePaneId) {
       const activeEntry = this.panes.get(this.activePaneId);
@@ -2707,8 +2895,9 @@ export class SeamWindowSession {
     const { leftNode: curLeft, rightNode: curRight } = seg.divider._seamNodes || { leftNode: seg.leftNode, rightNode: seg.rightNode };
     const leftPaneId = firstLeafPaneId(curLeft, 'end');
     if (!leftPaneId) return null;
-    const leftMetrics = measureLayoutMetrics(curLeft, this.panes, cell);
-    const rightMetrics = measureLayoutMetrics(curRight, this.panes, cell);
+    const railPx = this._effectiveRailPx();
+    const leftMetrics = measureLayoutMetrics(curLeft, this.panes, cell, railPx);
+    const rightMetrics = measureLayoutMetrics(curRight, this.panes, cell, railPx);
     const startLeftUnits = dir === 'row' ? leftMetrics.contentCols : leftMetrics.contentRows;
     const startRightUnits = dir === 'row' ? rightMetrics.contentCols : rightMetrics.contentRows;
     const leftChromePx = dir === 'row' ? leftMetrics.chromeW : leftMetrics.chromeH;
@@ -3083,6 +3272,7 @@ export class SeamWindowSession {
     input.maxLength = 80;
     entry.titleEl.hidden = true;
     entry.titleEl.after(input);
+    this._syncChromelessState();
     input.focus();
     input.select();
 
@@ -3098,6 +3288,7 @@ export class SeamWindowSession {
         this._updatePaneMeta(entry, entry.meta);
         this.onAction('rename-pane', { paneId, label });
       }
+      this._syncChromelessState();
       entry.term?.focus();
     };
     input.addEventListener('keydown', (event) => {
@@ -3308,7 +3499,10 @@ export class SeamWindowSession {
     if (this.disposed || !this.panes.has(paneId)) return false;
     const prev = this.activePaneId;
     this.activePaneId = paneId;
-    if (this._isMobile()) this._localActivePaneId = paneId;
+    if (this._isMobile()) {
+      this._localActivePaneId = paneId;
+      this._mobilePaneDrawerOpen = false;
+    }
     this._syncActivePaneState();
     if (this._isMobileSinglePane()) {
       this._renderTree();
@@ -3320,7 +3514,20 @@ export class SeamWindowSession {
     this._renderMobilePaneBar();
     this._syncInputGates();
     this._publishContext();
-    if (!this._isMobile()) this.panes.get(paneId)?.term?.focus();
+    if (!this._isMobile()) {
+      const targetEntry = this.panes.get(paneId);
+      targetEntry?.term?.focus();
+      if (prev && prev !== paneId && this.panes.size > 1 && targetEntry?.el) {
+        this.global.clearTimeout(targetEntry._locateTimer);
+        targetEntry.el.classList.remove('is-locate-flash');
+        void targetEntry.el.offsetWidth;
+        targetEntry.el.classList.add('is-locate-flash');
+        targetEntry._locateTimer = this.global.setTimeout(() => {
+          targetEntry._locateTimer = null;
+          targetEntry.el?.classList?.remove('is-locate-flash');
+        }, 1200);
+      }
+    }
     if (prev !== paneId) {
       if (this.status === 'live') {
         this._pendingSelectPane = null;
@@ -3412,6 +3619,8 @@ export class SeamWindowSession {
     const mode = this._isMobileSinglePane()
       ? ('m:' + this.activePaneId)
       : (this._isMobile() ? 'ms' : 'd');
+    const chromeless = !this._isMobile() && this.panes.size === 1
+      && this._isPaneChromeless(this.panes.values().next().value) ? 1 : 0;
     return [
       this.treeHost.clientWidth,
       this.treeHost.clientHeight,
@@ -3420,6 +3629,7 @@ export class SeamWindowSession {
       this.fontSize,
       this.zoomed ? 1 : 0,
       mode,
+      chromeless,
     ].join('|');
   }
 
@@ -3470,7 +3680,7 @@ export class SeamWindowSession {
     const h = this.treeHost.clientHeight;
     if (!w || !h) return { cols: 0, rows: 0 };
     const cell = this._cellMetrics();
-    const railPx = this._isMobile() ? MOBILE_PANE_RAIL_PX : PANE_RAIL_PX;
+    const railPx = this._effectiveRailPx();
     if (this._isMobileSinglePane()) {
       const activeEntry = (this.activePaneId && this.panes.get(this.activePaneId)) || this.panes.values().next().value;
       const isRich = Boolean(activeEntry?.isRich);
@@ -3613,7 +3823,7 @@ export class SeamWindowSession {
     // Preserve an already-fitting tmux window within compressible padding on
     // initial mount/refresh and local splits unless a real viewport change occurs.
     if (!this._isMobileSinglePane() && !this.zoomed && this.layoutTree && (!this._settledViewportEnv || this._settledViewportEnv === viewportEnv)) {
-      const metrics = measureLayoutMetrics(this.layoutTree, this.panes, cell, this._isMobile() ? MOBILE_PANE_RAIL_PX : PANE_RAIL_PX);
+      const metrics = measureLayoutMetrics(this.layoutTree, this.panes, cell, this._effectiveRailPx());
       const maxCols = Math.max(2, Math.floor(Math.max(cell.width * 2, this.treeHost.clientWidth - metrics.minNetWidthPx) / cell.width));
       const maxRows = Math.max(2, Math.floor(Math.max(cell.height * 2, this.treeHost.clientHeight - metrics.minNetHeightPx) / cell.height));
       if (Number.isInteger(this.windowCols) && this.windowCols <= maxCols && this.windowCols >= idealCols - 2) {
@@ -4168,6 +4378,10 @@ export class SeamWindowSession {
     const entry = this.panes.get(paneId);
     if (!entry) return;
     this.panes.delete(paneId);
+    this.global.clearTimeout(entry._locateTimer);
+    entry._locateTimer = null;
+    entry.gitSlotObserver?.disconnect?.();
+    entry.gitSlotObserver = null;
     this._teardownPaneRenderer(entry);
     entry.el.remove();
   }

@@ -16,6 +16,22 @@ export function registerWorkbenchShell(global, api) {
     return { onTerminal: true, serverId: params.serverId || 'local', viewId: params.viewId,
       paneId: null, key: ['workbench', params.serverId, params.viewId, 'pending'].join('\u0000') };
   }
+  function syncHeader(serverId, context = null, saved = null) {
+    const workspace = global.AppShell?.workspace?.(serverId);
+    const sessionId = context?.sessionId || saved?.sessionId;
+    const windowId = context?.windowId || saved?.windowId;
+    const session = global.AppShell?._findSession?.(workspace, sessionId);
+    const win = global.AppShell?._findWindow?.(session, windowId);
+    if (workspace && session && win && typeof global.AppShell?.setTerminalHeader === 'function') {
+      global.AppShell.setTerminalHeader(serverId, workspace, {
+        sessionId,
+        windowId,
+        paneId: context?.paneId || null,
+      });
+      return true;
+    }
+    return false;
+  }
   function sync(context) {
     if (!matches(routeNow(), context)) return;
     const workspace = global.AppShell?.workspace(context.serverId);
@@ -29,6 +45,7 @@ export function registerWorkbenchShell(global, api) {
     if (context.paneId && (!known || switched)) global.MsApp?.refreshWorkspace(context.serverId, { shared: true });
     global.TerminalTarget?.set({ ...context, provider: 'tmux' });
     if (global.state) global.state.currentPane = context.paneId || null;
+    syncHeader(context.serverId, context, api.get?.(context.viewId));
     global.AppShell?.render();
   }
   async function openOrCreate({ serverId, instanceId, session, win = null, paneId = null, isCurrent = () => true }) {
@@ -104,7 +121,9 @@ export function registerWorkbenchShell(global, api) {
       view.innerHTML = '<section class="section terminal-stage" id="ms-workbench-host"></section>';
       const host = view.firstElementChild;
       if (!global.AppShell.workspace(serverId)) global.MsApp.refreshWorkspace(serverId, { shared: true });
-      global.AppShell.setHeader(global.AppShell.server(serverId)?.name || serverId, saved.title || '工作台', '');
+      if (!syncHeader(serverId, null, saved)) {
+        global.AppShell.setHeader(global.AppShell.server(serverId)?.name || serverId, saved.title || '工作台', '');
+      }
       // Reserve restored dock width before xterm measures its first grid.
       global.FilePreview?.switchDockContext(serverId, saved.windowId, saved.instanceId);
       mountKey = key; mountedHost = host;
@@ -112,14 +131,25 @@ export function registerWorkbenchShell(global, api) {
       if (isCurrent()) sync(api.currentContext());
     },
     unmount() { mountKey = null; mountedHost = null; lastContext = null; api.unmount(); },
-    reconcileWorkspace: (serverId, workspace) => api.reconcileWorkspace?.(serverId, workspace),
+    reconcileWorkspace: (serverId, workspace) => {
+      api.reconcileWorkspace?.(serverId, workspace);
+      const ctx = currentContext();
+      if (matches(routeNow(), ctx) && ctx.serverId === serverId) {
+        syncHeader(serverId, ctx, api.get?.(ctx.viewId));
+      }
+    },
     windowAction: serverId => available(serverId) ? 'open-workbench' : null,
     openTarget,
     title: route => api.get?.(route.params.viewId)?.title || '工作台',
     actions: { 'new-workbench': openWindow, 'open-workbench': openWindow },
   };
   const unregister = slots.terminalViews.register(entry);
-  const focus = event => sync(event.detail), changed = () => global.AppShell?.render();
+  const focus = event => sync(event.detail);
+  const changed = () => {
+    const ctx = currentContext();
+    if (matches(routeNow(), ctx)) syncHeader(ctx.serverId, ctx, api.get?.(ctx.viewId));
+    global.AppShell?.render();
+  };
   global.addEventListener('terminal-context-changed', focus);
   global.addEventListener('workbench-views-changed', changed);
   global.dispatchEvent(new global.CustomEvent('terminal-views-changed'));

@@ -18,14 +18,16 @@
   }
   .ms-app .mobile-header {
     position:relative; top:auto; display:flex; flex:0 0 auto; align-items:center;
-    gap:0; height:auto; min-height:50px;
-    margin:calc(6px + env(safe-area-inset-top,0px)) max(10px,env(safe-area-inset-right,0px)) 6px max(10px,env(safe-area-inset-left,0px));
-    padding:2px 4px 2px 8px;
-    border:1px solid var(--workspace-line); border-radius:20px;
-    background:color-mix(in srgb,var(--workspace-panel) 82%,var(--workspace-bg));
-    box-shadow:inset 0 1px 0 color-mix(in srgb,var(--workspace-text) 5%,transparent),0 4px 16px color-mix(in srgb,var(--workspace-bg) 30%,transparent);
+    gap:2px; height:auto; min-height:calc(48px + env(safe-area-inset-top,0px));
+    margin:0;
+    padding:env(safe-area-inset-top,0px) max(6px,env(safe-area-inset-right,0px)) 0 max(8px,env(safe-area-inset-left,0px));
+    border:0; border-bottom:1px solid var(--workspace-line); border-radius:0;
+    background:var(--workspace-sidebar);
+    box-shadow:none;
   }
   .ms-app.mode-terminal .mobile-header { flex:0 0 auto; }
+  .ms-app.mode-terminal { --mobile-nav-height:0px; --mobile-nav-occupied-height:0px; }
+  .ms-app.mode-terminal .mobile-dock { display:none; }
   .ms-app .mobile-header:has(.mobile-pane-strip) { gap:0; }
   .ms-app .mobile-workspace-trigger,
   .ms-app .mobile-header:has(.mobile-pane-strip:not(:empty))>.mobile-workspace-trigger {
@@ -95,7 +97,7 @@
   .mobile-keyboard-open .mobile-dock { display:none; }
   html.mobile-keyboard-open,html.status-standalone { --mobile-nav-height:0px; --mobile-nav-occupied-height:0px; }
   .status-standalone .mobile-dock { display:none; }
-  .mobile-keyboard-open .ms-app .mobile-header { min-height:46px; margin-block:2px; padding-top:0; padding-bottom:0; border-radius:18px; }
+  .mobile-keyboard-open .ms-app .mobile-header { min-height:42px; margin:0; padding-top:0; padding-bottom:0; border-radius:0; }
   .mobile-keyboard-open .mobile-title small { display:none; }
 
   /* Sessions arrive from the thumb edge, with their existing actions intact. */
@@ -108,10 +110,28 @@
     color:var(--workspace-text); background:var(--workspace-sidebar); box-shadow:0 -16px 60px #0003;
   }
   .ms-mobile-workspace-sheet::before { content:""; align-self:center; width:32px; height:4px; margin:0 0 8px; border-radius:4px; background:var(--workspace-line-strong); }
-  .ms-mobile-workspace-head { padding:0 0 12px; min-height:52px; }
+  .ms-mobile-workspace-head { padding:0 0 10px; min-height:48px; }
   .ms-mobile-workspace-head strong { font-size:20px; letter-spacing:-.03em; }
   .ms-mobile-workspace-head small { display:block; margin-top:2px; color:var(--workspace-muted); font-size:12px; }
   .ms-mobile-workspace-head .icon-btn { width:44px; height:44px; border-radius:50%; background:var(--workspace-hover); font-size:24px; }
+  .ms-mobile-workspace-search { padding:0 0 10px; }
+  .ms-mobile-workspace-filter {
+    width:100%; min-height:42px; padding:8px 12px;
+    border:1px solid var(--workspace-line-strong); border-radius:12px;
+    background:var(--workspace-panel); color:var(--workspace-text); font:inherit; font-size:16px;
+  }
+  .ms-mobile-workspace-filter:focus { outline:none; border-color:var(--workspace-accent); }
+  .ms-mobile-sheet-nav {
+    display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; margin-top:10px;
+  }
+  .ms-mobile-sheet-nav button {
+    display:flex; align-items:center; justify-content:center; gap:6px; min-height:44px;
+    padding:0 10px; border:1px solid var(--workspace-line); border-radius:12px;
+    background:var(--workspace-panel); color:var(--workspace-text); font:500 13px/1 inherit; cursor:pointer;
+  }
+  .ms-mobile-sheet-nav button .ms-icon { width:16px; height:16px; fill:none; stroke:currentColor; stroke-width:1.7; }
+  .ms-mobile-sheet-nav button:disabled { opacity:.4; cursor:default; }
+  .ms-mobile-sheet-nav button:active:not(:disabled) { background:var(--workspace-hover); }
   .ms-mobile-workspace-tree { min-height:80px; padding-bottom:8px; }
   .ms-mobile-workspace-tree .tree { display:grid; gap:12px; }
   .ms-mobile-workspace-tree .tree-session-group { padding:8px; border:1px solid var(--workspace-line); border-radius:16px; background:var(--workspace-panel); }

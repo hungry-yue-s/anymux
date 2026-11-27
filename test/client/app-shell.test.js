@@ -1293,6 +1293,45 @@ describe('AppShell mobile workspace sheet', () => {
     expect(reopened.querySelector('.mobile-menu-nav')).toBeNull();
     expect(reopened.querySelector('[data-action="mobile-server"]')).not.toBeNull();
   });
+
+  it('highlights and expands the active workbench session and filters mobile sheet sessions under terminal mode', () => {
+    const ctx = loadShell();
+    seedLocalTmux(ctx.Store, {
+      sessions: [
+        { id: '$0', name: 'DataAnt', active: true, windows: [{ id: '@0', index: 1, name: 'main-win', active: true, panes: [{ id: '%1', command: 'fish' }] }] },
+        { id: '$1', name: 'Infra', active: false, windows: [{ id: '@1', index: 1, name: 'logs-win', active: false, panes: [{ id: '%2', command: 'zsh' }] }] },
+      ],
+    });
+    ctx.win.Blocks = { ui: { selectedContext: () => ({ onTerminal: true, serverId: 'local', sessionId: '$1', windowId: '@1' }) } };
+    ctx.Store.setRoute({ name: 'workbench', params: { serverId: 'local', viewId: 'v1' } });
+    ctx.Shell.render();
+
+    const activeGroup = ctx.document.querySelector('.ms-sidebar .tree-session-group.active');
+    expect(activeGroup.querySelector('[data-session="$1"]')).not.toBeNull();
+    expect(activeGroup.querySelector('.tree-window-row .tree-item.active')).not.toBeNull();
+
+    Object.defineProperty(ctx.win, 'innerWidth', { value: 375, configurable: true });
+    ctx.Shell.openMobileWorkspaceSheet();
+    const sheet = ctx.document.getElementById('ms-mobile-workspace-sheet');
+    expect(sheet.classList.contains('has-terminal')).toBe(false);
+    expect(sheet.querySelector('.ms-mobile-sheet-nav')).toBeNull();
+
+    const filter = sheet.querySelector('#ms-mobile-workspace-filter');
+    expect(filter).not.toBeNull();
+    filter.value = 'infra';
+    filter.dispatchEvent(new ctx.win.Event('input', { bubbles: true }));
+    const groups = [...sheet.querySelectorAll('#ms-mobile-workspace-tree .tree-session-group')];
+    expect(groups[0].hidden).toBe(true);
+    expect(groups[1].hidden).toBe(false);
+
+    // Terminal mode exposes compact quick-nav bar inside sheet since M1 hides .mobile-dock
+    ctx.Store.setRoute({ name: 'terminal', params: { serverId: 'local', sessionId: '$0', windowId: '@0' } });
+    ctx.Shell.render();
+    expect(sheet.classList.contains('has-terminal')).toBe(true);
+    expect(sheet.querySelector('.ms-mobile-sheet-nav [data-route="#/servers"]')).not.toBeNull();
+    expect(sheet.querySelector('.ms-mobile-sheet-nav [data-route="#/settings"]')).not.toBeNull();
+    ctx.win.close();
+  });
 });
 
 

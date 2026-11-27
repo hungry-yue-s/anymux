@@ -508,4 +508,32 @@ describe('native workbench UI', () => {
     f.close();
   });
 
+  it('renders desktop quick action buttons beside more without stealing focus and exposes pinned mobile keyboard dismiss', async () => {
+    const f = fixture();
+    f.win.MobileUI.isMobile = () => true;
+    const view = await f.api.create({ serverId: 'dev', ...remote });
+    await f.api.render('dev', view.id, { container: f.host });
+    const session = f.sessions[0];
+
+    // Quick buttons exist in actions bar before the ⋯ menu and prevent mousedown focus steal
+    const quickBtns = [...f.win.document.querySelectorAll('.wb-quick-action')].map((b) => b.dataset.wbQuick);
+    expect(quickBtns).toEqual(['split-h', 'files', 'git']);
+    const splitQuick = f.win.document.querySelector('.wb-quick-action[data-wb-quick="split-h"]');
+    const md = new f.win.MouseEvent('mousedown', { bubbles: true, cancelable: true });
+    splitQuick.dispatchEvent(md);
+    expect(md.defaultPrevented).toBe(true);
+
+    // Mobile pinned keyboard dismiss sits in tools outside quick-keys and blurs active textarea
+    const dismiss = f.host.querySelector('.wb-mobile-kbd-dismiss');
+    expect(dismiss).not.toBeNull();
+    expect(f.host.querySelector('.mobile-terminal-quick-keys .wb-mobile-kbd-dismiss')).toBeNull();
+    session.focus();
+    expect(f.win.document.activeElement).toBe(session.term.textarea);
+    dismiss.click();
+    expect(f.win.document.activeElement).not.toBe(session.term.textarea);
+
+    f.api.unmount();
+    f.close();
+  });
+
 });

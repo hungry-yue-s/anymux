@@ -2021,7 +2021,7 @@ textarea:focus-visible {
 }
 
 .ms-app.sidebar-collapsed {
-  --ms-sidebar-effective-width: 152px;
+  --ms-sidebar-effective-width: 44px;
 }
 
 /* Status mode carries the server overview list, so it needs its own width.

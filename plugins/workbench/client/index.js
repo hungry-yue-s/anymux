@@ -355,8 +355,14 @@ export function createWorkbench(global, options = {}) {
       if (!text) { notify('剪贴板为空'); return; }
       if (!owner.session?.paste(text)) notify('终端尚未连接，内容未发送');
     });
+    const dismissKbd = element('button', 'wb-mobile-kbd-dismiss');
+    dismissKbd.type = 'button';
+    dismissKbd.title = '收起键盘';
+    dismissKbd.setAttribute('aria-label', '收起键盘');
+    dismissKbd.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>';
+    dismissKbd.addEventListener('click', () => { doc.activeElement?.blur?.(); });
     const keyboard = element('button', 'mobile-terminal-keyboard', '输入'); keyboard.type = 'button'; keyboard.setAttribute('aria-label', '打开键盘输入'); keyboard.addEventListener('click', focusKeyboard);
-    tools.append(...(hasPlugin('keypad', owner.serverId) ? [trigger] : []), keys, keyboard);
+    tools.append(dismissKbd, ...(hasPlugin('keypad', owner.serverId) ? [trigger] : []), keys, keyboard);
     owner.root.append(smartKeysBar, tools, upload, drawer);
     const sentinel = (event) => { if (drawerOpen && event.target.classList?.contains('xterm-helper-textarea')) toggleDrawer(false); };
     doc.addEventListener('focusin', sentinel);
@@ -676,7 +682,28 @@ export function createWorkbench(global, options = {}) {
           api.closeView(viewId);
           global.Router.go({ name: 'terminal', params: { serverId } });
         }));
-      more.append(summary, menu); owner.menu = more; owner.actions.append(more); owner.toolbar.append(owner.actions);
+      const quickIconBtn = (id, title, svg, run) => {
+        const node = element('button', 'wb-icon-button wb-quick-action');
+        node.type = 'button';
+        node.dataset.wbQuick = id;
+        node.title = title;
+        node.setAttribute('aria-label', title);
+        node.innerHTML = svg;
+        node.addEventListener('mousedown', (event) => event.preventDefault());
+        node.addEventListener('click', () => {
+          try { Promise.resolve(run()).catch(notify); } catch (error) { notify(error); }
+        });
+        return node;
+      };
+      const quickSplit = quickIconBtn('split-h', '左右分割', glyph('splitH') || '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M12 4v16"/></svg>', () => api.split('horizontal'));
+      const quickFiles = quickIconBtn('files', '浏览文件', '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 3h8a2 2 0 0 1 2 2v9H3Z"/></svg>', () => {
+        const cur = context();
+        const paneId = cur.paneId || view?.paneId;
+        if (!paneId || !global.FilePreview?.openFile) return;
+        return global.FilePreview.openFile('.', paneId, { source: cur.source || { serverId, paneId } });
+      });
+      const quickGit = quickIconBtn('git', 'Git 变更', '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="6" r="2.2"/><circle cx="6" cy="18" r="2.2"/><circle cx="18" cy="8" r="2.2"/><path d="M6 8.2v7.6M18 10.2c0 3.6-4.8 3.2-9.8 5.6"/></svg>', () => api.openGitPreview({ mode: 'sidebar' }));
+      more.append(summary, menu); owner.menu = more; owner.actions.append(quickSplit, quickFiles, quickGit, more); owner.toolbar.append(owner.actions);
       owner.dismissMenu = (event) => { if (!more.contains(event.target) || event.key === 'Escape') more.open = false; };
       owner.notice = element('p', 'wb-notice'); owner.notice.hidden = true; owner.notice.setAttribute('role', 'status');
       owner.terminal = element('div', 'wb-window-terminal');

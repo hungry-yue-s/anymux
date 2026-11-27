@@ -440,7 +440,7 @@ describe('SeamWindowSession multi-pane workbench session', () => {
 
   it('accounts for pane padding, tmux dividers, and pane-border-status rows in _measureWindowGrid and branch flex', async () => {
     const f = fixture();
-    const dims = { w: 227 * 8 + 50, h: 86 * 18 + 77 }; // 227 cols * 8px + 50px chrome; 86 rows * 18px + 77px chrome
+    const dims = { w: 227 * 8 + 50, h: 86 * 18 + 73 }; // 227 cols * 8px + 50px chrome; 86 rows * 18px + 73px chrome
     const session = new SeamWindowSession(f.win, { container: f.host, target });
     Object.defineProperties(session.treeHost, {
       clientWidth: { configurable: true, get: () => dims.w },
@@ -503,11 +503,11 @@ describe('SeamWindowSession multi-pane workbench session', () => {
       socket.onmessage({ data: encodeSnapshotBinary({ paneId: p.id, seq: 0, cols: p.width, rows: p.height, text: p.id }) });
     }
 
-    // Branch flex uses content rows + fixed chrome basis (46 vs 40, never 47 vs 40)
+    // Branch flex uses content rows + fixed chrome basis (36 vs 36)
     const rightColBranches = f.host.querySelectorAll('.seam-split.is-col > .seam-branch');
     expect(rightColBranches).toHaveLength(2);
-    expect(rightColBranches[0].style.flex).toBe('46 1 38px');
-    expect(rightColBranches[1].style.flex).toBe('40 1 38px');
+    expect(rightColBranches[0].style.flex).toBe('46 1 36px');
+    expect(rightColBranches[1].style.flex).toBe('40 1 36px');
 
     // Exact 1:1 grid measurement: 229x88 converges with zero extra clipped cols or blank bottom rows
     expect(session._measureWindowGrid()).toEqual({ cols: 229, rows: 88 });
@@ -516,7 +516,7 @@ describe('SeamWindowSession multi-pane workbench session', () => {
 
     // Zoomed pane with pane-border-status top (87 content rows inside 88 window rows) also compensates cleanly
     dims.w = 229 * 8 + 16;
-    dims.h = 87 * 18 + 38;
+    dims.h = 87 * 18 + 36;
     sendLayout(socket, {
       windowCols: 229,
       windowRows: 88,
@@ -588,8 +588,8 @@ describe('SeamWindowSession multi-pane workbench session', () => {
     const rightColBranches = f.host.querySelectorAll('.seam-split.is-col > .seam-branch');
     expect(outerRowBranches[0].style.flex).toBe('110 1 16px');
     expect(outerRowBranches[1].style.flex).toBe('117 1 33px');
-    expect(rightColBranches[0].style.flex).toBe('42 1 38px');
-    expect(rightColBranches[1].style.flex).toBe('44 1 38px');
+    expect(rightColBranches[0].style.flex).toBe('42 1 36px');
+    expect(rightColBranches[1].style.flex).toBe('44 1 36px');
 
     f.win.dispatchEvent(new f.win.MouseEvent('pointerup', { button: 0, clientX: 580, clientY: 428, bubbles: true }));
     expect(session.stage.classList.contains('is-dragging-xy')).toBe(false);
@@ -660,8 +660,8 @@ describe('SeamWindowSession multi-pane workbench session', () => {
     expect(rowSplits1[0].children[0].style.flex).toBe('65 1 16px');
     expect(rowSplits1[1].children[0].style.flex).toBe('65 1 16px');
     const colBranches1 = f.host.querySelectorAll('.seam-tree-host > .seam-split.is-col > .seam-branch');
-    expect(colBranches1[0].style.flex).toBe('20 1 38px');
-    expect(colBranches1[1].style.flex).toBe('15 1 38px');
+    expect(colBranches1[0].style.flex).toBe('20 1 36px');
+    expect(colBranches1[1].style.flex).toBe('15 1 36px');
 
     f.win.dispatchEvent(new f.win.MouseEvent('pointerup', { button: 0, clientX: 440, clientY: 336, bubbles: true }));
     expect(socket.sent.filter((m) => m.type === 'resize-pane-batch')).toEqual([
@@ -903,35 +903,35 @@ describe('SeamWindowSession multi-pane workbench session', () => {
     socket.onmessage({ data: encodeSnapshotBinary({ paneId: '%1', seq: 0, cols: 96, rows: 89, text: 'p1' }) });
     socket.onmessage({ data: encodeSnapshotBinary({ paneId: '%2', seq: 0, cols: 105, rows: 89, text: 'p2' }) });
 
-    // Wait 80ms -> computes fixed-overhead mobile target (targetCols=48, share=105/201 -> 93x34)
+    // Wait 80ms -> computes fixed-overhead mobile target (targetCols=48, share=105/201 -> 93x36 with 0px mobile rail)
     socket.sent.length = 0;
     await vi.advanceTimersByTimeAsync(100);
     expect(socket.sent.filter((m) => m.type === 'resize-window')).toEqual([
-      { type: 'resize-window', cols: 93, rows: 34 },
+      { type: 'resize-window', cols: 93, rows: 36 },
     ]);
 
-    // Case A: ready(88x34) arrives BEFORE layout(88x34, %2=48x33).
+    // Case A: ready(88x36) arrives BEFORE layout(88x36, %2=48x35).
     // Even if delayed >80ms or immediately followed by layout, no bogus resize against stale %2=105x89 is scheduled/fired.
     socket.sent.length = 0;
     socket.onmessage({ data: JSON.stringify({
       type: 'ready', protocol: 1, instanceId: '42:123', sessionId: '$1', windowId: '@1',
-      windowCols: 88, windowRows: 34, zoomed: false, sizeLease: 'owner', inputAllowed: true, foreignClient: false,
+      windowCols: 88, windowRows: 36, zoomed: false, sizeLease: 'owner', inputAllowed: true, foreignClient: false,
     }) });
     await vi.advanceTimersByTimeAsync(100);
     expect(socket.sent.filter((m) => m.type === 'resize-window')).toHaveLength(0);
 
-    // Matching layout confirms %2 is already exact (48x33) -> zero further resizes
+    // Matching layout confirms %2 is already exact (48x35) -> zero further resizes
     sendLayout(socket, {
-      windowCols: 88, windowRows: 34, activePaneId: '%2',
+      windowCols: 88, windowRows: 36, activePaneId: '%2',
       panes: [
-        { id: '%1', index: 0, active: false, width: 39, height: 33, command: 'fish' },
-        { id: '%2', index: 1, active: true, width: 48, height: 33, command: 'bash' },
+        { id: '%1', index: 0, active: false, width: 39, height: 35, command: 'fish' },
+        { id: '%2', index: 1, active: true, width: 48, height: 35, command: 'bash' },
       ],
       tree: {
-        type: 'split', dir: 'row', width: 88, height: 34,
+        type: 'split', dir: 'row', width: 88, height: 36,
         children: [
-          { type: 'pane', paneId: '%1', width: 39, height: 34 },
-          { type: 'pane', paneId: '%2', width: 48, height: 34 },
+          { type: 'pane', paneId: '%1', width: 39, height: 36 },
+          { type: 'pane', paneId: '%2', width: 48, height: 36 },
         ],
       },
     });
@@ -940,36 +940,36 @@ describe('SeamWindowSession multi-pane workbench session', () => {
 
     // Case B: If a resize timer IS armed and a subsequent fit() converges (cols === windowCols && rows === windowRows), cancel timer
     sendLayout(socket, {
-      windowCols: 92, windowRows: 34, activePaneId: '%2',
+      windowCols: 92, windowRows: 36, activePaneId: '%2',
       panes: [
-        { id: '%1', index: 0, active: false, width: 41, height: 33, command: 'fish' },
-        { id: '%2', index: 1, active: true, width: 50, height: 33, command: 'bash' },
+        { id: '%1', index: 0, active: false, width: 41, height: 35, command: 'fish' },
+        { id: '%2', index: 1, active: true, width: 50, height: 35, command: 'bash' },
       ],
       tree: {
-        type: 'split', dir: 'row', width: 92, height: 34,
+        type: 'split', dir: 'row', width: 92, height: 36,
         children: [
-          { type: 'pane', paneId: '%1', width: 41, height: 34 },
-          { type: 'pane', paneId: '%2', width: 50, height: 34 },
+          { type: 'pane', paneId: '%1', width: 41, height: 36 },
+          { type: 'pane', paneId: '%2', width: 50, height: 36 },
         ],
       },
     });
     expect(session.resizeTimer).not.toBeNull();
-    // Before 80ms elapses, tmux settles at 88x34 (%2=48x33) -> must cancel the pending resizeTimer
+    // Before 80ms elapses, tmux settles at 88x36 (%2=48x35) -> must cancel the pending resizeTimer
     socket.onmessage({ data: JSON.stringify({
       type: 'ready', protocol: 1, instanceId: '42:123', sessionId: '$1', windowId: '@1',
-      windowCols: 88, windowRows: 34, zoomed: false, sizeLease: 'owner', inputAllowed: true, foreignClient: false,
+      windowCols: 88, windowRows: 36, zoomed: false, sizeLease: 'owner', inputAllowed: true, foreignClient: false,
     }) });
     sendLayout(socket, {
-      windowCols: 88, windowRows: 34, activePaneId: '%2',
+      windowCols: 88, windowRows: 36, activePaneId: '%2',
       panes: [
-        { id: '%1', index: 0, active: false, width: 39, height: 33, command: 'fish' },
-        { id: '%2', index: 1, active: true, width: 48, height: 33, command: 'bash' },
+        { id: '%1', index: 0, active: false, width: 39, height: 35, command: 'fish' },
+        { id: '%2', index: 1, active: true, width: 48, height: 35, command: 'bash' },
       ],
       tree: {
-        type: 'split', dir: 'row', width: 88, height: 34,
+        type: 'split', dir: 'row', width: 88, height: 36,
         children: [
-          { type: 'pane', paneId: '%1', width: 39, height: 34 },
-          { type: 'pane', paneId: '%2', width: 48, height: 34 },
+          { type: 'pane', paneId: '%1', width: 39, height: 36 },
+          { type: 'pane', paneId: '%2', width: 48, height: 36 },
         ],
       },
     });
@@ -988,16 +988,16 @@ describe('SeamWindowSession multi-pane workbench session', () => {
     for (let step = 0; step < 6; step++) {
       const cols = step % 2 === 0 ? 102 : req1.cols - 4;
       sendLayout(socket, {
-        windowCols: cols, windowRows: 34, activePaneId: '%1',
+        windowCols: cols, windowRows: 36, activePaneId: '%1',
         panes: [
-          { id: '%1', index: 0, active: true, width: Math.floor(cols * 0.44), height: 33, command: 'fish' },
-          { id: '%2', index: 1, active: false, width: cols - 1 - Math.floor(cols * 0.44), height: 33, command: 'bash' },
+          { id: '%1', index: 0, active: true, width: Math.floor(cols * 0.44), height: 35, command: 'fish' },
+          { id: '%2', index: 1, active: false, width: cols - 1 - Math.floor(cols * 0.44), height: 35, command: 'bash' },
         ],
         tree: {
-          type: 'split', dir: 'row', width: cols, height: 34,
+          type: 'split', dir: 'row', width: cols, height: 36,
           children: [
-            { type: 'pane', paneId: '%1', width: Math.floor(cols * 0.44), height: 34 },
-            { type: 'pane', paneId: '%2', width: cols - 1 - Math.floor(cols * 0.44), height: 34 },
+            { type: 'pane', paneId: '%1', width: Math.floor(cols * 0.44), height: 36 },
+            { type: 'pane', paneId: '%2', width: cols - 1 - Math.floor(cols * 0.44), height: 36 },
           ],
         },
       });
@@ -1235,8 +1235,8 @@ describe('SeamWindowSession multi-pane workbench session', () => {
     const f = fixture();
     // Exact fit for 2-pane horizontal split (200x40 with pane-border-status top => layoutH = 40, contentH = 39)
     // w = 199*8 + 32 = 1624 -> netW = 16+16+(1-8) = 25 -> floor((1624-25)/8) = 199 cols (with border=0 -> 200 cols? Let's match exact px: 200*8 + 25 = 1625)
-    // h = 39*18 + (28+10) = 740 -> netH = 38 - 18 = 20 -> floor((740-20)/18) = 40 rows
-    const dims = { w: 200 * 8 + 25, h: 39 * 18 + 38 };
+    // h = 39*18 + (26+10) = 738 -> netH = 36 - 18 = 18 -> floor((738-18)/18) = 40 rows
+    const dims = { w: 200 * 8 + 25, h: 39 * 18 + 36 };
     const session = new SeamWindowSession(f.win, { container: f.host, target });
     Object.defineProperties(session.treeHost, {
       clientWidth: { configurable: true, get: () => dims.w },
@@ -1340,7 +1340,7 @@ describe('SeamWindowSession multi-pane workbench session', () => {
 
     // Deep vertical stack with border=off exceeding minNetHeightPx -> resize-window IS sent to prevent clipping
     dims.w = 200 * 8 + 16;
-    dims.h = 40 * 18 + 38;
+    dims.h = 40 * 18 + 36;
     socket.onmessage({ data: JSON.stringify({
       type: 'ready', protocol: 1, instanceId: '42:123', sessionId: '$1', windowId: '@1',
       windowCols: 200, windowRows: 40, zoomed: false, sizeLease: 'owner', inputAllowed: true, foreignClient: false,
@@ -1940,6 +1940,119 @@ describe('SeamWindowSession multi-pane workbench session', () => {
     const slots = session.getPaneRailSlots();
     expect(slots.panes.map((p) => p.paneId)).toEqual(['%1', '%2']);
     expect(slots.panes[0].cwd).toBe('/srv/app-one');
+
+    session.dispose();
+    f.close();
+  });
+
+  it('activates desktop 0px chromeless mode for bare single-pane windows, restores rail for git/label/multi-pane, and flashes locate rim on pane switch', async () => {
+    const f = fixture();
+    const actions = [];
+    const session = new SeamWindowSession(f.win, {
+      container: f.host,
+      target,
+      onAction: (action, detail) => actions.push({ action, detail }),
+    });
+    Object.defineProperties(session.treeHost, {
+      clientWidth: { configurable: true, get: () => 816 },
+      clientHeight: { configurable: true, get: () => 370 },
+    });
+    await session.ready;
+    const socket = f.sockets[0];
+    socket.readyState = 1;
+    socket.onopen?.();
+    socket.onmessage({ data: JSON.stringify({
+      type: 'ready', protocol: 1, instanceId: '42:123', sessionId: '$1', windowId: '@1',
+      windowCols: 100, windowRows: 20, zoomed: false, sizeLease: 'owner', inputAllowed: true, foreignClient: false,
+    }) });
+    sendLayout(socket, {
+      windowCols: 100, windowRows: 20, activePaneId: '%1',
+      panes: [{ id: '%1', index: 0, active: true, width: 100, height: 20, command: 'fish' }],
+      tree: { type: 'pane', paneId: '%1', width: 100, height: 20 },
+    });
+
+    const pane1 = f.host.querySelector('.seam-pane[data-pane-id="%1"]');
+    expect(pane1.classList.contains('is-chromeless')).toBe(true);
+    expect(session._effectiveRailPx()).toBe(0);
+    expect(pane1.querySelector('.seam-chromeless-bar [data-pane-action="split-h"]')).not.toBeNull();
+
+    // Floating chromeless action works without leaving xterm focus
+    pane1.querySelector('.seam-chromeless-bar [data-pane-action="split-h"]').click();
+    expect(actions).toContainEqual({ action: 'split', detail: { paneId: '%1', direction: 'horizontal' } });
+
+    // Custom label turns chromeless off (returns 26px rail)
+    sendLayout(socket, {
+      windowCols: 100, windowRows: 20, activePaneId: '%1',
+      panes: [{ id: '%1', index: 0, active: true, width: 100, height: 20, command: 'fish', label: 'API' }],
+      tree: { type: 'pane', paneId: '%1', width: 100, height: 20 },
+    });
+    expect(pane1.classList.contains('is-chromeless')).toBe(false);
+    expect(session._effectiveRailPx()).toBe(26);
+
+    // Clear label -> back to chromeless, then show gitSlot -> exits chromeless
+    sendLayout(socket, {
+      windowCols: 100, windowRows: 20, activePaneId: '%1',
+      panes: [{ id: '%1', index: 0, active: true, width: 100, height: 20, command: 'fish' }],
+      tree: { type: 'pane', paneId: '%1', width: 100, height: 20 },
+    });
+    expect(pane1.classList.contains('is-chromeless')).toBe(true);
+    session.panes.get('%1').gitSlot.hidden = false;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(pane1.classList.contains('is-chromeless')).toBe(false);
+
+    // Multi-pane selectPane flashes .is-locate-flash on newly focused pane
+    session.panes.get('%1').gitSlot.hidden = true;
+    hydrateWindow(socket);
+    const pane2 = f.host.querySelector('.seam-pane[data-pane-id="%2"]');
+    expect(pane1.classList.contains('is-chromeless')).toBe(false);
+    expect(pane2.classList.contains('is-chromeless')).toBe(false);
+    session.selectPane('%2');
+    expect(pane2.classList.contains('is-locate-flash')).toBe(true);
+
+    session.dispose();
+    f.close();
+  });
+
+  it('renders mobile M1 3-cell switcher bar with prev/next stepping, attention badge drawer, and split action', async () => {
+    const f = fixture();
+    f.win.MobileUI = { isMobile: () => true };
+    const actions = [];
+    const session = new SeamWindowSession(f.win, {
+      container: f.host,
+      target,
+      onAction: (action, detail) => actions.push({ action, detail }),
+    });
+    await session.ready;
+    const socket = f.sockets[0];
+    hydrateWindow(socket);
+    session.panes.get('%2').el.classList.add('is-needs-you');
+    session._renderMobilePaneBar();
+
+    expect(session.mobilePaneBar.querySelector('.seam-mobile-pane-current-idx').textContent).toBe('1/2');
+    const countBtn = session.mobilePaneBar.querySelector('.seam-mobile-pane-count');
+    expect(countBtn.textContent).toBe('2');
+    expect(countBtn.classList.contains('has-attention')).toBe(true);
+    const drawer = session.mobilePaneBar.querySelector('.seam-mobile-pane-drawer');
+    expect(drawer.hidden).toBe(true);
+
+    // Count toggles drawer open/closed
+    countBtn.click();
+    expect(drawer.hidden).toBe(false);
+    countBtn.click();
+    expect(drawer.hidden).toBe(true);
+
+    // Next button steps %1 -> %2 and clears inactive attention highlight
+    session.mobilePaneBar.querySelector('.seam-mobile-pane-step.is-next').click();
+    expect(session.activePaneId).toBe('%2');
+    expect(session.mobilePaneBar.querySelector('.seam-mobile-pane-current-idx').textContent).toBe('2/2');
+
+    // Prev button steps %2 -> %1
+    session.mobilePaneBar.querySelector('.seam-mobile-pane-step.is-prev').click();
+    expect(session.activePaneId).toBe('%1');
+
+    // + split button invokes horizontal split
+    session.mobilePaneBar.querySelector('.seam-mobile-pane-add').click();
+    expect(actions).toContainEqual({ action: 'split', detail: { direction: 'horizontal', paneId: '%1' } });
 
     session.dispose();
     f.close();
