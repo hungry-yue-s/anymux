@@ -39,6 +39,8 @@ describe('window stream gateway', () => {
       takeover: opts => calls.push(opts ? ['takeover', opts] : ['takeover']),
       releaseTakeover: () => calls.push(['release-takeover']),
       resync: (opts) => calls.push(['resync', opts]),
+      ack: (paneId, bytes) => calls.push(['ack', paneId, bytes]),
+      setPaneFocus: (opts) => calls.push(['pane-focus', opts]),
       visibility: v => calls.push(['visibility', v]),
     };
     const pool = {
@@ -65,7 +67,9 @@ describe('window stream gateway', () => {
     ws.emit('message', JSON.stringify({ type: 'takeover', paneId: '%5' }));
     ws.emit('message', JSON.stringify({ type: 'takeover', paneId: '%5', claimSize: true }));
     ws.emit('message', JSON.stringify({ type: 'release-takeover' }));
-    ws.emit('message', JSON.stringify({ type: 'resync', paneId: '%5', forceSnapshot: true }));
+    ws.emit('message', JSON.stringify({ type: 'resync', paneId: '%5', forceSnapshot: true, historyLines: 5000 }));
+    ws.emit('message', JSON.stringify({ type: 'ack', paneId: '%5', bytes: 4096 }));
+    ws.emit('message', JSON.stringify({ type: 'pane-focus', paneId: '%5', visiblePaneIds: ['%5'] }));
     ws.emit('message', JSON.stringify({ type: 'visibility', visible: false }));
     await new Promise(r => setTimeout(r, 10));
 
@@ -80,7 +84,9 @@ describe('window stream gateway', () => {
       ['takeover', { paneId: '%5' }],
       ['takeover', { paneId: '%5', claimSize: true }],
       ['release-takeover'],
-      ['resync', { paneId: '%5', forceSnapshot: true }],
+      ['resync', { paneId: '%5', forceSnapshot: true, historyLines: 5000 }],
+      ['ack', '%5', 4096],
+      ['pane-focus', { paneId: '%5', visiblePaneIds: ['%5'] }],
       ['visibility', false],
     ]);
 

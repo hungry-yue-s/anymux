@@ -91,4 +91,41 @@ describe('tmux control process', () => {
     expect(notifications).toContain('%pause %12');
     control.dispose();
   });
+
+  it('parses %boutput binary control frames losslessly across split chunks, zero-length, and arbitrary binary bytes, and passes custom flags', () => {
+    const capturedCalls = [];
+    const proc = child();
+    const control = new ControlProcess({
+      sessionId: '$1',
+      flags: 'no-output,ignore-size',
+      spawn: (_bin, argv) => {
+        capturedCalls.push(argv);
+        return proc;
+      },
+    });
+    expect(capturedCalls[0]).toContain('no-output,ignore-size');
+
+    const outputs = [];
+    control.on('output', (paneId, bytes) => outputs.push([paneId, Buffer.from(bytes)]));
+
+    const payload = Buffer.from([0x1b, 0x5b, 0x33, 0x31, 0x6d, 0x0a, 0x00, 0x5c, 0x0d, 0xff]);
+    const frame = Buffer.concat([
+      Buffer.from(`%boutput %7 ${payload.length}\n`),
+      payload,
+      Buffer.from('\n%boutput %7 0\n\n%output %7 tail\n'),
+    ]);
+
+    // Split right in header, mid-binary payload, and right before trailing \n
+    proc.stdout.write(frame.subarray(0, 12));
+    proc.stdout.write(frame.subarray(12, frame.indexOf('\n') + 4));
+    proc.stdout.write(frame.subarray(frame.indexOf('\n') + 4, frame.indexOf('\n') + 1 + payload.length));
+    proc.stdout.write(frame.subarray(frame.indexOf('\n') + 1 + payload.length));
+
+    expect(outputs).toHaveLength(3);
+    expect(outputs[0][0]).toBe('%7');
+    expect(outputs[0][1].equals(payload)).toBe(true);
+    expect(outputs[1][1].length).toBe(0);
+    expect(outputs[2][1].toString()).toBe('tail');
+    control.dispose();
+  });
 });

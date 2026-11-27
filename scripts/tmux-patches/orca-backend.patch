@@ -1,0 +1,243 @@
+--- a/tmux.h	2026-11-27 11:52:41
++++ b/tmux.h	2026-11-27 11:53:19
+@@ -2291,7 +2291,7 @@
+ #define CLIENT_STARTSERVER 0x10000000
+ #define CLIENT_REDRAWMENU 0x20000000
+ #define CLIENT_NOFORK 0x40000000
+-/* 0x80000000ULL unused */
++#define CLIENT_CONTROL_BINARY 0x80000000ULL
+ #define CLIENT_CONTROL_PAUSEAFTER 0x100000000ULL
+ #define CLIENT_CONTROL_WAITEXIT 0x200000000ULL
+ #define CLIENT_WINDOWSIZECHANGED 0x400000000ULL
+@@ -3433,6 +3433,7 @@
+ void	 input_reset(struct input_ctx *, int);
+ struct evbuffer *input_pending(struct input_ctx *);
+ struct evbuffer *input_snapshot(struct window_pane *);
++struct evbuffer *input_snapshot_limit(struct window_pane *, u_int);
+ void	 input_parse_pane(struct window_pane *);
+ void	 input_parse_buffer(struct window_pane *, const u_char *, size_t);
+ void	 input_parse_screen(struct input_ctx *, struct screen *,
+--- a/format.c	2026-11-27 11:52:41
++++ b/format.c	2026-11-27 11:53:23
+@@ -6915,9 +6915,10 @@
+ {
+ 	struct paste_buffer	*pb;
+ 
+-	format_add(ft, "pane_snapshot_version", "%d", 1);
++	format_add(ft, "pane_snapshot_version", "%d", 2);
+ 	format_add(ft, "native_client_protocol", "%d", 1);
+ 	format_add(ft, "rich_pane_version", "%d", 1);
++	format_add(ft, "control_binary_output", "%d", 1);
+ 
+ 	if (c != NULL && c->name != NULL)
+ 		log_debug("%s: c=%s", __func__, c->name);
+--- a/input.c	2026-11-27 11:52:41
++++ b/input.c	2026-11-27 11:53:30
+@@ -1094,17 +1094,19 @@
+  * width loses cells; use tmux's own alternate-screen restore and reflow, without
+  * changing the live pane. Copy only the checkpoint's bounded history. */
+ static void
+-input_snapshot_normal(struct screen *s, struct screen *normal)
++input_snapshot_normal(struct screen *s, struct screen *normal, u_int max_history)
+ {
+ 	struct grid *gd;
+-	u_int hsize = s->grid->hsize > 250 ? 250 : s->grid->hsize;
++	u_int hsize = s->grid->hsize > max_history ? max_history : s->grid->hsize;
+ 
+-	screen_init(normal, screen_size_x(s), screen_size_y(s), 250);
++	screen_init(normal, screen_size_x(s), screen_size_y(s), max_history);
+ 	gd = normal->grid;
+-	gd->linedata = xreallocarray(gd->linedata, hsize + gd->sy,
+-	    sizeof *gd->linedata);
+-	memset(gd->linedata + gd->sy, 0, hsize * sizeof *gd->linedata);
+-	gd->hsize = hsize;
++	if (hsize > 0) {
++		gd->linedata = xreallocarray(gd->linedata, hsize + gd->sy,
++		    sizeof *gd->linedata);
++		memset(gd->linedata + gd->sy, 0, hsize * sizeof *gd->linedata);
++		gd->hsize = hsize;
++	}
+ 	gd->flags = s->grid->flags;
+ 	grid_duplicate_lines(gd, 0, s->grid, s->grid->hsize - hsize,
+ 	    hsize + gd->sy);
+@@ -1123,7 +1125,7 @@
+ }
+ 
+ struct evbuffer *
+-input_snapshot(struct window_pane *wp)
++input_snapshot_limit(struct window_pane *wp, u_int max_history)
+ {
+ 	struct input_ctx *ictx = wp->ictx;
+ 	struct screen *s = &wp->base;
+@@ -1143,7 +1145,7 @@
+ 		{ MODE_BRACKETPASTE, 2004 }, { MODE_THEME_UPDATES, 2031 }
+ 	};
+ 	if (reflow) {
+-		input_snapshot_normal(s, &normal);
++		input_snapshot_normal(s, &normal, max_history);
+ 		history = saved = normal.grid;
+ 		saved_cx = normal.cx;
+ 		saved_cy = normal.cy;
+@@ -1158,8 +1160,8 @@
+ 		for (x = 0; x < 256; x++)
+ 			input_snapshot_colour(out, 4, x, wp->palette.palette[x]);
+ 	}
+-	/* Bound the checkpoint; older scrollback is retrieved on demand. */
+-	first = history->hsize > 250 ? history->hsize - 250 : 0;
++	/* Bound the checkpoint; older scrollback is retrieved via -S or on demand. */
++	first = history->hsize > max_history ? history->hsize - max_history : 0;
+ 	if (history->hsize > first) {
+ 		input_snapshot_grid(out, s, history, first,
+ 		    history->hsize - first, sx);
+@@ -1252,6 +1254,12 @@
+ 	evbuffer_add(out, EVBUFFER_DATA(ictx->since_ground),
+ 	    EVBUFFER_LENGTH(ictx->since_ground));
+ 	return (out);
++}
++
++struct evbuffer *
++input_snapshot(struct window_pane *wp)
++{
++	return (input_snapshot_limit(wp, 250));
+ }
+ 
+ /* Change input state. */
+--- a/cmd-capture-pane.c	2026-11-27 11:52:41
++++ b/cmd-capture-pane.c	2026-11-27 11:53:33
+@@ -440,19 +440,35 @@
+ 		    TAILQ_NEXT(TAILQ_FIRST(&wp->window->winlinks), wentry) != NULL) {
+ 			cmdq_error(item, "linked windows require the compatibility terminal");
+ 			return (CMD_RETURN_ERROR);
++		}
++		u_int max_history = 250;
++		const char *Sflag = args_get(args, 'S');
++		if (Sflag != NULL) {
++			if (strcmp(Sflag, "-") == 0)
++				max_history = 50000;
++			else {
++				const char *errstr = NULL;
++				long long n = strtonum(Sflag, -50000, 50000,
++				    &errstr);
++				if (errstr != NULL) {
++					cmdq_error(item, "invalid start line");
++					return (CMD_RETURN_ERROR);
++				}
++				max_history = n < 0 ? (u_int)(-n) : (u_int)n;
++			}
+ 		}
+ 		/* One synchronous command is the snapshot/output boundary. Discard
+ 		 * queued output already represented by the snapshot, then resume at
+ 		 * the pane's current offset. No shell, hook or event-loop yield. */
+ 		if (c->flags & CLIENT_CONTROL)
+ 			control_set_pane_off(c, wp);
+-		snapshot = input_snapshot(wp);
++		snapshot = input_snapshot_limit(wp, max_history);
+ 		len = 4 * ((EVBUFFER_LENGTH(snapshot) + 2) / 3) + 1;
+ 		encoded = xmalloc(len);
+ 		b64_ntop(EVBUFFER_DATA(snapshot), EVBUFFER_LENGTH(snapshot),
+ 		    encoded, len);
+ 		u_int htotal = wp->base.grid->hsize;
+-		u_int hlines = htotal > 250 ? 250 : htotal;
++		u_int hlines = htotal > max_history ? max_history : htotal;
+ 		xasprintf(&buf, "{\"version\":1,\"paneId\":\"%%%u\","
+ 		    "\"instanceId\":\"%ld:%lld\",\"windowId\":\"@%u\","
+ 		    "\"cols\":%u,\"rows\":%u,"
+--- a/server-client.c	2026-11-27 11:52:41
++++ b/server-client.c	2026-11-27 11:53:37
+@@ -3064,6 +3064,8 @@
+ 	}
+ 	if (strcmp(next, "no-output") == 0)
+ 		return (CLIENT_CONTROL_NOOUTPUT);
++	if (strcmp(next, "binary-output") == 0)
++		return (CLIENT_CONTROL_BINARY);
+ 	if (strcmp(next, "wait-exit") == 0)
+ 		return (CLIENT_CONTROL_WAITEXIT);
+ 	return (0);
+--- a/control.c	2026-11-27 11:52:41
++++ b/control.c	2026-11-27 11:53:44
+@@ -753,12 +753,14 @@
+ 		message = evbuffer_new();
+ 		if (message == NULL)
+ 			fatalx("out of memory");
+-		if (c->flags & CLIENT_CONTROL_PAUSEAFTER) {
+-			evbuffer_add_printf(message,
+-			    "%%extended-output %%%u %llu : ", wp->id,
+-			    (unsigned long long)age);
+-		} else
+-			evbuffer_add_printf(message, "%%output %%%u ", wp->id);
++		if (~c->flags & CLIENT_CONTROL_BINARY) {
++			if (c->flags & CLIENT_CONTROL_PAUSEAFTER) {
++				evbuffer_add_printf(message,
++				    "%%extended-output %%%u %llu : ", wp->id,
++				    (unsigned long long)age);
++			} else
++				evbuffer_add_printf(message, "%%output %%%u ", wp->id);
++		}
+ 	}
+ 
+ 	if (cp->offset.used < wp->base_offset) {
+@@ -788,6 +790,11 @@
+ 		control_discard(c);
+ 		return (NULL);
+ 	}
++	if (c->flags & CLIENT_CONTROL_BINARY) {
++		evbuffer_add(message, new_data, size);
++		window_pane_update_used_data(wp, &cp->offset, size);
++		return (message);
++	}
+ 	for (i = 0; i < size; i++) {
+ 		u_char ch = new_data[i];
+ 		if (ch < ' ' || ch == '\\') {
+@@ -815,10 +822,23 @@
+ 
+ /* Write buffer. */
+ static void
+-control_write_data(struct client *c, struct evbuffer *message)
++control_write_data(struct client *c, u_int pane_id, struct evbuffer *message)
+ {
+ 	struct control_state	*cs = c->control_state;
++	char			 hdr[64];
++	int			 hlen;
+ 
++	if (c->flags & CLIENT_CONTROL_BINARY) {
++		hlen = xsnprintf(hdr, sizeof hdr, "%%boutput %%%u %zu\n",
++		    pane_id, EVBUFFER_LENGTH(message));
++		log_debug("%s: %s: %.*s", __func__, c->name, hlen - 1, hdr);
++		bufferevent_write(cs->write_event, hdr, hlen);
++		bufferevent_write_buffer(cs->write_event, message);
++		bufferevent_write(cs->write_event, "\n", 1);
++		evbuffer_free(message);
++		return;
++	}
++
+ 	log_debug("%s: %s: %.*s", __func__, c->name,
+ 	    (int)EVBUFFER_LENGTH(message), EVBUFFER_DATA(message));
+ 
+@@ -884,7 +904,7 @@
+ 			cb = TAILQ_FIRST(&cs->all_blocks);
+ 			if (cb != NULL && cb->size == 0) {
+ 				if (wp != NULL && message != NULL) {
+-					control_write_data(c, message);
++					control_write_data(c, wp->id, message);
+ 					message = NULL;
+ 				}
+ 				control_flush_all_blocks(c);
+@@ -892,7 +912,7 @@
+ 		}
+ 	}
+ 	if (message != NULL)
+-		control_write_data(c, message);
++		control_write_data(c, wp->id, message);
+ 	return (!TAILQ_EMPTY(&cp->blocks));
+ }
+ 
+@@ -915,6 +935,8 @@
+ 		log_debug("%s: %s: %zu bytes available, %u panes", __func__,
+ 		    c->name, space, cs->pending_count);
+ 
+-		limit = (space / cs->pending_count / 3); /* 3 bytes for \xxx */
++		limit = (c->flags & CLIENT_CONTROL_BINARY)
++		    ? (space / cs->pending_count)
++		    : (space / cs->pending_count / 3); /* 3 bytes for \xxx */
+ 		if (limit < CONTROL_WRITE_MINIMUM)
+ 			limit = CONTROL_WRITE_MINIMUM;

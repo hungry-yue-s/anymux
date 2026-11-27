@@ -92,7 +92,12 @@ export function fixture({ runScripts = false } = {}) {
       this.rows = 24;
       this.writes = [];
       this.resets = 0;
-      this.listeners = {};
+      this.scrollListeners = new Set();
+      this.writeParsedListeners = new Set();
+      this.listeners = {
+        scroll: () => { for (const fn of this.scrollListeners) fn(); },
+        writeParsed: () => { for (const fn of this.writeParsedListeners) fn(); },
+      };
       this.parser = { registerOscHandler: () => ({ dispose() {} }) };
       this._core = {
         coreService: { triggerDataEvent: (data) => this.listeners.data?.(data) },
@@ -122,8 +127,8 @@ export function fixture({ runScripts = false } = {}) {
     onData(fn) { this.listeners.data = fn; return { dispose() {} }; }
     onBinary(fn) { this.listeners.binary = fn; return { dispose() {} }; }
     onTitleChange(fn) { this.listeners.title = fn; return { dispose() {} }; }
-    onWriteParsed(fn) { this.listeners.writeParsed = fn; return { dispose() {} }; }
-    onScroll(fn) { this.listeners.scroll = fn; return { dispose() {} }; }
+    onWriteParsed(fn) { this.writeParsedListeners.add(fn); return { dispose: () => this.writeParsedListeners.delete(fn) }; }
+    onScroll(fn) { this.scrollListeners.add(fn); return { dispose: () => this.scrollListeners.delete(fn) }; }
     scrollLines(n) { this.scrolledLines.push(n); }
     scrollToLine(n) { this.scrolledToLines.push(n); this.buffer.active.viewportY = n; this.listeners.scroll?.(); }
     scrollToBottom() { this.scrolledToBottom += 1; this.buffer.active.viewportY = this.buffer.active.baseY; this.listeners.scroll?.(); }
@@ -1848,6 +1853,88 @@ describe('SeamWindowSession multi-pane workbench session', () => {
     session.focus('%1');
     expect(blurCalls).toBe(1);
     expect(focusCalls).toBe(1);
+
+    session.dispose();
+    f.close();
+  });
+
+  it('reassembles 0x03 snapshot chunks, sends batched output ACKs, reports pane-focus, and auto-expands history on scroll to top', async () => {
+    const f = fixture();
+    const actions = [];
+    const session = new SeamWindowSession(f.win, {
+      container: f.host,
+      target: { ...target },
+      onAction: (action, detail) => actions.push({ action, detail }),
+    });
+    await session.ready;
+    const socket = f.sockets[0];
+    expect(socket.url).toContain('ack=1');
+    hydrateWindow(socket);
+
+    const term1 = f.terminals[0];
+    expect(term1.options.scrollback).toBe(10000);
+    expect(socket.sent.some((m) => m.type === 'pane-focus' && m.paneId === '%1')).toBe(true);
+
+    // Batched output ACK sends cumulative rendered bytes after 4ms timer
+    vi.useFakeTimers();
+    try {
+      socket.sent.length = 0;
+      socket.onmessage({ data: encodeOutputBinary({ paneId: '%1', seq: 1, text: 'hello-ack' }) });
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(10);
+      expect(socket.sent.some((m) => m.type === 'ack' && m.paneId === '%1' && m.bytes === 9)).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    // 0x03 chunked snapshot reassembly preserves full payload & updates historyTotal/historyLines
+    const makeChunk = ({ paneId, seq, cols, rows, historyLines, historyTotal, chunkIndex, chunkCount, text }) => {
+      const payload = new TextEncoder().encode(text);
+      const buf = new ArrayBuffer(25 + payload.byteLength);
+      const view = new DataView(buf);
+      view.setUint8(0, 0x03);
+      view.setUint32(1, Number(String(paneId).replace('%', '')), false);
+      view.setUint32(5, seq, false);
+      view.setUint16(9, cols, false);
+      view.setUint16(11, rows, false);
+      view.setUint32(13, historyLines, false);
+      view.setUint32(17, historyTotal, false);
+      view.setUint16(21, chunkIndex, false);
+      view.setUint16(23, chunkCount, false);
+      new Uint8Array(buf, 25).set(payload);
+      return buf;
+    };
+    const writesBeforeChunk = term1.writes.length;
+    socket.onmessage({ data: makeChunk({ paneId: '%1', seq: 2, cols: 60, rows: 36, historyLines: 2000, historyTotal: 6951, chunkIndex: 0, chunkCount: 2, text: 'PART1-' }) });
+    expect(term1.writes.length).toBe(writesBeforeChunk); // wait for all chunks
+    socket.onmessage({ data: makeChunk({ paneId: '%1', seq: 2, cols: 60, rows: 36, historyLines: 2000, historyTotal: 6951, chunkIndex: 1, chunkCount: 2, text: 'PART2' }) });
+    expect(term1.writes.length).toBe(writesBeforeChunk + 1);
+    expect(new TextDecoder().decode(term1.writes.at(-1))).toBe('PART1-PART2');
+
+    // Scrolling near top triggers resync({ paneId: '%1', forceSnapshot: true, historyLines: 5000 })
+    socket.sent.length = 0;
+    term1.buffer.active.baseY = 2000;
+    term1.scrollToLine(10);
+    expect(socket.sent).toContainEqual({ type: 'resync', paneId: '%1', forceSnapshot: true, historyLines: 5000 });
+    const pill = f.host.querySelector('.seam-pane[data-pane-id="%1"] .wb-history-pill');
+    expect(pill.hidden).toBe(false);
+    expect(pill.textContent).toContain('正在加载更早历史');
+
+    // Stagnation (server capped at 2000 due to byte budget while total is 6951) marks exhausted & exposes drawer pill
+    socket.onmessage({ data: encodeSnapshotBinary({ paneId: '%1', seq: 3, cols: 60, rows: 36, historyLines: 2000, historyTotal: 6951, text: 'capped' }) });
+    term1.buffer.active.baseY = 2000;
+    term1.scrollToLine(0);
+    expect(pill.hidden).toBe(false);
+    expect(pill.textContent).toContain('还有 4951 行更早历史');
+    pill.click();
+    expect(actions).toContainEqual({ action: 'history', detail: { paneId: '%1' } });
+
+    // Switching pane on mobile reports visiblePaneIds: [activePaneId]
+    f.win.MobileUI = { isMobile: () => true };
+    socket.sent.length = 0;
+    session.selectPane('%2');
+    expect(socket.sent.some((m) => m.type === 'pane-focus' && m.paneId === '%2' && Array.isArray(m.visiblePaneIds) && m.visiblePaneIds[0] === '%2')).toBe(true);
+    f.win.MobileUI = { isMobile: () => false };
 
     session.dispose();
     f.close();

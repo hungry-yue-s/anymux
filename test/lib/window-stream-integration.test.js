@@ -248,4 +248,55 @@ describe.skipIf(!binary || !existsSync(binary) || process.platform === 'win32')(
       healthy.close(1000);
     } catch (err) { error = err; throw err; } finally { await f.cleanup(error); }
   }, 20_000);
+
+  it('streams deep >250 history snapshots, dedicated no-output input, and source-muted panes cleanly on real tmux', async () => {
+    const prog = `
+      const n = Number(process.env.LINES || 0);
+      for (let i = 0; i < n; i++) process.stdout.write('HIS_' + String(i).padStart(4, '0') + '\\r\\n');
+      process.stdout.write('READY_DEEP\\r\\n');
+      process.stdin.on('data', d => process.stdout.write('ECHO:' + d.toString()));
+    `;
+    const f = await fixture(prog);
+    let error;
+    const dedicatedPool = new ControlPool({
+      tmux: f.tmux,
+      workspace: f.workspace,
+      args: ['-S', f.socket],
+      env: { ...env, LINES: '650' },
+      outputBatchMs: 2,
+      dedicatedInputChannel: true,
+      createControl: options => new ControlProcess({ ...options, spawn: (_f, args, opts) => spawn(binary, args, opts) }),
+    });
+    try {
+      const p1 = (await f.run(['split-window', '-v', '-t', f.paneId, '-P', '-F', '#{pane_id}', '-e', 'LINES=650', process.execPath, '-e', prog])).trim();
+      await until(() => f.run(['capture-pane', '-p', '-t', p1]), out => out.includes('READY_DEEP'));
+
+      const decoded = [];
+      const lease = await dedicatedPool.subscribeWindow({ ...f.target, ack: true }, frame => decoded.push(Buffer.isBuffer(frame) ? decodeBinaryFrame(frame) : frame));
+      const snap = decoded.find(m => (m.kind === 'snapshot' || m.kind === 'snapshot-chunk') && m.paneId === p1);
+      expect(snap).toBeTruthy();
+      expect(snap.historyTotal).toBeGreaterThanOrEqual(620);
+      expect(snap.historyLines).toBeGreaterThanOrEqual(600);
+      const snapText = Buffer.concat(decoded.filter(m => (m.kind === 'snapshot' || m.kind === 'snapshot-chunk') && m.paneId === p1).map(m => m.data)).toString('utf8');
+      expect(snapText).toContain('HIS_0040');
+
+      // Send input over dedicated no-output channel & confirm ECHO arrives while not tripping foreignClient
+      expect(await lease.input(p1, 'hello_opt\r')).toBe(true);
+      await until(() => f.run(['capture-pane', '-p', '-t', p1]), out => out.includes('ECHO:hello_opt'));
+      expect(decoded.filter(m => m.type === 'ready').every(r => r.foreignClient === false)).toBe(true);
+
+      // Muting hidden pane stops live output while focusing visible pane
+      await lease.setPaneFocus({ paneId: p1, visiblePaneIds: [p1] });
+      await sleep(30);
+      const outsBeforeMutedWrite = decoded.filter(m => m.kind === 'output' && m.paneId === f.paneId).length;
+      await f.run(['send-keys', '-t', f.paneId, 'muted_test', 'Enter']);
+      await sleep(80);
+      expect(decoded.filter(m => m.kind === 'output' && m.paneId === f.paneId).length).toBe(outsBeforeMutedWrite);
+
+      lease.close();
+    } catch (err) { error = err; throw err; } finally {
+      dedicatedPool.dispose();
+      await f.cleanup(error);
+    }
+  }, 25_000);
 });

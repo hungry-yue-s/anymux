@@ -147,4 +147,40 @@ describe.skipIf(!binary)('native atomic pane snapshot', () => {
       expect(state(restored)).toEqual(state(original));
     });
   });
+
+  it('captures >250 history lines natively with capture-pane -Q -S -N when pane_snapshot_version >= 2', async () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'anymux-snapshot-s-')));
+    const socket = join(dir, 'socket');
+    const env = { ...process.env, LC_ALL: 'en_US.UTF-8' };
+    delete env.TMUX; delete env.TMUX_PANE;
+    const tmux = (...args) => execFileSync(binary, ['-S', socket, ...args], { env, encoding: 'utf8', timeout: 5000 });
+    let identity; let error;
+    try {
+      const lines = Array.from({ length: 650 }, (_, i) => `HIST_LINE_${String(i).padStart(4, '0')}`).join('\\r\\n');
+      tmux('-f', '/dev/null', 'new-session', '-d', '-s', 'snap-s', '-x', '80', '-y', '24',
+        `${quote(process.execPath)} -e "process.stdout.write('${lines}READY_S\\r\\n');setInterval(()=>{},1000)"`);
+      identity = parsePrivateTmuxIdentity(tmux('display-message', '-p', PRIVATE_TMUX_IDENTITY_FORMAT), socket);
+      for (let i = 0; i < 100; i++) {
+        if (tmux('capture-pane', '-p', '-t', '%0').includes('READY_S')) break;
+        await new Promise(r => setTimeout(r, 20));
+      }
+      const ver = Number(tmux('display-message', '-p', '#{pane_snapshot_version}').trim());
+      expect(ver).toBeGreaterThanOrEqual(2);
+      const binOut = tmux('display-message', '-p', '#{control_binary_output}').trim();
+      expect(binOut).toBe('1');
+
+      const packet = JSON.parse(tmux('capture-pane', '-Q', '-p', '-t', '%0', '-S', '-600'));
+      expect(packet.historyLines).toBe(600);
+      expect(packet.historyTotal).toBeGreaterThanOrEqual(620);
+      const raw = Buffer.from(packet.data, 'base64').toString('utf8');
+      expect(raw).toContain('HIST_LINE_0040');
+      expect(raw).toContain('READY_S');
+    } catch (err) { error = err; throw err; } finally {
+      await cleanupPrivateTmux({
+        dir, socket, identity, primaryError: error,
+        readIdentity: async () => parsePrivateTmuxIdentity(tmux('display-message', '-p', PRIVATE_TMUX_IDENTITY_FORMAT), socket),
+        killServer: async () => tmux('kill-server'),
+      });
+    }
+  });
 });

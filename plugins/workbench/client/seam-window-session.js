@@ -329,6 +329,24 @@ export function decodeWindowBinaryFrame(raw) {
       data: bytes.subarray(21),
     };
   }
+  if (frameType === 0x03) {
+    if (bytes.byteLength < 25) throw new Error('分片快照帧长度无效');
+    const chunkIndex = view.getUint16(21, false);
+    const chunkCount = view.getUint16(23, false);
+    if (chunkCount < 1 || chunkIndex >= chunkCount) throw new Error('快照分片索引无效');
+    return {
+      kind: 'snapshot-chunk',
+      paneId,
+      seq,
+      cols: view.getUint16(9, false),
+      rows: view.getUint16(11, false),
+      historyLines: view.getUint32(13, false),
+      historyTotal: view.getUint32(17, false),
+      chunkIndex,
+      chunkCount,
+      data: bytes.subarray(25),
+    };
+  }
   throw new Error('未知二进制帧类型: ' + frameType);
 }
 
@@ -638,6 +656,9 @@ export class SeamWindowSession {
     this._activeDragCleanup = null;
     this.parked = false;
     this._webglAttachHandle = null;
+    this._pendingAcks = new Map();
+    this._ackTimer = null;
+    this._lastFocusSig = null;
 
     const doc = global.document;
     const mobile = !!global.MobileUI?.isMobile();
@@ -702,6 +723,7 @@ export class SeamWindowSession {
         this._renderTree();
         this._renderMobilePaneBar();
         this._resetResizeGuard();
+        this._reportPaneFocus();
       }
       this.fit();
     };
@@ -805,6 +827,7 @@ export class SeamWindowSession {
       cols: String(grid.cols || this.windowCols || 80),
       rows: String(grid.rows || this.windowRows || 24),
       device: this._isMobile() ? 'mobile' : 'desktop',
+      ack: '1',
       protocol: '1',
     };
     const focusPane = this.activePaneId || this.target.paneId;
@@ -837,6 +860,9 @@ export class SeamWindowSession {
       pane.lastSeq = null;
       pane.pendingWrites = [];
       pane.pendingBytes = 0;
+      pane.snapshotAssembly = null;
+      pane.historyLoading = false;
+      pane.historyRequestedLines = 0;
     }
     this._setStatus('connecting', this.attempt ? '正在重新连接' : '正在连接');
 
@@ -975,6 +1001,7 @@ export class SeamWindowSession {
     this._syncInputGates();
     this.syncAttention();
     this._becameReady();
+    this._reportPaneFocus();
   }
 
   _handleBinaryFrame(frame, epoch) {
@@ -999,7 +1026,51 @@ export class SeamWindowSession {
       return;
     }
 
-    // Snapshot fence (`0x02`): always authoritative over an ordered WebSocket.
+    if (frame.kind === 'snapshot-chunk') {
+      if (frame.chunkCount < 1 || frame.chunkIndex >= frame.chunkCount) return;
+      let asm = entry.snapshotAssembly;
+      if (!asm || asm.seq !== frame.seq || asm.chunkCount !== frame.chunkCount) {
+        asm = {
+          seq: frame.seq,
+          chunkCount: frame.chunkCount,
+          cols: frame.cols,
+          rows: frame.rows,
+          historyLines: frame.historyLines,
+          historyTotal: frame.historyTotal,
+          parts: new Array(frame.chunkCount),
+          received: 0,
+          totalBytes: 0,
+        };
+        entry.snapshotAssembly = asm;
+      }
+      if (!asm.parts[frame.chunkIndex]) {
+        asm.parts[frame.chunkIndex] = frame.data;
+        asm.received += 1;
+        asm.totalBytes += frame.data.byteLength;
+      }
+      if (asm.received < asm.chunkCount) return;
+      const merged = new Uint8Array(asm.totalBytes);
+      let offset = 0;
+      for (const part of asm.parts) {
+        merged.set(part, offset);
+        offset += part.byteLength;
+      }
+      entry.snapshotAssembly = null;
+      frame = {
+        kind: 'snapshot',
+        paneId: frame.paneId,
+        seq: asm.seq,
+        cols: asm.cols,
+        rows: asm.rows,
+        historyLines: asm.historyLines,
+        historyTotal: asm.historyTotal,
+        data: merged,
+      };
+    } else {
+      entry.snapshotAssembly = null;
+    }
+
+    // Snapshot fence (`0x02` or assembled `0x03`): always authoritative over an ordered WebSocket.
     const prevBuf = entry.everHydrated ? entry.term.buffer?.active : null;
     const preserveScrollFromBottom = (
       prevBuf
@@ -1007,9 +1078,18 @@ export class SeamWindowSession {
       && Number(prevBuf.baseY) > 0
       && Number(prevBuf.viewportY) < Number(prevBuf.baseY)
     ) ? (Number(prevBuf.baseY) - Number(prevBuf.viewportY)) : 0;
+    const prevReq = entry.historyRequestedLines || 0;
+    const prevLines = entry.historyPrevLines || 0;
     entry.lastSeq = frame.seq;
     entry.historyTotal = frame.historyTotal;
     entry.historyLines = frame.historyLines;
+    entry.historyLoading = false;
+    entry.historyRequestedLines = 0;
+    if (prevReq > 0 && frame.historyLines <= prevLines && frame.historyTotal > frame.historyLines) {
+      entry.historyExhausted = true;
+    } else if (frame.historyLines > prevLines) {
+      entry.historyExhausted = false;
+    }
     entry.hydrated = false;
     entry.restoring = true;
     entry.pendingWrites = [];
@@ -1035,6 +1115,7 @@ export class SeamWindowSession {
       }
       this._syncInputGates();
       this._syncMobileViewportTransform(entry);
+      this._syncHistoryPill(entry);
       this._becameReady();
     };
 
@@ -1059,6 +1140,34 @@ export class SeamWindowSession {
     }
   }
 
+  _ackOutput(paneId, bytes) {
+    if (this.disposed || this.status !== 'live' || !(bytes > 0)) return;
+    const next = (this._pendingAcks.get(paneId) || 0) + bytes;
+    this._pendingAcks.set(paneId, next);
+    if (next >= 64 * 1024) {
+      this._flushAcks();
+      return;
+    }
+    if (this._ackTimer == null) {
+      this._ackTimer = this.global.setTimeout(() => {
+        this._ackTimer = null;
+        this._flushAcks();
+      }, 4);
+    }
+  }
+
+  _flushAcks() {
+    if (this._ackTimer != null) {
+      this.global.clearTimeout(this._ackTimer);
+      this._ackTimer = null;
+    }
+    if (!this._pendingAcks.size || this.disposed || this.ws?.readyState !== 1) return;
+    for (const [paneId, bytes] of this._pendingAcks.entries()) {
+      if (bytes > 0) this._send({ type: 'ack', paneId, bytes });
+    }
+    this._pendingAcks.clear();
+  }
+
   _queueLiveWrite(entry, bytes, epoch) {
     if (!bytes?.byteLength) return;
     entry.liveBytes += bytes.byteLength;
@@ -1079,7 +1188,10 @@ export class SeamWindowSession {
       const chunks = entry.liveChunks.splice(0);
       entry.liveBytes = 0;
       if (chunks.length === 1) {
-        entry.term.write(chunks[0]);
+        const len = chunks[0].byteLength;
+        entry.term.write(chunks[0], () => {
+          if (!this.disposed && epoch === this.epoch) this._ackOutput(entry.paneId, len);
+        });
       } else {
         let total = 0;
         for (const chunk of chunks) total += chunk.byteLength;
@@ -1089,8 +1201,74 @@ export class SeamWindowSession {
           merged.set(chunk, offset);
           offset += chunk.byteLength;
         }
-        entry.term.write(merged);
+        entry.term.write(merged, () => {
+          if (!this.disposed && epoch === this.epoch) this._ackOutput(entry.paneId, total);
+        });
       }
+    });
+  }
+
+  _reportPaneFocus() {
+    if (this.disposed || this.status !== 'live' || this.ws?.readyState !== 1) return;
+    const singlePane = (this.zoomed || this._isMobileSinglePane()) && this.activePaneId && this.panes.has(this.activePaneId);
+    const visiblePaneIds = singlePane ? [this.activePaneId] : null;
+    const sig = `${this.activePaneId || ''}|${visiblePaneIds ? visiblePaneIds.join(',') : '*'}`;
+    if (sig === this._lastFocusSig) return;
+    this._lastFocusSig = sig;
+    this._send({
+      type: 'pane-focus',
+      paneId: this.activePaneId || null,
+      visiblePaneIds,
+    });
+  }
+
+  _syncHistoryPill(entry) {
+    const pill = entry?.historyPill;
+    const buf = entry?.term?.buffer?.active;
+    if (!pill || !buf || entry.isRich || buf.type === 'alternate') {
+      if (pill) pill.hidden = true;
+      return;
+    }
+    if (entry.historyLoading) {
+      pill.textContent = '正在加载更早历史…';
+      pill.hidden = false;
+      return;
+    }
+    const remaining = (entry.historyTotal || 0) - (entry.historyLines || 0);
+    if (remaining > 0 && Number(buf.viewportY) <= 4 && ((entry.historyLines || 0) >= 10_000 || entry.historyExhausted)) {
+      pill.textContent = `还有 ${remaining} 行更早历史 · 打开完整历史`;
+      pill.hidden = false;
+      return;
+    }
+    pill.hidden = true;
+  }
+
+  _checkHistoryExpand(entry) {
+    if (this.disposed || this.status !== 'live' || !entry?.term || entry.isRich || !entry.hydrated || entry.restoring) return;
+    if (entry.historyLoading || entry.historyExhausted) return;
+    const buf = entry.term.buffer?.active;
+    if (!buf || buf.type === 'alternate') return;
+    if (Number(buf.viewportY) > 24) return;
+    const total = entry.historyTotal || 0;
+    const loaded = entry.historyLines || 0;
+    if (total <= loaded || loaded >= 10_000) {
+      this._syncHistoryPill(entry);
+      return;
+    }
+    const now = Date.now();
+    if (now - (entry.historyLastAttemptAt || 0) < 1200) return;
+    const nextTarget = Math.min(10_000, total, loaded < 5000 ? 5000 : 10_000);
+    if (nextTarget <= loaded) return;
+    entry.historyLoading = true;
+    entry.historyPrevLines = loaded;
+    entry.historyRequestedLines = nextTarget;
+    entry.historyLastAttemptAt = now;
+    this._syncHistoryPill(entry);
+    this._send({
+      type: 'resync',
+      paneId: entry.paneId,
+      forceSnapshot: true,
+      historyLines: nextTarget,
     });
   }
 
@@ -1107,6 +1285,7 @@ export class SeamWindowSession {
       this._pendingSelectPane = null;
       this._send({ type: 'select-pane', paneId: pendingPane });
     }
+    this._reportPaneFocus();
     this._publishContext();
     this.fit();
   }
@@ -1120,7 +1299,7 @@ export class SeamWindowSession {
       fontFamily: this.fontReady ? FONT_FAMILY : 'monospace',
       fontSize: this.fontSize,
       cursorBlink: true,
-      scrollback: 5000,
+      scrollback: 10000,
       scrollSensitivity: 1.15,
       fastScrollSensitivity: 5,
       overviewRuler: { width: 0 },
@@ -1309,11 +1488,21 @@ export class SeamWindowSession {
     body.dataset.contextZone = 'pane-body';
     body.dataset.paneId = paneId;
 
+    const historyPill = doc.createElement('button');
+    historyPill.type = 'button';
+    historyPill.className = 'wb-history-pill';
+    historyPill.hidden = true;
+    historyPill.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      this.onAction('history', { paneId });
+    });
+
     const takeoverEl = doc.createElement('div');
     takeoverEl.className = 'seam-pane-takeover';
     takeoverEl.hidden = true;
 
-    el.append(rail, body, takeoverEl);
+    el.append(rail, body, historyPill, takeoverEl);
 
     entry = {
       paneId,
@@ -1321,6 +1510,7 @@ export class SeamWindowSession {
       el,
       rail,
       body,
+      historyPill,
       takeoverEl,
       takeoverCollapsed: false,
       fitScale: 1,
@@ -1363,6 +1553,12 @@ export class SeamWindowSession {
       hoverTimer: null,
       historyTotal: 0,
       historyLines: 0,
+      historyLoading: false,
+      historyExhausted: false,
+      historyRequestedLines: 0,
+      historyPrevLines: 0,
+      historyLastAttemptAt: 0,
+      snapshotAssembly: null,
     };
 
     const focusThisPane = () => {
@@ -1466,6 +1662,15 @@ export class SeamWindowSession {
     };
     term.element?.addEventListener('mouseup', onMouseUp);
     cleanups.push(() => term.element?.removeEventListener('mouseup', onMouseUp));
+    if (term.onScroll) {
+      cleanups.push(term.onScroll(() => {
+        this._checkHistoryExpand(entry);
+        this._syncHistoryPill(entry);
+      }));
+    }
+    if (term.onWriteParsed) {
+      cleanups.push(term.onWriteParsed(() => this._syncHistoryPill(entry)));
+    }
     this._installTouchSelection(entry);
 
     if (entry.paneId === this.activePaneId || this.panes.size <= 1) {
@@ -2832,6 +3037,7 @@ export class SeamWindowSession {
         this._pendingSelectPane = paneId;
       }
     }
+    this._reportPaneFocus();
     return true;
   }
 
@@ -3345,7 +3551,7 @@ export class SeamWindowSession {
       entry.el.append(copyButton);
     };
     const onStart = (event) => {
-      if (!this._isMobile() || event.target.closest?.('.wb-touch-copy, .wb-scroll-bottom, .seam-pane-takeover')) return;
+      if (!this._isMobile() || event.target.closest?.('.wb-touch-copy, .wb-scroll-bottom, .wb-history-pill, .seam-pane-takeover')) return;
       if (event.touches.length >= 2) {
         hadMultiTouch = true;
         gestureBlocked = true;
@@ -3541,14 +3747,14 @@ export class SeamWindowSession {
       suppressClick = true;
     };
     const onMouseDown = (event) => {
-      if (!this._isMobile() || event.target.closest?.('.wb-touch-copy, .wb-scroll-bottom, .seam-pane-takeover')) return;
+      if (!this._isMobile() || event.target.closest?.('.wb-touch-copy, .wb-scroll-bottom, .wb-history-pill, .seam-pane-takeover')) return;
       if (Date.now() < suppressMouseUntil || gestureBlocked || !this._isPaneInputAllowed(entry.paneId)) {
         event.preventDefault();
         event.stopImmediatePropagation();
       }
     };
     const onClick = (event) => {
-      if (event.target.closest?.('.wb-touch-copy, .wb-scroll-bottom, .seam-pane-takeover')) return;
+      if (event.target.closest?.('.wb-touch-copy, .wb-scroll-bottom, .wb-history-pill, .seam-pane-takeover')) return;
       if (suppressClick || (this._isMobile() && Date.now() < suppressMouseUntil)) {
         event.preventDefault();
         event.stopImmediatePropagation();
@@ -3583,9 +3789,15 @@ export class SeamWindowSession {
 
   _disconnect() {
     this.epoch++;
-    for (const key of ['connectTimer', 'resizeTimer', 'retryTimer']) {
+    for (const key of ['connectTimer', 'resizeTimer', 'retryTimer', '_ackTimer']) {
       this.global.clearTimeout(this[key]);
       this[key] = null;
+    }
+    this._pendingAcks.clear();
+    this._lastFocusSig = null;
+    for (const pane of this.panes.values()) {
+      pane.snapshotAssembly = null;
+      pane.historyLoading = false;
     }
     if (this.ws) {
       this.ws.onopen = this.ws.onmessage = this.ws.onclose = this.ws.onerror = null;

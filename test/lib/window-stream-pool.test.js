@@ -624,4 +624,119 @@ describe('ControlPool multi-pane window-stream', () => {
     desktop.close();
     pool.dispose();
   });
+
+  it('routes input over dedicated no-output client (excluded from foreign PIDs), mutes hidden panes via refresh-client -A, recovers ACK overflows, and retries TERMINAL_BUSY history', async () => {
+    const controls = [];
+    const tmuxRuns = [];
+    let clientsList = '$1|441\n';
+    let capReply = '2|1|1';
+    let busyCount = 0;
+    const pool = new ControlPool({
+      tmux: {
+        run: async argv => {
+          tmuxRuns.push(argv);
+          if (argv[0] === 'list-panes') {
+            const fmtIdx = argv.indexOf('-F');
+            if (fmtIdx !== -1 && String(argv[fmtIdx + 1] || '').includes('#{pid}:#{start_time}|')) {
+              return '99:100|$1|@2|%3|80|48|2|0|160|48\n99:100|$1|@2|%4|79|48|2|0|160|48\n';
+            }
+            return makeWindowListOutput({ cols: 160, rows: 48, activePaneId: '%3' });
+          }
+          if (argv[0] === 'display-message') return capReply;
+          if (argv[0] === 'list-clients') return clientsList;
+          throw new Error(`unexpected: ${argv.join(' ')}`);
+        },
+      },
+      workspace: { invalidate() {}, resolvePane: async paneId => ({ windowId: '@2', paneId }) },
+      dedicatedInputChannel: true,
+      outputBatchMs: 0,
+      createControl: opts => {
+        const isInput = opts.flags === 'no-output,ignore-size';
+        if (isInput) clientsList = '$1|441\n$1|552\n';
+        const ctrl = new (class extends EventEmitter {
+          constructor() { super(); this.commands = []; this.flags = opts.flags; this.child = { pid: isInput ? 992 : 991 }; }
+          async command(text, { onResult, blocks = 1, collect = false } = {}) {
+            this.commands.push(text);
+            if (text.includes('#{client_pid}')) {
+              const b = Buffer.from(`99:100|$1|${isInput ? 552 : 441}`);
+              onResult?.(b);
+              return b;
+            }
+            if (text.includes('#{history_size}')) return Buffer.from(`99:100|$1|@2|%3|${busyCount >= 1 ? 605 : 600}|0`);
+            if (text.includes('capture-pane -Q -p -t ')) {
+              const paneId = /capture-pane -Q -p -t (%\d+)/.exec(text)[1];
+              const snap = Buffer.from(JSON.stringify({
+                version: 1, instanceId: '99:100', windowId: '@2', paneId, cols: 80, rows: 48,
+                historyLines: 250, historyTotal: 600,
+                dataBase64: Buffer.from(`\x1bc\x1b[?25l\x1b[?7h\x1b[?6l\x1b[4l\x1b[0m\x0f\x1b(B\x1b)0LINE\x1b]8;;\x1b\\\x1b[3g`).toString('base64'),
+              }));
+              const val = collect ? [Buffer.from('OLD1\nOLD2'), snap].slice(0, blocks) : snap;
+              onResult?.(val);
+              return val;
+            }
+            return Buffer.alloc(0);
+          }
+          async transaction(lines) {
+            this.commands.push(lines.join(' ; '));
+            busyCount++;
+            if (busyCount === 1) {
+              return [Buffer.from('99:100|$1|@2|%3|600|0'), Buffer.from('line1'), Buffer.from('99:100|$1|@2|%3|605|0')];
+            }
+            return [Buffer.from('99:100|$1|@2|%3|605|0'), Buffer.from('ok1\nok2'), Buffer.from('99:100|$1|@2|%3|605|0')];
+          }
+          dispose() { this.disposed = true; }
+        })();
+        controls.push(ctrl);
+        return ctrl;
+      },
+    });
+
+    const frames = [];
+    const lease = await pool.subscribeWindow(
+      { instanceId: '99:100', sessionId: '$1', windowId: '@2', ack: true },
+      f => frames.push(Buffer.isBuffer(f) ? decodeBinaryFrame(f) : f),
+    );
+    const mainCtrl = controls[0];
+    // v2 capability negotiates binary-output flag and native -Q -S -2000
+    expect(mainCtrl.commands).toContain('refresh-client -f pause-after=5,binary-output');
+    expect(mainCtrl.commands.some(c => c.includes('capture-pane -Q -p -t %3 -S -2000'))).toBe(true);
+    expect(frames.find(f => f.type === 'ready').foreignClient).toBe(false);
+
+    // Input lazily spawns dedicated no-output channel & its clientPid (552) is treated as owned
+    expect(await lease.input('%3', 'hi')).toBe(true);
+    expect(controls).toHaveLength(2);
+    expect(controls[1].flags).toBe('no-output,ignore-size');
+    expect(controls[1].commands.some(c => c.startsWith('send-keys -H -t %3 '))).toBe(true);
+    expect(mainCtrl.commands.some(c => c.startsWith('send-keys -H '))).toBe(false);
+    expect(frames.filter(f => f.type === 'ready').every(f => f.foreignClient === false)).toBe(true);
+
+    // Focusing single visible pane mutes hidden %4 via refresh-client -A '%4:off'; switching back unmutes via snapshot
+    await lease.setPaneFocus({ paneId: '%3', visiblePaneIds: ['%3'] });
+    expect(mainCtrl.commands).toContain("refresh-client -A '%4:off'");
+    const snapsBeforeUnmute = frames.filter(f => f.kind === 'snapshot' && f.paneId === '%4').length;
+    await lease.setPaneFocus({ paneId: '%4', visiblePaneIds: ['%4'] });
+    expect(mainCtrl.commands).toContain("refresh-client -A '%3:off'");
+    expect(frames.filter(f => f.kind === 'snapshot' && f.paneId === '%4').length).toBe(snapsBeforeUnmute + 1);
+
+    // Deep resync expands historyLines
+    const snapsBeforeDeep = frames.filter(f => f.kind === 'snapshot' && f.paneId === '%4').length;
+    expect(await lease.resync({ paneId: '%4', forceSnapshot: true, historyLines: 5000 })).toBe(true);
+    expect(mainCtrl.commands.some(c => c.includes('capture-pane -Q -p -t %4 -S -5000'))).toBe(true);
+    expect(frames.filter(f => f.kind === 'snapshot' && f.paneId === '%4').length).toBe(snapsBeforeDeep + 1);
+
+    // ACK overflow on slow window triggers automatic recovery snapshot instead of disconnecting
+    const snapsBeforeOverflow = frames.filter(f => f.kind === 'snapshot' && f.paneId === '%4').length;
+    mainCtrl.emit('output', '%4', Buffer.alloc(600 * 1024, 0x41));
+    mainCtrl.emit('output', '%4', Buffer.alloc(300 * 1024, 0x42));
+    await new Promise(r => setTimeout(r, 20));
+    expect(frames.filter(f => f.kind === 'snapshot' && f.paneId === '%4').length).toBeGreaterThan(snapsBeforeOverflow);
+
+    // history() automatically retries on transient TERMINAL_BUSY shift
+    const hist = await pool.history({ instanceId: '99:100', sessionId: '$1', windowId: '@2', paneId: '%3' }, { limit: 10 });
+    expect(hist.lines).toEqual(['ok1', 'ok2']);
+    expect(busyCount).toBe(2);
+
+    lease.close();
+    pool.dispose();
+  });
 });
