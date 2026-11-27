@@ -89,11 +89,12 @@ describe('extended terminal themes', () => {
     expect(Theme.getName(oldId)).toBe(Theme.getName(newId));
     expect([Theme.getTransparency(), Theme.getGlassIntensity()]).toEqual([25, 65]);
 
-    // Applying a new theme writes ONLY anymux_appearance_v3; legacy keys must not overwrite v3.
+    // Applying a new theme writes ONLY anymux_appearance_v4; legacy keys must not overwrite v4.
     Theme.apply('github-light');
-    expect(dom.window.localStorage.getItem('anymux_appearance_v3')).toContain('github-light');
+    expect(dom.window.localStorage.getItem('anymux_appearance_v4')).toContain('github-light');
     storageChange('tmux_theme', oldId);
     storageChange('tmux_native_transparency', '10');
+    storageChange('anymux_appearance_v3', JSON.stringify({ version: 3, themeUpdatedAt: Date.now() + 5000, theme: { themeId: 'oyster' } }));
     expect(Theme.getCurrent()).toBe('github-light');
     expect(Theme.getTransparency()).toBe(25);
   });
@@ -330,7 +331,7 @@ describe('native window transparency', () => {
     expect(dom.window.document.querySelector('[data-action="set-surface-mode"][data-mode="desktop"]')).toBeNull();
   });
 
-  it('defaults to opaque and persists only a bounded integer percentage in anymux_appearance_v3', () => {
+  it('defaults to opaque and persists only a bounded integer percentage in anymux_appearance_v4', () => {
     const Theme = loadTheme(null, { native: true });
     const changed = vi.fn();
     dom.window.document.addEventListener('tmux-transparency-change', changed);
@@ -340,7 +341,7 @@ describe('native window transparency', () => {
     for (const [input, expected] of [[27.6, 28], [90, 50], [-10, 0], ['invalid', 0]]) {
       Theme.setTransparency(input);
       expect(Theme.getTransparency()).toBe(expected);
-      expect(JSON.parse(dom.window.localStorage.getItem('anymux_appearance_v3')).surfaces.native.transparency).toBe(expected);
+      expect(JSON.parse(dom.window.localStorage.getItem('anymux_appearance_v4')).surfaces.native.transparency).toBe(expected);
       expect(dom.window.document.documentElement.hasAttribute('data-native-transparency')).toBe(expected > 0);
     }
     expect(changed).toHaveBeenCalledTimes(4);
@@ -375,9 +376,9 @@ describe('native window transparency', () => {
     expect(term.options.theme.background).toBe('rgba(0, 0, 0, 0)');
 
     const snap = Theme.getSnapshot();
-    snap.theme.themeId = 'prism';
+    snap.themes.native.themeId = 'prism';
     snap.surfaces.native.transparency = 15;
-    storageChange('anymux_appearance_v3', JSON.stringify(snap));
+    storageChange('anymux_appearance_v4', JSON.stringify(snap));
     expect(dom.window.document.documentElement.getAttribute('data-theme')).toBe('prism');
     expect(term.options.theme.foreground).toBe('#e8e5f2');
     expect(Theme.getTransparency()).toBe(15);
@@ -580,19 +581,19 @@ describe('wallpapers, glass engine, auto scheme, custom themes & typography', ()
     Theme.setLightThemeId('oyster');
     Theme.setDarkThemeId('tokyo-night');
     Theme.setThemeMode('system');
-    const savedBefore = dom.window.localStorage.getItem('anymux_appearance_v3');
+    const savedBefore = dom.window.localStorage.getItem('anymux_appearance_v4');
     Theme.previewTheme('github-light');
     expect(dom.window.document.documentElement.getAttribute('data-theme')).toBe('github-light');
     expect(Theme.getThemeMode()).toBe('system');
-    expect(dom.window.localStorage.getItem('anymux_appearance_v3')).toBe(savedBefore);
+    expect(dom.window.localStorage.getItem('anymux_appearance_v4')).toBe(savedBefore);
     Theme.clearPreview();
     expect(dom.window.document.documentElement.getAttribute('data-theme')).toBe('tokyo-night');
 
     // Syncing a remote config with desktop mode on native does NOT clobber web slot
     const snap = Theme.getSnapshot();
-    snap.themeUpdatedAt = Date.now() + 60000;
-    snap.theme.mode = 'manual';
-    snap.theme.themeId = 'nord';
+    snap.themes.web.updatedAt = Date.now() + 60000;
+    snap.themes.web.mode = 'manual';
+    snap.themes.web.themeId = 'nord';
     snap.surfaces.native.updatedAt = Date.now() + 60000;
     snap.surfaces.native.mode = 'desktop';
     snap.surfaces.native.transparency = 35;
@@ -618,8 +619,8 @@ describe('wallpapers, glass engine, auto scheme, custom themes & typography', ()
     });
     let lightMatches = false;
     const listeners = [];
-    dom.window.matchMedia = vi.fn(() => ({
-      get matches() { return lightMatches; },
+    dom.window.matchMedia = vi.fn((query) => ({
+      get matches() { return String(query).includes('prefers-color-scheme') ? lightMatches : false; },
       addEventListener: (_evt, cb) => listeners.push(cb),
     }));
     dom.window.eval(themeSource);
@@ -682,8 +683,8 @@ describe('wallpapers, glass engine, auto scheme, custom themes & typography', ()
 
     const remoteConfig = Theme.getSnapshot();
     remoteConfig.updatedAt = Date.now() + 60000;
-    remoteConfig.themeUpdatedAt = remoteConfig.updatedAt;
-    remoteConfig.theme.themeId = 'nord';
+    remoteConfig.themes.web.updatedAt = remoteConfig.updatedAt;
+    remoteConfig.themes.web.themeId = 'nord';
     remoteConfig.surfaces.web.updatedAt = remoteConfig.updatedAt;
     remoteConfig.surfaces.web.mode = 'wallpaper';
     remoteConfig.surfaces.web.wallpaperSource = 'follow';
@@ -700,5 +701,77 @@ describe('wallpapers, glass engine, auto scheme, custom themes & typography', ()
     expect(dom.window.document.querySelectorAll('.wallpaper-card').length).toBeGreaterThanOrEqual(13);
     expect(dom.window.document.querySelectorAll('.glass-preset-chip').length).toBe(3);
     expect(dom.window.document.getElementById('typo-fontSize')).not.toBeNull();
+  });
+
+  it('isolates theme state per device profile across web, native, and Android mobile', async () => {
+    const ThemeWeb = loadTheme('nord');
+    const putWeb = vi.fn(async () => ({}));
+    const remoteForWeb = ThemeWeb.getSnapshot();
+    remoteForWeb.themes.mobile = { updatedAt: Date.now() + 60000, mode: 'manual', themeId: 'oyster', lightThemeId: 'oyster', darkThemeId: 'tokyo-night', accentOverride: null };
+    dom.window.Api = {
+      get: vi.fn(async () => ({ config: remoteForWeb, customWallpapers: [] })),
+      put: putWeb,
+    };
+    await ThemeWeb.syncFromServer();
+    // Newer mobile theme on server does NOT alter web theme.
+    expect(ThemeWeb.getCurrent()).toBe('nord');
+
+    ThemeWeb.apply('prism');
+    await ThemeWeb.saveToServer();
+    expect(putWeb).toHaveBeenCalledOnce();
+    const sentWeb = putWeb.mock.calls[0][1];
+    expect(Object.keys(sentWeb.themes)).toEqual(['web']);
+    expect(Object.keys(sentWeb.surfaces)).toEqual(['web']);
+    expect(sentWeb.themes.web.themeId).toBe('prism');
+
+    dom.window.close();
+    dom = new JSDOM('<!doctype html><html><body></body></html>', {
+      runScripts: 'outside-only',
+      url: 'https://anymux.test/',
+    });
+    Object.defineProperty(dom.window.navigator, 'userAgent', {
+      value: 'Mozilla/5.0 AnymuxAndroid/1.0',
+      configurable: true,
+    });
+    // Seed a legacy v3 key to verify migration only stamps mobile.updatedAt and never pushes web/native.
+    dom.window.localStorage.setItem('anymux_appearance_v3', JSON.stringify({
+      version: 3,
+      updatedAt: 5000,
+      themeUpdatedAt: 5000,
+      theme: { mode: 'manual', themeId: 'oyster', lightThemeId: 'oyster', darkThemeId: 'tokyo-night', accentOverride: null, customThemes: [] },
+      surfaces: { mobile: { updatedAt: 5000, mode: 'solid' } },
+    }));
+    dom.window.eval(themeSource);
+    const ThemeAndroid = dom.window.Theme;
+    expect(ThemeAndroid.getDeviceProfileKey()).toBe('mobile');
+    expect(ThemeAndroid.getCurrent()).toBe('oyster');
+    const snapAndroid = ThemeAndroid.getSnapshot();
+    expect(snapAndroid.themes.mobile.updatedAt).toBe(5000);
+    expect(snapAndroid.themes.web.updatedAt).toBe(0);
+    expect(snapAndroid.themes.native.updatedAt).toBe(0);
+
+    const putMobile = vi.fn(async () => ({}));
+    const remoteForMobile = ThemeAndroid.getSnapshot();
+    remoteForMobile.themes.mobile.updatedAt = 0;
+    remoteForMobile.themes.web = { updatedAt: 9999999, mode: 'manual', themeId: 'forest-ink', lightThemeId: 'oyster', darkThemeId: 'tokyo-night', accentOverride: null };
+    remoteForMobile.themes.native = { updatedAt: 9999999, mode: 'manual', themeId: 'prism', lightThemeId: 'oyster', darkThemeId: 'tokyo-night', accentOverride: null };
+    dom.window.Api = {
+      get: vi.fn(async () => ({ config: remoteForMobile, customWallpapers: [] })),
+      put: putMobile,
+    };
+    await ThemeAndroid.syncFromServer();
+    expect(ThemeAndroid.getCurrent()).toBe('oyster');
+    expect(putMobile).toHaveBeenCalledOnce();
+    const sentMobile = putMobile.mock.calls[0][1];
+    expect(Object.keys(sentMobile.themes)).toEqual(['mobile']);
+    expect(Object.keys(sentMobile.surfaces)).toEqual(['mobile']);
+
+    // Non-persisting apply must not mutate storage or schedule server save.
+    const storedBefore = dom.window.localStorage.getItem('anymux_appearance_v4');
+    putMobile.mockClear();
+    ThemeAndroid.apply('graphite', { persist: false, sync: false });
+    expect(dom.window.document.documentElement.getAttribute('data-theme')).toBe('graphite');
+    expect(dom.window.localStorage.getItem('anymux_appearance_v4')).toBe(storedBefore);
+    expect(putMobile).not.toHaveBeenCalled();
   });
 });

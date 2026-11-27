@@ -49,17 +49,28 @@ describe('Android workspace integration', () => {
     ]);
   });
 
-  it('restores the native client theme and reports later manual theme changes', () => {
+  it('restores the native client theme without syncing when no saved appearance exists and reports later manual theme changes', () => {
     const messages = setup();
     win.__tmuxAndroidInstalled = false;
     win.__tmuxAndroidTheme = 'oyster';
     win.Theme = { apply: vi.fn(id => { win.document.documentElement.dataset.theme = id; }) };
     win.eval(source);
-    expect(win.Theme.apply).toHaveBeenCalledWith('oyster');
+    expect(win.Theme.apply).toHaveBeenCalledWith('oyster', { persist: false, sync: false });
     expect(messages.at(-1)).toMatchObject({ type: 'theme', id: 'oyster' });
     win.document.documentElement.dataset.theme = 'deep-current';
     win.document.dispatchEvent(new win.Event('tmux-theme-change'));
     expect(messages.at(-1)).toMatchObject({ type: 'theme', id: 'deep-current' });
+  });
+
+  it('does not overwrite saved v4 appearance with injected Android theme on page load', () => {
+    const messages = setup();
+    win.__tmuxAndroidInstalled = false;
+    win.__tmuxAndroidTheme = 'oyster';
+    win.localStorage.setItem('anymux_appearance_v4', JSON.stringify({ version: 4 }));
+    win.Theme = { apply: vi.fn() };
+    win.eval(source);
+    expect(win.Theme.apply).not.toHaveBeenCalled();
+    expect(messages.at(-1)).toMatchObject({ type: 'theme' });
   });
 
   it('exports renderer-owned Blob downloads through the Android document picker', async () => {

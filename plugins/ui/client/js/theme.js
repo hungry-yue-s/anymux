@@ -5,7 +5,8 @@
 var Theme = (function () {
   var LEGACY_STORAGE_KEY = 'tmux_theme';
   var V2_APPEARANCE_KEY = 'anymux_appearance_v2';
-  var APPEARANCE_KEY = 'anymux_appearance_v3';
+  var V3_APPEARANCE_KEY = 'anymux_appearance_v3';
+  var APPEARANCE_KEY = 'anymux_appearance_v4';
   var LEGACY_TRANSPARENCY_KEY = 'tmux_native_transparency';
   var LEGACY_GLASS_KEY = 'tmux_native_glass_intensity';
   var DEFAULT_THEME = 'tokyo-night';
@@ -776,19 +777,28 @@ var Theme = (function () {
     };
   }
 
+  function defaultThemeSlot() {
+    return {
+      updatedAt: 0,
+      mode: 'manual',
+      themeId: DEFAULT_THEME,
+      lightThemeId: 'oyster',
+      darkThemeId: DEFAULT_THEME,
+      accentOverride: null,
+    };
+  }
+
   function defaultState() {
     return {
-      version: 3,
+      version: 4,
       updatedAt: 0,
-      themeUpdatedAt: 0,
+      customThemesUpdatedAt: 0,
       terminalUpdatedAt: 0,
-      theme: {
-        mode: 'manual',
-        themeId: DEFAULT_THEME,
-        lightThemeId: 'oyster',
-        darkThemeId: DEFAULT_THEME,
-        accentOverride: null,
-        customThemes: [],
+      customThemes: [],
+      themes: {
+        native: defaultThemeSlot(),
+        web: defaultThemeSlot(),
+        mobile: defaultThemeSlot(),
       },
       terminal: {
         fontSize: 14,
@@ -809,11 +819,15 @@ var Theme = (function () {
   function getDeviceProfileKey() {
     if (supportsTransparency()) return 'native';
     try {
+      if (window.TmuxAndroid || /\b(?:AnymuxAndroid|TmuxPanelAndroid)\//.test((window.navigator && window.navigator.userAgent) || '')) {
+        return 'mobile';
+      }
       if (window.MobileUI && typeof window.MobileUI.isMobile === 'function' && window.MobileUI.isMobile()) {
         return 'mobile';
       }
-      if (typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 767px)').matches) {
-        return 'mobile';
+      if (typeof window.matchMedia === 'function') {
+        if (window.matchMedia('(max-width: 767px)').matches) return 'mobile';
+        if (window.matchMedia('(pointer: coarse) and (max-height: 560px) and (max-width: 1023px)').matches) return 'mobile';
       }
     } catch (_e) {}
     return 'web';
@@ -932,8 +946,30 @@ var Theme = (function () {
   }
 
   function isLegacyFlatState(raw) {
-    if (!raw || typeof raw !== 'object' || (raw.surfaces && typeof raw.surfaces === 'object')) return false;
+    if (
+      !raw
+      || typeof raw !== 'object'
+      || (raw.surfaces && typeof raw.surfaces === 'object')
+      || (raw.themes && typeof raw.themes === 'object')
+      || (raw.theme && typeof raw.theme === 'object')
+      || Number(raw.version) >= 3
+      || 'customThemesUpdatedAt' in raw
+      || 'themeUpdatedAt' in raw
+    ) {
+      return false;
+    }
     return 'themeId' in raw || 'themeMode' in raw || 'wallpaper' in raw || 'glass' in raw || 'typography' in raw || 'customThemes' in raw;
+  }
+
+  function isLegacyV3State(raw) {
+    return Boolean(
+      raw
+      && typeof raw === 'object'
+      && (!('version' in raw) || Number(raw.version) < 4)
+      && !(raw.themes && typeof raw.themes === 'object')
+      && raw.theme
+      && typeof raw.theme === 'object'
+    );
   }
 
   function migrateV2ToV3(raw) {
@@ -1011,18 +1047,63 @@ var Theme = (function () {
     };
   }
 
+  function migrateV3ToV4(raw) {
+    var rawTheme = raw.theme && typeof raw.theme === 'object' ? raw.theme : {};
+    var topTs = isFinite(Number(raw.updatedAt)) && Number(raw.updatedAt) >= 0 ? Math.round(Number(raw.updatedAt)) : 0;
+    var themeTs = isFinite(Number(raw.themeUpdatedAt)) && Number(raw.themeUpdatedAt) >= 0 ? Math.round(Number(raw.themeUpdatedAt)) : topTs;
+    var termTs = isFinite(Number(raw.terminalUpdatedAt)) && Number(raw.terminalUpdatedAt) >= 0 ? Math.round(Number(raw.terminalUpdatedAt)) : topTs;
+    var activeProf = getDeviceProfileKey();
+    var profiles = ['native', 'web', 'mobile'];
+    var themesOut = {};
+    for (var i = 0; i < profiles.length; i++) {
+      var prof = profiles[i];
+      themesOut[prof] = {
+        updatedAt: prof === activeProf ? themeTs : 0,
+        mode: rawTheme.mode,
+        themeId: rawTheme.themeId,
+        lightThemeId: rawTheme.lightThemeId,
+        darkThemeId: rawTheme.darkThemeId,
+        accentOverride: rawTheme.accentOverride,
+      };
+    }
+    return {
+      version: 4,
+      updatedAt: Math.max(topTs, themeTs, termTs),
+      customThemesUpdatedAt: themeTs,
+      terminalUpdatedAt: termTs,
+      customThemes: Array.isArray(rawTheme.customThemes) ? rawTheme.customThemes : [],
+      themes: themesOut,
+      terminal: raw.terminal,
+      surfaces: raw.surfaces,
+    };
+  }
+
+  function sanitizeThemeSlot(rawSlot, baseSlot, customThemes) {
+    var base = baseSlot || defaultThemeSlot();
+    var input = rawSlot && typeof rawSlot === 'object' ? rawSlot : {};
+    var ts = Number(input.updatedAt);
+    return {
+      updatedAt: isFinite(ts) && ts >= 0 ? Math.round(ts) : (base.updatedAt || 0),
+      mode: input.mode === 'system' ? 'system' : (input.mode === 'manual' ? 'manual' : base.mode),
+      themeId: resolveThemeIdInState(input.themeId || base.themeId, customThemes),
+      lightThemeId: resolveThemeIdInState(input.lightThemeId || base.lightThemeId, customThemes),
+      darkThemeId: resolveThemeIdInState(input.darkThemeId || base.darkThemeId, customThemes),
+      accentOverride: 'accentOverride' in input
+        ? (input.accentOverride === null || input.accentOverride === '' ? null : normalizeHex(input.accentOverride))
+        : base.accentOverride,
+    };
+  }
+
   function sanitizeState(raw, fallback) {
-    var base = fallback && fallback.surfaces ? fallback : defaultState();
-    var input = isLegacyFlatState(raw) ? migrateV2ToV3(raw) : (raw && typeof raw === 'object' ? raw : {});
+    var base = fallback && fallback.surfaces && fallback.themes ? fallback : defaultState();
+    var input = isLegacyFlatState(raw)
+      ? migrateV3ToV4(migrateV2ToV3(raw))
+      : (isLegacyV3State(raw) ? migrateV3ToV4(raw) : (raw && typeof raw === 'object' ? raw : {}));
     var out = defaultState();
 
-    var inTheme = input.theme && typeof input.theme === 'object' ? input.theme : {};
-    var baseTheme = base.theme || out.theme;
-    var themeTs = Number(input.themeUpdatedAt);
-    out.themeUpdatedAt = isFinite(themeTs) && themeTs >= 0 ? Math.round(themeTs) : (base.themeUpdatedAt || 0);
-    out.theme.mode = inTheme.mode === 'system' ? 'system' : (inTheme.mode === 'manual' ? 'manual' : baseTheme.mode);
-
-    var customList = Array.isArray(inTheme.customThemes) ? inTheme.customThemes : baseTheme.customThemes;
+    var customTs = Number(input.customThemesUpdatedAt);
+    out.customThemesUpdatedAt = isFinite(customTs) && customTs >= 0 ? Math.round(customTs) : (base.customThemesUpdatedAt || 0);
+    var customList = Array.isArray(input.customThemes) ? input.customThemes : base.customThemes;
     var cleanCustoms = [];
     var seenIds = {};
     if (Array.isArray(customList)) {
@@ -1034,13 +1115,17 @@ var Theme = (function () {
         if (cleanCustoms.length >= MAX_CUSTOM_THEMES) break;
       }
     }
-    out.theme.customThemes = cleanCustoms;
-    out.theme.accentOverride = 'accentOverride' in inTheme
-      ? (inTheme.accentOverride === null || inTheme.accentOverride === '' ? null : normalizeHex(inTheme.accentOverride))
-      : baseTheme.accentOverride;
-    out.theme.themeId = resolveThemeIdInState(inTheme.themeId || baseTheme.themeId, cleanCustoms);
-    out.theme.lightThemeId = resolveThemeIdInState(inTheme.lightThemeId || baseTheme.lightThemeId, cleanCustoms);
-    out.theme.darkThemeId = resolveThemeIdInState(inTheme.darkThemeId || baseTheme.darkThemeId, cleanCustoms);
+    out.customThemes = cleanCustoms;
+
+    var inThemes = input.themes && typeof input.themes === 'object' ? input.themes : {};
+    var baseThemes = base.themes || out.themes;
+    var profiles = ['native', 'web', 'mobile'];
+    var maxThemeTs = 0;
+    for (var t = 0; t < profiles.length; t++) {
+      var tProf = profiles[t];
+      out.themes[tProf] = sanitizeThemeSlot(inThemes[tProf], baseThemes[tProf], cleanCustoms);
+      if (out.themes[tProf].updatedAt > maxThemeTs) maxThemeTs = out.themes[tProf].updatedAt;
+    }
 
     var inTerm = input.terminal && typeof input.terminal === 'object' ? input.terminal : {};
     var baseTerm = base.terminal || out.terminal;
@@ -1056,7 +1141,6 @@ var Theme = (function () {
 
     var inSurfaces = input.surfaces && typeof input.surfaces === 'object' ? input.surfaces : {};
     var baseSurfaces = base.surfaces || out.surfaces;
-    var profiles = ['native', 'web', 'mobile'];
     var maxSurfTs = 0;
     for (var p = 0; p < profiles.length; p++) {
       var prof = profiles[p];
@@ -1068,8 +1152,9 @@ var Theme = (function () {
     out.updatedAt = Math.max(
       isFinite(topTs) && topTs >= 0 ? Math.round(topTs) : 0,
       base.updatedAt || 0,
-      out.themeUpdatedAt,
+      out.customThemesUpdatedAt,
       out.terminalUpdatedAt,
+      maxThemeTs,
       maxSurfTs
     );
     return out;
@@ -1091,7 +1176,7 @@ var Theme = (function () {
     var st = defaultState();
     try {
       var savedTheme = localStorage.getItem(LEGACY_STORAGE_KEY);
-      if (savedTheme) st.theme.themeId = resolveThemeIdInState(savedTheme, st.theme.customThemes);
+      if (savedTheme) st.themes[getDeviceProfileKey()].themeId = resolveThemeIdInState(savedTheme, st.customThemes);
       var savedTrans = localStorage.getItem(LEGACY_TRANSPARENCY_KEY);
       var tVal = clampTransparency(savedTrans);
       st.surfaces.native.transparency = tVal;
@@ -1106,7 +1191,11 @@ var Theme = (function () {
 
   function loadInitialState() {
     try {
-      var rawV3 = localStorage.getItem(APPEARANCE_KEY);
+      var rawV4 = localStorage.getItem(APPEARANCE_KEY);
+      if (rawV4) {
+        return sanitizeState(JSON.parse(rawV4), defaultState());
+      }
+      var rawV3 = localStorage.getItem(V3_APPEARANCE_KEY);
       if (rawV3) {
         return sanitizeState(JSON.parse(rawV3), defaultState());
       }
@@ -1126,6 +1215,10 @@ var Theme = (function () {
   var compiledCustomCache = {};
   var systemSchemeMedia = null;
 
+  function activeTheme() {
+    return state.themes[getDeviceProfileKey()] || state.themes.web;
+  }
+
   function activeSurface() {
     return state.surfaces[getDeviceProfileKey()] || state.surfaces.web;
   }
@@ -1136,8 +1229,8 @@ var Theme = (function () {
       customWallpaperMap[customWallpapers[i].id] = customWallpapers[i];
     }
     compiledCustomCache = {};
-    for (var j = 0; j < state.theme.customThemes.length; j++) {
-      var ct = state.theme.customThemes[j];
+    for (var j = 0; j < state.customThemes.length; j++) {
+      var ct = state.customThemes[j];
       compiledCustomCache[ct.id] = compileTheme({
         id: ct.id,
         name: ct.name,
@@ -1172,7 +1265,7 @@ var Theme = (function () {
   }
 
   function resolveThemeId(themeId) {
-    return resolveThemeIdInState(themeId, state.theme.customThemes);
+    return resolveThemeIdInState(themeId, state.customThemes);
   }
 
   function getRawThemeEntry(themeId) {
@@ -1184,15 +1277,17 @@ var Theme = (function () {
 
   function getCompiledTheme(themeId, includeAccent) {
     var entry = getRawThemeEntry(themeId);
-    if (!includeAccent || !state.theme.accentOverride) return entry;
-    return compileTheme(entry.raw, state.theme.accentOverride);
+    var accent = activeTheme().accentOverride;
+    if (!includeAccent || !accent) return entry;
+    return compileTheme(entry.raw, accent);
   }
 
   function getCurrent() {
-    if (state.theme.mode === 'system') {
-      return resolveThemeId(isSystemLight() ? state.theme.lightThemeId : state.theme.darkThemeId);
+    var th = activeTheme();
+    if (th.mode === 'system') {
+      return resolveThemeId(isSystemLight() ? th.lightThemeId : th.darkThemeId);
     }
-    return resolveThemeId(state.theme.themeId);
+    return resolveThemeId(th.themeId);
   }
 
   function getEffectiveThemeId() {
@@ -1400,10 +1495,11 @@ var Theme = (function () {
 
     if (opts.persist !== false) {
       var now = Date.now();
-      if (!opts.keepMode) state.theme.mode = 'manual';
-      state.theme.themeId = resolved;
+      var th = activeTheme();
+      if (!opts.keepMode) th.mode = 'manual';
+      th.themeId = resolved;
       if (opts.bump !== false) {
-        state.themeUpdatedAt = now;
+        th.updatedAt = now;
         state.updatedAt = now;
       }
       persistLocal();
@@ -1422,15 +1518,19 @@ var Theme = (function () {
     var opts = options || {};
     var resolved = resolveThemeId(themeId);
     previewThemeId = null;
-    if (opts.keepMode !== true && state.theme.mode === 'system') {
-      state.theme.mode = 'manual';
+    var persist = opts.persist !== false;
+    if (persist) {
+      var th = activeTheme();
+      if (opts.keepMode !== true && th.mode === 'system') {
+        th.mode = 'manual';
+      }
+      th.themeId = resolved;
+      var now = Date.now();
+      th.updatedAt = now;
+      state.updatedAt = now;
     }
-    state.theme.themeId = resolved;
-    var now = Date.now();
-    state.themeUpdatedAt = now;
-    state.updatedAt = now;
     applyThemeInternal(resolved, {
-      persist: true,
+      persist: persist,
       keepMode: opts.keepMode,
       bump: false,
       sync: opts.sync !== false,
@@ -1682,21 +1782,23 @@ var Theme = (function () {
 
   function setThemeMode(mode) {
     var next = mode === 'system' ? 'system' : 'manual';
-    if (state.theme.mode === next) return;
+    var th = activeTheme();
+    if (th.mode === next) return;
     previewThemeId = null;
-    state.theme.mode = next;
+    th.mode = next;
     var now = Date.now();
-    state.themeUpdatedAt = now;
+    th.updatedAt = now;
     state.updatedAt = now;
     applyThemeInternal(getCurrent(), { persist: true, keepMode: true, bump: false, announceAppearance: true });
   }
 
   function setLightThemeId(id) {
-    state.theme.lightThemeId = resolveThemeId(id);
+    var th = activeTheme();
+    th.lightThemeId = resolveThemeId(id);
     var now = Date.now();
-    state.themeUpdatedAt = now;
+    th.updatedAt = now;
     state.updatedAt = now;
-    if (state.theme.mode === 'system') {
+    if (th.mode === 'system') {
       applyThemeInternal(getCurrent(), { persist: true, keepMode: true, bump: false, announceAppearance: true });
     } else {
       persistLocal();
@@ -1706,11 +1808,12 @@ var Theme = (function () {
   }
 
   function setDarkThemeId(id) {
-    state.theme.darkThemeId = resolveThemeId(id);
+    var th = activeTheme();
+    th.darkThemeId = resolveThemeId(id);
     var now = Date.now();
-    state.themeUpdatedAt = now;
+    th.updatedAt = now;
     state.updatedAt = now;
-    if (state.theme.mode === 'system') {
+    if (th.mode === 'system') {
       applyThemeInternal(getCurrent(), { persist: true, keepMode: true, bump: false, announceAppearance: true });
     } else {
       persistLocal();
@@ -1720,9 +1823,10 @@ var Theme = (function () {
   }
 
   function setAccentOverride(value) {
-    state.theme.accentOverride = value ? normalizeHex(value) : null;
+    var th = activeTheme();
+    th.accentOverride = value ? normalizeHex(value) : null;
     var now = Date.now();
-    state.themeUpdatedAt = now;
+    th.updatedAt = now;
     state.updatedAt = now;
     applyThemeInternal(getEffectiveThemeId(), { persist: true, keepMode: true, bump: false, announceAppearance: true });
   }
@@ -1731,22 +1835,24 @@ var Theme = (function () {
     var parsed = typeof input === 'string' ? JSON.parse(input) : input;
     var existingMap = {};
     Object.keys(themes).forEach(function (id) { existingMap[id] = true; });
-    state.theme.customThemes.forEach(function (t) { existingMap[t.id] = true; });
+    state.customThemes.forEach(function (t) { existingMap[t.id] = true; });
 
     var cleaned = sanitizeCustomThemeInput(parsed, existingMap);
     if (!cleaned) {
       throw new Error('无效的主题 JSON：需要提供 name 以及 terminal (background + foreground) 或 ui (--bg-primary + --text-primary)');
     }
-    if (state.theme.customThemes.length >= MAX_CUSTOM_THEMES) {
+    if (state.customThemes.length >= MAX_CUSTOM_THEMES) {
       throw new Error('最多保存 ' + MAX_CUSTOM_THEMES + ' 个自定义主题');
     }
-    state.theme.customThemes.push(cleaned);
+    state.customThemes.push(cleaned);
     rebuildCustomCaches();
     previewThemeId = null;
-    state.theme.mode = 'manual';
-    state.theme.themeId = cleaned.id;
+    var th = activeTheme();
+    th.mode = 'manual';
+    th.themeId = cleaned.id;
     var now = Date.now();
-    state.themeUpdatedAt = now;
+    state.customThemesUpdatedAt = now;
+    th.updatedAt = now;
     state.updatedAt = now;
     applyThemeInternal(cleaned.id, { persist: true, keepMode: true, bump: false, announceAppearance: true });
     return getThemeList().filter(function (item) { return item.id === cleaned.id; })[0];
@@ -1766,31 +1872,37 @@ var Theme = (function () {
   }
 
   function deleteCustomTheme(id) {
-    var next = state.theme.customThemes.filter(function (t) { return t.id !== id; });
-    if (next.length === state.theme.customThemes.length) return false;
-    state.theme.customThemes = next;
-    rebuildCustomCaches();
-    if (state.theme.themeId === id) state.theme.themeId = DEFAULT_THEME;
-    if (state.theme.lightThemeId === id) state.theme.lightThemeId = 'oyster';
-    if (state.theme.darkThemeId === id) state.theme.darkThemeId = DEFAULT_THEME;
+    var next = state.customThemes.filter(function (t) { return t.id !== id; });
+    if (next.length === state.customThemes.length) return false;
     var now = Date.now();
-    state.themeUpdatedAt = now;
+    state.customThemes = next;
+    state.customThemesUpdatedAt = now;
+    rebuildCustomCaches();
+    var profiles = ['native', 'web', 'mobile'];
+    var activeProf = getDeviceProfileKey();
+    for (var i = 0; i < profiles.length; i++) {
+      var prof = profiles[i];
+      var slot = state.themes[prof];
+      var touched = false;
+      if (slot.themeId === id) { slot.themeId = DEFAULT_THEME; touched = true; }
+      if (slot.lightThemeId === id) { slot.lightThemeId = 'oyster'; touched = true; }
+      if (slot.darkThemeId === id) { slot.darkThemeId = DEFAULT_THEME; touched = true; }
+      if (touched && prof === activeProf) slot.updatedAt = now;
+    }
     state.updatedAt = now;
     applyThemeInternal(getCurrent(), { persist: true, keepMode: true, bump: false, announceAppearance: true });
     return true;
   }
 
   function resetAppearance() {
-    var customThemesBackup = state.theme.customThemes;
     var fresh = defaultState();
     var now = Date.now();
     var profile = getDeviceProfileKey();
-    state.theme = fresh.theme;
-    state.theme.customThemes = customThemesBackup;
+    state.themes[profile] = defaultThemeSlot();
+    state.themes[profile].updatedAt = now;
     state.terminal = fresh.terminal;
     state.surfaces[profile] = defaultSurface(profile);
     state.surfaces[profile].updatedAt = now;
-    state.themeUpdatedAt = now;
     state.terminalUpdatedAt = now;
     state.updatedAt = now;
     previewThemeId = null;
@@ -1855,7 +1967,7 @@ var Theme = (function () {
       });
     }
     Object.keys(themes).forEach(function (id) { pushEntry(themes[id]); });
-    state.theme.customThemes.forEach(function (ct) {
+    state.customThemes.forEach(function (ct) {
       if (compiledCustomCache[ct.id]) pushEntry(compiledCustomCache[ct.id]);
     });
     return list;
@@ -1917,7 +2029,20 @@ var Theme = (function () {
   }
 
   function exportStateForServer() {
-    return JSON.parse(JSON.stringify(state));
+    var profile = getDeviceProfileKey();
+    var payload = {
+      version: 4,
+      updatedAt: state.updatedAt,
+      customThemesUpdatedAt: state.customThemesUpdatedAt,
+      terminalUpdatedAt: state.terminalUpdatedAt,
+      customThemes: JSON.parse(JSON.stringify(state.customThemes)),
+      terminal: cloneObj(state.terminal),
+      themes: {},
+      surfaces: {},
+    };
+    payload.themes[profile] = cloneObj(state.themes[profile] || defaultThemeSlot());
+    payload.surfaces[profile] = cloneObj(state.surfaces[profile] || defaultSurface(profile));
+    return payload;
   }
 
   function scheduleServerSave() {
@@ -1946,48 +2071,81 @@ var Theme = (function () {
       if (rawRemote && typeof rawRemote === 'object') {
         var remote = sanitizeState(rawRemote, defaultState());
         var activeProf = getDeviceProfileKey();
-        var themeChanged = false;
+        var customChanged = false;
+        var activeThemeChanged = false;
+        var anySlotUpdated = false;
         var termChanged = false;
         var activeSurfChanged = false;
         var pushNeeded = false;
 
-        if ((remote.themeUpdatedAt || 0) > (state.themeUpdatedAt || 0)) {
-          state.theme = JSON.parse(JSON.stringify(remote.theme));
-          state.themeUpdatedAt = remote.themeUpdatedAt;
-          themeChanged = true;
-        } else if ((state.themeUpdatedAt || 0) > (remote.themeUpdatedAt || 0)) {
+        if ((remote.customThemesUpdatedAt || 0) > (state.customThemesUpdatedAt || 0)) {
+          state.customThemes = JSON.parse(JSON.stringify(remote.customThemes));
+          state.customThemesUpdatedAt = remote.customThemesUpdatedAt;
+          customChanged = true;
+          anySlotUpdated = true;
+        } else if ((state.customThemesUpdatedAt || 0) > (remote.customThemesUpdatedAt || 0)) {
           pushNeeded = true;
+        }
+
+        var profiles = ['native', 'web', 'mobile'];
+        for (var t = 0; t < profiles.length; t++) {
+          var tProf = profiles[t];
+          var rtTs = remote.themes[tProf].updatedAt || 0;
+          var ltTs = state.themes[tProf].updatedAt || 0;
+          if (rtTs > ltTs) {
+            state.themes[tProf] = cloneObj(remote.themes[tProf]);
+            anySlotUpdated = true;
+            if (tProf === activeProf) activeThemeChanged = true;
+          } else if (tProf === activeProf && ltTs > rtTs) {
+            pushNeeded = true;
+          }
+        }
+
+        var activeSlot = state.themes[activeProf];
+        var nextThemeId = resolveThemeIdInState(activeSlot.themeId, state.customThemes);
+        var nextLightId = resolveThemeIdInState(activeSlot.lightThemeId, state.customThemes);
+        var nextDarkId = resolveThemeIdInState(activeSlot.darkThemeId, state.customThemes);
+        if (nextThemeId !== activeSlot.themeId || nextLightId !== activeSlot.lightThemeId || nextDarkId !== activeSlot.darkThemeId) {
+          activeSlot.themeId = nextThemeId;
+          activeSlot.lightThemeId = nextLightId;
+          activeSlot.darkThemeId = nextDarkId;
+          activeThemeChanged = true;
+          anySlotUpdated = true;
         }
 
         if ((remote.terminalUpdatedAt || 0) > (state.terminalUpdatedAt || 0)) {
           state.terminal = cloneObj(remote.terminal);
           state.terminalUpdatedAt = remote.terminalUpdatedAt;
           termChanged = true;
+          anySlotUpdated = true;
         } else if ((state.terminalUpdatedAt || 0) > (remote.terminalUpdatedAt || 0)) {
           pushNeeded = true;
         }
 
-        var profiles = ['native', 'web', 'mobile'];
         for (var i = 0; i < profiles.length; i++) {
           var prof = profiles[i];
           var rTs = remote.surfaces[prof].updatedAt || 0;
           var lTs = state.surfaces[prof].updatedAt || 0;
           if (rTs > lTs) {
             state.surfaces[prof] = cloneObj(remote.surfaces[prof]);
+            anySlotUpdated = true;
             if (prof === activeProf) activeSurfChanged = true;
-          } else if (lTs > rTs) {
+          } else if (prof === activeProf && lTs > rTs) {
             pushNeeded = true;
           }
         }
         state.updatedAt = Math.max(
-          state.themeUpdatedAt,
+          state.customThemesUpdatedAt,
           state.terminalUpdatedAt,
+          state.themes.native.updatedAt,
+          state.themes.web.updatedAt,
+          state.themes.mobile.updatedAt,
           state.surfaces.native.updatedAt,
           state.surfaces.web.updatedAt,
           state.surfaces.mobile.updatedAt
         );
 
-        if (themeChanged || termChanged || activeSurfChanged) {
+        if (customChanged || activeThemeChanged || termChanged || activeSurfChanged) {
           rebuildCustomCaches();
           persistLocal();
           applyThemeInternal(getCurrent(), { persist: false, announceAppearance: false });
@@ -1998,10 +2156,11 @@ var Theme = (function () {
           dispatchEventSafe('tmux-typography-change', { typography: getTerminalTypography() });
           dispatchEventSafe('anymux-appearance-change');
         } else {
-          if (pushNeeded && state.updatedAt > 0) saveToServer();
+          if (anySlotUpdated) persistLocal();
           applyVisualBackdrop(getEffectiveThemeId());
           dispatchEventSafe('anymux-appearance-change');
         }
+        if (pushNeeded && state.updatedAt > 0) saveToServer();
       }
       return data;
     }).catch(function () { return null; });
@@ -2066,7 +2225,7 @@ var Theme = (function () {
     try {
       systemSchemeMedia = window.matchMedia('(prefers-color-scheme: light)');
       var onSchemeChange = function () {
-        if (state.theme.mode !== 'system' || previewThemeId !== null) return;
+        if (activeTheme().mode !== 'system' || previewThemeId !== null) return;
         applyThemeInternal(getCurrent(), { persist: false, sync: false, announceAppearance: true });
       };
       if (typeof systemSchemeMedia.addEventListener === 'function') {
@@ -2127,13 +2286,13 @@ var Theme = (function () {
     getDeviceProfileKey: getDeviceProfileKey,
     getSurface: getSurface,
     setSurface: setSurface,
-    getThemeMode: function () { return state.theme.mode; },
+    getThemeMode: function () { return activeTheme().mode; },
     setThemeMode: setThemeMode,
-    getLightThemeId: function () { return state.theme.lightThemeId; },
+    getLightThemeId: function () { return activeTheme().lightThemeId; },
     setLightThemeId: setLightThemeId,
-    getDarkThemeId: function () { return state.theme.darkThemeId; },
+    getDarkThemeId: function () { return activeTheme().darkThemeId; },
     setDarkThemeId: setDarkThemeId,
-    getAccentOverride: function () { return state.theme.accentOverride; },
+    getAccentOverride: function () { return activeTheme().accentOverride; },
     setAccentOverride: setAccentOverride,
     getAccentSwatches: function () { return ACCENT_SWATCHES.slice(); },
     importThemeJson: importThemeJson,

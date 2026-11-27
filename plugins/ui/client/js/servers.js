@@ -560,8 +560,11 @@
         + '<div><button type="button" class="ms-btn primary" data-action="submit-import-theme">验证并导入</button> '
         + '<button type="button" class="ms-btn" data-action="toggle-import-theme">取消</button></div></div>';
 
+      var profile = typeof T.getDeviceProfileKey === 'function' ? T.getDeviceProfileKey() : 'web';
       return '<div class="section-head"><h3>主题配色</h3>'
-        + '<span>当前：' + esc(currentName) + (themeMode === 'system' ? '（跟随系统）' : '') + '</span></div>'
+        + '<span class="appearance-device-badge">当前：' + esc(currentName)
+        + (themeMode === 'system' ? '（跟随系统）' : '')
+        + ' · ' + esc(this._appearanceDeviceLabel(profile)) + '独立保存</span></div>'
         + '<div class="appearance-section-card">'
         + modeSwitch + systemPair + gridBlock + accentBar + importPanel
         + '</div>';
@@ -790,7 +793,7 @@
 
     _settingsAppearance: function () {
       var html = '<div class="intro appearance-page-head">'
-        + '<div><h2>外观</h2><p>主题与终端显示跨设备同步，背景与材质按当前设备形态独立保存。</p></div>'
+        + '<div><h2>外观</h2><p>主题配色与背景材质按当前设备形态独立保存，终端显示与自定义主题库跨设备同步。</p></div>'
         + '<button type="button" class="ms-btn" data-action="reset-appearance">恢复默认</button></div>'
         + this._renderAppearancePreview()
         + '<div class="section" data-appearance-card="theme">' + this._renderThemeCardInner() + '</div>'

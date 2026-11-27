@@ -1,7 +1,17 @@
 (function () {
   if (window.__tmuxAndroidInstalled || !window.TmuxAndroid) return;
   window.__tmuxAndroidInstalled = true;
-  if (window.Theme && window.__tmuxAndroidTheme) Theme.apply(window.__tmuxAndroidTheme);
+  if (window.Theme && window.__tmuxAndroidTheme) {
+    var hasSavedAppearance = false;
+    try {
+      hasSavedAppearance = Boolean(
+        localStorage.getItem('anymux_appearance_v4') || localStorage.getItem('anymux_appearance_v3')
+      );
+    } catch (_e) {}
+    if (!hasSavedAppearance) {
+      Theme.apply(window.__tmuxAndroidTheme, { persist: false, sync: false });
+    }
+  }
   // The deployed bootstrap page has its own older light-theme identifier.
   if (!window.Theme && window.__tmuxAndroidTheme === 'oyster' && document.body.hasAttribute('data-theme')) {
     document.body.dataset.theme = 'github-light';
