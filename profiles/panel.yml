@@ -18,6 +18,8 @@ plugins:
     use: http
   - id: diagnostics
     use: diagnostics
+  - id: macos-permissions
+    use: macos-permissions
   # This machine: tmux, its identity as a Node, who may use it
   - id: tmux
     use: tmux

@@ -140,8 +140,25 @@ for name in libevent_core.pc libutf8proc.pc; do cp "$PREFIX/lib/pkgconfig/$name"
 )
 install -m 755 "$WORK/tmux/tmux" "$RUNTIME/bin/tmux"
 /usr/bin/strip -S "$RUNTIME/bin/tmux"
-/usr/bin/codesign --force --sign "${ANYMUX_CODESIGN_IDENTITY:--}" "$RUNTIME/bin/tmux"
+/usr/bin/codesign --force --sign "${ANYMUX_CODESIGN_IDENTITY:--}" --identifier com.anymux.app "$RUNTIME/bin/tmux"
 cp "$PROJECT_DIR/vendor/tmux/COPYING" "$RUNTIME/licenses/tmux-COPYING.txt"
+
+if [[ -f "$SCRIPT_DIR/macos-helper-bundle.mjs" && -f "$PROJECT_DIR/macos/Anymux/Resources/Info.plist" ]]; then
+  node "$SCRIPT_DIR/macos-helper-bundle.mjs" build \
+    --source "$RUNTIME/bin/tmux" \
+    --output "$RUNTIME/Helpers/Anymux Tmux.app" \
+    --name "Anymux Tmux" \
+    --minimum-macos "$MINIMUM_MACOS" \
+    --app-info "$PROJECT_DIR/macos/Anymux/Resources/Info.plist" \
+    --identity "${ANYMUX_CODESIGN_IDENTITY:--}" >/dev/null
+  node "$SCRIPT_DIR/macos-helper-bundle.mjs" build \
+    --source "$RUNTIME/bin/node" \
+    --output "$RUNTIME/Helpers/Anymux Panel.app" \
+    --name "Anymux Panel" \
+    --minimum-macos "$MINIMUM_MACOS" \
+    --app-info "$PROJECT_DIR/macos/Anymux/Resources/Info.plist" \
+    --identity "${ANYMUX_CODESIGN_IDENTITY:--}" >/dev/null
+fi
 
 echo 'Copying server resources and installing production dependencies...'
 [[ -f "$SCRIPT_DIR/desktop-runtime.mjs" ]] || { echo 'Missing desktop-runtime.mjs installation helper.' >&2; exit 1; }

@@ -23,6 +23,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var endpoint: PanelEndpoint
     @Published private(set) var webViewID = UUID()
     let desktop = DesktopSetupManager()
+    let permissions = MacPermissionsManager()
 
     @Published private(set) var webState: WebState = .loading
     @Published private(set) var panelService: ServiceState = .checking

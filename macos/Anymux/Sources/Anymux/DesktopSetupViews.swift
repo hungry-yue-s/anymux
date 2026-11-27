@@ -11,6 +11,7 @@ private enum SetupStyle {
 
 struct DesktopWelcomeView: View {
     @ObservedObject var setup: DesktopSetupManager
+    @ObservedObject var permissions: MacPermissionsManager
     @State private var username = "admin"
     @State private var password = ""
     @State private var confirmation = ""
@@ -79,6 +80,7 @@ struct DesktopWelcomeView: View {
                         }
                         .textFieldStyle(.roundedBorder)
                     }
+                    WelcomePermissionsCard(permissions: permissions)
                     HStack(spacing: 12) {
                         Button(setup.isBusy ? "正在初始化…" : setup.events.isEmpty ? "初始化工作台" : "重新初始化") {
                             var request = setup.request()
@@ -130,6 +132,7 @@ struct DesktopWelcomeView: View {
 
 struct DesktopControlCenter: View {
     @ObservedObject var setup: DesktopSetupManager
+    @ObservedObject var permissions: MacPermissionsManager
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -170,6 +173,7 @@ struct DesktopControlCenter: View {
                         switch setup.selectedSection {
                         case .overview: DesktopOverviewView(setup: setup)
                         case .settings: DesktopSettingsView(setup: setup)
+                        case .permissions: DesktopPermissionsView(permissions: permissions)
                         case .remote: DesktopRemoteView(setup: setup)
                         case .help: DesktopHelpView(setup: setup)
                         }
@@ -669,4 +673,88 @@ private struct SetupErrorView: View {
 @ViewBuilder
 private func setupField<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
     VStack(alignment: .leading, spacing: 6) { Text(title).font(.system(size: 13, weight: .medium)); content() }
+}
+
+private struct WelcomePermissionsCard: View {
+    @ObservedObject var permissions: MacPermissionsManager
+
+    var body: some View {
+        let granted = permissions.fullDiskAccessStatus == .granted
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: granted ? "checkmark.shield.fill" : "hand.raised.fill")
+                    .foregroundStyle(granted ? .green : .orange)
+                Text("系统权限（推荐，避免 Agent 反复弹窗）")
+                    .font(.system(size: 13, weight: .semibold))
+                Spacer()
+                Text(granted ? "已授权" : "建议配置")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(granted ? .green : .orange)
+            }
+            Text("只需在 macOS「完全磁盘访问权限」中勾选一次 Anymux，其内置 tmux 与启动的 Agent 即共享权限；也可先初始化，稍后再到“系统权限”配置。")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            if !granted {
+                HStack(spacing: 10) {
+                    Button("打开完全磁盘访问权限") { permissions.request(.fullDiskAccess) }
+                    Button("在 Finder 中显示 Anymux") { permissions.revealAppInFinder() }
+                    Button("重新检查") { permissions.refresh() }
+                }
+            }
+        }
+        .padding(14).frame(maxWidth: .infinity, alignment: .leading)
+        .background(SetupStyle.surface, in: RoundedRectangle(cornerRadius: 12))
+    }
+}
+
+private struct DesktopPermissionsView: View {
+    @ObservedObject var permissions: MacPermissionsManager
+
+    var body: some View {
+        let fdaGranted = permissions.fullDiskAccessStatus == .granted
+        VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Anymux 及其终端中的 Agent 共享系统隐私权限")
+                    .font(.title3.weight(.semibold))
+                Text("只需把 Anymux 加入一次「完全磁盘访问权限」，即可覆盖 Anymux 与签名 Anymux Tmux 助手下的所有终端 Agent。如果运行中的 tmux 是旧版裸二进制构建，授权后请空闲时重启一次 tmux 服务。")
+                    .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+            HStack(spacing: 10) {
+                Button("重新检查") { permissions.refresh() }
+                Button("在 Finder 中显示 Anymux") { permissions.revealAppInFinder() }
+                if !fdaGranted {
+                    Button("打开完全磁盘访问权限") { permissions.request(.fullDiskAccess) }
+                        .buttonStyle(.borderedProminent)
+                }
+            }
+            VStack(spacing: 0) {
+                ForEach(MacPermissionKind.allCases) { kind in
+                    let status = permissions.status(for: kind)
+                    HStack(alignment: .top, spacing: 14) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack(spacing: 8) {
+                                Text(kind.title).font(.system(size: 14, weight: .medium))
+                                if kind == .fullDiskAccess || status != .unknown {
+                                    Text(status.label)
+                                        .font(.caption.weight(.medium))
+                                        .padding(.horizontal, 7).padding(.vertical, 2)
+                                        .background((status == .granted ? Color.green : status == .denied ? Color.orange : Color.secondary).opacity(0.14), in: Capsule())
+                                        .foregroundStyle(status == .granted ? .green : status == .denied ? .orange : .secondary)
+                                }
+                            }
+                            Text(kind.subtitle).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                        }
+                        Spacer(minLength: 12)
+                        Button(kind.actionLabel) { permissions.request(kind) }
+                    }
+                    .padding(.vertical, 14)
+                    if kind != MacPermissionKind.allCases.last {
+                        Rectangle().fill(SetupStyle.line).frame(height: 1)
+                    }
+                }
+            }
+            .padding(.horizontal, 16)
+            .background(SetupStyle.surface, in: RoundedRectangle(cornerRadius: 14))
+        }
+        .onAppear { permissions.refresh() }
+    }
 }

@@ -135,7 +135,14 @@ describe('desktop settings and lifecycle', () => {
     expect(file).toContain('&amp;');
     expect(file).toContain('TMUX_TMPDIR');
     expect(file).toContain('TERMINFO_DIRS');
+    expect(file).toContain('AssociatedBundleIdentifiers');
+    expect(file).toContain('com.anymux.app');
+    expect(file).toContain('MaterializeDatalessFiles');
     expect(file).not.toContain('test-password-2026');
+    const tmuxPlist = await readFile(join(manager.root, 'launchd', manager.tmuxLabel + '.plist'), 'utf8');
+    expect(tmuxPlist).toContain('AssociatedBundleIdentifiers');
+    expect(tmuxPlist).toContain('Interactive');
+    expect(tmuxPlist).toContain('MaterializeDatalessFiles');
     await expect(stat(join(home, '.tmux.conf'))).rejects.toMatchObject({ code: 'ENOENT' });
     const before = manager.certificates.mock.calls.length;
     manager.input = { ...manager.input, password: '', port: await freePort(), listenOnLAN: true, relay: { duckdnsToken: 'secret-dns-token' } };
@@ -397,5 +404,22 @@ describe('desktop settings and lifecycle', () => {
     expect(names.sort()).toEqual(['ca.crt', 'index.html', 'preview.html', 'relay.js', 'robots.txt', 'theme.js', 'themes.html']);
     for (const name of names) expect(await readFile(join(manager.paths.relaySite, name), 'utf8')).not.toContain('do-not-publish');
     expect(await readFile(join(manager.paths.relaySite, 'preview.html'), 'utf8')).not.toContain('src="relay.js"');
+  });
+
+  it.skipIf(process.platform !== 'darwin')('prefers signed Helper .app executables in LaunchAgents when present in the runtime bundle', async () => {
+    const { manager, bundle } = await fixture();
+    const panelHelper = join(bundle, 'Helpers/Anymux Panel.app/Contents/MacOS/Anymux Panel');
+    const tmuxHelper = join(bundle, 'Helpers/Anymux Tmux.app/Contents/MacOS/Anymux Tmux');
+    await mkdir(join(bundle, 'Helpers/Anymux Panel.app/Contents/MacOS'), { recursive: true });
+    await mkdir(join(bundle, 'Helpers/Anymux Tmux.app/Contents/MacOS'), { recursive: true });
+    await writeFile(panelHelper, 'fixture', { mode: 0o755 });
+    await writeFile(tmuxHelper, 'fixture', { mode: 0o755 });
+
+    await manager.execute('initialize');
+    const saved = JSON.parse(await readFile(manager.paths.configuration, 'utf8'));
+    const panelPlist = await readFile(join(manager.root, 'launchd', manager.label + '.plist'), 'utf8');
+    const tmuxPlist = await readFile(join(manager.root, 'launchd', manager.tmuxLabel + '.plist'), 'utf8');
+    expect(panelPlist).toContain(join(saved.runtimePath, 'Helpers/Anymux Panel.app/Contents/MacOS/Anymux Panel').replace(/&/g, '&amp;'));
+    expect(tmuxPlist).toContain(join(saved.runtimePath, 'Helpers/Anymux Tmux.app/Contents/MacOS/Anymux Tmux').replace(/&/g, '&amp;'));
   });
 });

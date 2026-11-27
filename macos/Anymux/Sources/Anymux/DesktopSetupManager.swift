@@ -369,6 +369,7 @@ final class DesktopSetupManager: ObservableObject {
 enum DesktopControlSection: String, CaseIterable, Identifiable {
     case overview = "运行状态"
     case settings = "基础设置"
+    case permissions = "系统权限"
     case remote = "手机与远程访问"
     case help = "使用帮助"
     var id: String { rawValue }
@@ -376,6 +377,7 @@ enum DesktopControlSection: String, CaseIterable, Identifiable {
         switch self {
         case .overview: "waveform.path.ecg"
         case .settings: "slider.horizontal.3"
+        case .permissions: "hand.raised.fill"
         case .remote: "iphone.and.arrow.forward"
         case .help: "questionmark.circle"
         }

@@ -31,13 +31,14 @@ struct PanelRootView: View {
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
-        PanelContentView(model: model, setup: model.desktop)
+        PanelContentView(model: model, setup: model.desktop, permissions: model.permissions)
     }
 }
 
 private struct PanelContentView: View {
     @ObservedObject var model: AppModel
     @ObservedObject var setup: DesktopSetupManager
+    @ObservedObject var permissions: MacPermissionsManager
 
     var body: some View {
         ZStack {
@@ -45,7 +46,7 @@ private struct PanelContentView: View {
                 ProgressView("正在检查本机工作台…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if setup.needsSetup {
-                DesktopWelcomeView(setup: setup)
+                DesktopWelcomeView(setup: setup, permissions: permissions)
             } else {
                 PanelWebView(model: model)
                     .id(model.webViewID).ignoresSafeArea()
@@ -56,7 +57,7 @@ private struct PanelContentView: View {
             }
         }
         .frame(minWidth: 760, minHeight: 520)
-        .sheet(isPresented: $setup.isPresented) { DesktopControlCenter(setup: setup) }
+        .sheet(isPresented: $setup.isPresented) { DesktopControlCenter(setup: setup, permissions: permissions) }
     }
 }
 
@@ -126,6 +127,11 @@ struct StatusMenuView: View {
             openWindow(id: "panel")
             NSApp.activate(ignoringOtherApps: true)
             model.desktop.present()
+        }
+        Button("系统权限…") {
+            openWindow(id: "panel")
+            NSApp.activate(ignoringOtherApps: true)
+            model.desktop.present(.permissions)
         }
         Button("在浏览器中打开") { model.openInBrowser() }
         Button("打开日志目录") { model.openLogs() }

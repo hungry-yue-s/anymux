@@ -35,7 +35,8 @@ struct DesktopSetupSelfTests {
             try expect(!FileManager.default.fileExists(atPath: missing.path), "read-only inspection wrote application data")
 
             try await testHelperProtocol()
-            print("macOS setup self-tests passed: partial reports, TLS metadata, missing bundle, no inspection writes, one-time session handoff")
+            try testMacPermissions()
+            print("macOS setup self-tests passed: partial reports, TLS metadata, missing bundle, no inspection writes, one-time session handoff, macOS permissions")
         } catch {
             print("macOS setup self-test failed: \(error)")
             exit(1)
@@ -62,5 +63,20 @@ struct DesktopSetupSelfTests {
         try expect(manager.takeSessionToken() == "one-time-session", "first handoff token missing")
         try expect(manager.takeSessionToken() == nil, "handoff token was not consumed once")
         try expect(!FileManager.default.fileExists(atPath: temp.appendingPathComponent("data").path), "protocol inspection wrote data")
+    }
+
+    @MainActor
+    private static func testMacPermissions() throws {
+        try expect(MacPermissionKind.fullDiskAccess.settingsURLString.contains("Privacy_AllFiles"), "FDA settings URL missing")
+        let temp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: temp) }
+        let tccDir = temp.appendingPathComponent("Library/Application Support/com.apple.TCC", isDirectory: true)
+        try FileManager.default.createDirectory(at: tccDir, withIntermediateDirectories: true)
+        let db = tccDir.appendingPathComponent("TCC.db")
+        try Data([0x53]).write(to: db)
+        try expect(MacPermissionsManager.probeFullDiskAccess(homeDirectory: temp) == .granted, "readable TCC.db fixture was not reported granted")
+        try FileManager.default.removeItem(at: db)
+        try expect(MacPermissionsManager.probeFullDiskAccess(homeDirectory: temp) == .unknown, "missing TCC.db fixture was not reported unknown")
+        try expect(DesktopControlSection.allCases.contains(.permissions), "permissions section missing from control center")
     }
 }

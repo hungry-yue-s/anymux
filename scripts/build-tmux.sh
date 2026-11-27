@@ -106,16 +106,44 @@ if [[ ! -x "$staged_bin" ]]; then
 fi
 
 mkdir -p "$TMUX_INSTALL_PREFIX/bin"
-new_bin="$TMUX_INSTALL_PREFIX/bin/.tmux.new.$$"
-install -m 755 "$staged_bin" "$new_bin"
-if [[ "$platform" == "Darwin" ]] && command -v codesign >/dev/null 2>&1; then
-  codesign -s - --force "$new_bin"
+if [[ -e "$TMUX_INSTALL_BIN" || -L "$TMUX_INSTALL_BIN" ]]; then
+  if [[ -f "$TMUX_INSTALL_BIN" ]]; then
+    install -m 755 "$TMUX_INSTALL_BIN" "$TMUX_INSTALL_PREFIX/bin/tmux.previous"
+  fi
 fi
-"$new_bin" -V >/dev/null
-if [[ -x "$TMUX_INSTALL_BIN" ]]; then
-  install -m 755 "$TMUX_INSTALL_BIN" "$TMUX_INSTALL_PREFIX/bin/tmux.previous"
-fi
-mv -f "$new_bin" "$TMUX_INSTALL_BIN"
 
-echo "Installed project-managed $($TMUX_INSTALL_BIN -V)"
-echo "Binary: $TMUX_INSTALL_BIN"
+if [[ "$platform" == "Darwin" ]] && command -v codesign >/dev/null 2>&1 && command -v node >/dev/null 2>&1 && [[ -f "$SCRIPT_DIR/macos-helper-bundle.mjs" && -f "$PROJECT_DIR/macos/Anymux/Resources/Info.plist" ]]; then
+  TMUX_HELPER_BUNDLE="$TMUX_INSTALL_PREFIX/Helpers/Anymux Tmux.app"
+  TMUX_HELPER_EXEC="$TMUX_HELPER_BUNDLE/Contents/MacOS/Anymux Tmux"
+  helper_args=(
+    build
+    --source "$staged_bin"
+    --output "$TMUX_HELPER_BUNDLE"
+    --name "Anymux Tmux"
+    --app-info "$PROJECT_DIR/macos/Anymux/Resources/Info.plist"
+  )
+  if [[ -n "${ANYMUX_CODESIGN_IDENTITY:-}" ]]; then
+    helper_args+=(--identity "$ANYMUX_CODESIGN_IDENTITY")
+  fi
+  helper_result="$(node "$SCRIPT_DIR/macos-helper-bundle.mjs" "${helper_args[@]}")"
+  if ! "$TMUX_HELPER_EXEC" -V >/dev/null 2>&1; then
+    sleep 0.5
+    "$TMUX_HELPER_EXEC" -V >/dev/null
+  fi
+  link_tmp="$TMUX_INSTALL_PREFIX/bin/.tmux.link.$$"
+  ln -sfn "../Helpers/Anymux Tmux.app/Contents/MacOS/Anymux Tmux" "$link_tmp"
+  mv -f "$link_tmp" "$TMUX_INSTALL_BIN"
+  echo "Installed project-managed $("$TMUX_INSTALL_BIN" -V)"
+  echo "Binary: $TMUX_INSTALL_BIN -> $TMUX_HELPER_EXEC"
+  echo "Helper: $helper_result"
+else
+  new_bin="$TMUX_INSTALL_PREFIX/bin/.tmux.new.$$"
+  install -m 755 "$staged_bin" "$new_bin"
+  if [[ "$platform" == "Darwin" ]] && command -v codesign >/dev/null 2>&1; then
+    codesign -s - --force --identifier com.anymux.app "$new_bin"
+  fi
+  "$new_bin" -V >/dev/null
+  mv -f "$new_bin" "$TMUX_INSTALL_BIN"
+  echo "Installed project-managed $("$TMUX_INSTALL_BIN" -V)"
+  echo "Binary: $TMUX_INSTALL_BIN"
+fi

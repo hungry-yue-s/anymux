@@ -432,7 +432,13 @@ install_tmux_server_launchd() {
     <key>KeepAlive</key>
     <true/>
     <key>ProcessType</key>
-    <string>Background</string>
+    <string>Interactive</string>
+    <key>AssociatedBundleIdentifiers</key>
+    <array>
+        <string>com.anymux.app</string>
+    </array>
+    <key>MaterializeDatalessFiles</key>
+    <true/>
     <key>StandardOutPath</key>
     <string>${launchd_log_dir}/tmux-server.stdout.log</string>
     <key>StandardErrorPath</key>
@@ -518,6 +524,12 @@ ${env_xml}    </dict>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
+    <true/>
+    <key>AssociatedBundleIdentifiers</key>
+    <array>
+        <string>com.anymux.app</string>
+    </array>
+    <key>MaterializeDatalessFiles</key>
     <true/>
     <key>StandardOutPath</key>
     <string>${launchd_log_dir}/stdout.log</string>

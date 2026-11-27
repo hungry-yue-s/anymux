@@ -30,6 +30,7 @@ swiftc -parse-as-library \
   "$PACKAGE_DIR/Sources/Anymux/PanelEndpoint.swift" \
   "$PACKAGE_DIR/Sources/Anymux/ServiceInspector.swift" \
   "$PACKAGE_DIR/Sources/Anymux/DesktopSetupManager.swift" \
+  "$PACKAGE_DIR/Sources/Anymux/MacPermissionsManager.swift" \
   "$PACKAGE_DIR/Tests/DesktopSetupTests.swift" \
   -o "$SETUP_TEST_BINARY"
 codesign --force --sign "$IDENTITY" "$SETUP_TEST_BINARY" >/dev/null

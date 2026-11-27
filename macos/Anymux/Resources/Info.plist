@@ -29,6 +29,42 @@
         <key>NSAllowsLocalNetworking</key>
         <true/>
     </dict>
+    <key>NSDesktopFolderUsageDescription</key>
+    <string>Anymux 允许终端内运行的工具和 Agent 在需要时访问“桌面”文件夹。</string>
+    <key>NSDocumentsFolderUsageDescription</key>
+    <string>Anymux 允许终端内运行的工具和 Agent 在需要时访问“文稿”文件夹。</string>
+    <key>NSDownloadsFolderUsageDescription</key>
+    <string>Anymux 允许终端内运行的工具和 Agent 在需要时访问“下载”文件夹。</string>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>Anymux 允许终端内运行的工具和 Agent 发现并连接本地开发服务。</string>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>Anymux 允许终端内运行的开发工具按需自动化控制本地应用。</string>
+    <key>NSAppleMusicUsageDescription</key>
+    <string>Anymux 允许终端内运行的开发工具按需访问媒体资料库。</string>
+    <key>NSPhotoLibraryUsageDescription</key>
+    <string>Anymux 允许终端内运行的开发工具按需访问照片图库。</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Anymux 允许终端内运行的开发与语音工具按需使用麦克风。</string>
+    <key>NSCameraUsageDescription</key>
+    <string>Anymux 允许终端内运行的开发与测试工具按需使用摄像头。</string>
+    <key>NSBluetoothAlwaysUsageDescription</key>
+    <string>Anymux 允许终端内运行的硬件调试工具按需访问蓝牙设备。</string>
+    <key>NSRemovableVolumesUsageDescription</key>
+    <string>Anymux 允许终端内运行的工具和 Agent 在需要时访问外置磁盘。</string>
+    <key>NSNetworkVolumesUsageDescription</key>
+    <string>Anymux 允许终端内运行的工具和 Agent 在需要时访问网络宗卷。</string>
+    <key>NSLocationUsageDescription</key>
+    <string>Anymux 允许终端内运行的开发工具按需访问位置信息。</string>
+    <key>NSContactsUsageDescription</key>
+    <string>Anymux 允许终端内运行的开发工具按需访问通讯录。</string>
+    <key>NSCalendarsUsageDescription</key>
+    <string>Anymux 允许终端内运行的开发工具按需访问日历。</string>
+    <key>NSCalendarsFullAccessUsageDescription</key>
+    <string>Anymux 允许终端内运行的开发工具按需访问日历。</string>
+    <key>NSRemindersUsageDescription</key>
+    <string>Anymux 允许终端内运行的开发工具按需访问提醒事项。</string>
+    <key>NSRemindersFullAccessUsageDescription</key>
+    <string>Anymux 允许终端内运行的开发工具按需访问提醒事项。</string>
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>NSPrincipalClass</key>

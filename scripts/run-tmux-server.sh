@@ -24,5 +24,15 @@ done
 
 # -D keeps the server in the foreground for launchd and disables exit-empty.
 # tmux explicitly forbids combining -D with a command such as start-server.
-printf '%s run-tmux-server: exec %s -D (pid=%s)\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$TMUX_BIN" "$$" >&2
-exec "$TMUX_BIN" -D
+# Resolve symlinked helper binaries (e.g. Anymux Tmux.app/Contents/MacOS/Anymux Tmux)
+# so macOS TCC attributes child processes directly to the signed bundle.
+EXEC_TMUX_BIN="$TMUX_BIN"
+if [[ -L "$TMUX_BIN" ]] && command -v perl >/dev/null 2>&1; then
+  resolved_bin="$(perl -MCwd=abs_path -e 'my $p = abs_path($ARGV[0]); print $p if defined $p;' "$TMUX_BIN" 2>/dev/null || true)"
+  if [[ -n "$resolved_bin" && -x "$resolved_bin" ]]; then
+    EXEC_TMUX_BIN="$resolved_bin"
+  fi
+fi
+
+printf '%s run-tmux-server: exec %s -D (pid=%s)\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$EXEC_TMUX_BIN" "$$" >&2
+exec "$EXEC_TMUX_BIN" -D

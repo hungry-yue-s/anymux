@@ -78,16 +78,48 @@ sign_runtime_binary() {
   cp -p "$binary" "$signed_copy"
   mv -f "$signed_copy" "$binary"
 }
+if [[ -f "$SCRIPT_DIR/macos-executable-uuid.mjs" ]] && command -v node >/dev/null 2>&1; then
+  node "$SCRIPT_DIR/macos-executable-uuid.mjs" "$APP_PATH/Contents/MacOS/Anymux" com.anymux.app Anymux
+fi
+
 if [[ "$BUNDLE_RUNTIME" == 1 ]]; then
   RUNTIME="$APP_PATH/Contents/Resources/runtime"
   # Sign nested executable code explicitly. All addons share the app's team.
   "$RUNTIME/bin/node" --input-type=module - "$RUNTIME" > "$WORK/macho-paths.txt" <<'JS'
 import fs from 'node:fs'; import path from 'node:path';
 const root=process.argv[2], manifest=JSON.parse(fs.readFileSync(path.join(root,'manifest.json'),'utf8'));
-for(const name of manifest.machO) if(name!=='bin/node') console.log(path.join(root,name));
+for(const name of manifest.machO) {
+  if (name === 'bin/node' || name.startsWith('Helpers/')) continue;
+  console.log(path.join(root, name));
+}
 JS
   while IFS= read -r binary; do sign_runtime_binary "$binary"; done < "$WORK/macho-paths.txt"
   sign_runtime_binary "$RUNTIME/bin/node" --entitlements "$WORK/node-entitlements.plist"
+  if [[ -d "$RUNTIME/Helpers" ]]; then
+    if [[ -d "$RUNTIME/Helpers/Anymux Tmux.app" ]]; then
+      node "$SCRIPT_DIR/macos-helper-bundle.mjs" build \
+        --source "$RUNTIME/bin/tmux" \
+        --output "$RUNTIME/Helpers/Anymux Tmux.app" \
+        --name "Anymux Tmux" \
+        --minimum-macos "$MINIMUM_MACOS" \
+        --app-info "$APP_PATH/Contents/Info.plist" \
+        --icon "$APP_PATH/Contents/Resources/$ICON_FILE" \
+        --identity "$IDENTITY" \
+        --distribution "$DISTRIBUTION" >/dev/null
+    fi
+    if [[ -d "$RUNTIME/Helpers/Anymux Panel.app" ]]; then
+      node "$SCRIPT_DIR/macos-helper-bundle.mjs" build \
+        --source "$RUNTIME/bin/node" \
+        --output "$RUNTIME/Helpers/Anymux Panel.app" \
+        --name "Anymux Panel" \
+        --minimum-macos "$MINIMUM_MACOS" \
+        --app-info "$APP_PATH/Contents/Info.plist" \
+        --icon "$APP_PATH/Contents/Resources/$ICON_FILE" \
+        --entitlements "$WORK/node-entitlements.plist" \
+        --identity "$IDENTITY" \
+        --distribution "$DISTRIBUTION" >/dev/null
+    fi
+  fi
   ANYMUX_ARCH="$ARCH" ANYMUX_MINIMUM_MACOS="$MINIMUM_MACOS" \
     "$RUNTIME/bin/node" "$SCRIPT_DIR/verify-macos-runtime.mjs" "$RUNTIME" --write-manifest
 fi

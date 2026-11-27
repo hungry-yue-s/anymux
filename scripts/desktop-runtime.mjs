@@ -267,14 +267,19 @@ export class DesktopRuntime {
     const env = { PATH: [join(runtime, 'bin'), join(this.home, '.local/bin'), '/opt/homebrew/bin', '/usr/local/bin', SYSTEM_PATH].join(':'),
       ANYMUX_CONFIG_DIR: this.root, ANYMUX_MANAGED_RUNTIME: '1', TMUX_TMPDIR: this.socketRoot,
       TERMINFO_DIRS: join(runtime, 'share/terminfo') + ':/usr/share/terminfo', LANG: 'en_US.UTF-8', LC_CTYPE: 'en_US.UTF-8' };
+    const panelHelper = join(runtime, 'Helpers/Anymux Panel.app/Contents/MacOS/Anymux Panel');
+    const tmuxHelper = join(runtime, 'Helpers/Anymux Tmux.app/Contents/MacOS/Anymux Tmux');
+    const panelBin = await exists(panelHelper) ? panelHelper : join(runtime, 'bin/node');
+    const tmuxBin = await exists(tmuxHelper) ? tmuxHelper : join(runtime, 'bin/tmux');
     const files = {};
-    for (const [name, label, args] of [
-      ['panel', this.label, [join(runtime, 'bin/node'), join(runtime, 'app/bin/panel.js'), '--config', this.paths.configuration]],
-      ['tmux', this.tmuxLabel, [join(runtime, 'bin/tmux'), '-f', join(this.root, 'tmux.conf'), '-D']],
+    for (const [name, label, args, processType] of [
+      ['panel', this.label, [panelBin, join(runtime, 'app/bin/panel.js'), '--config', this.paths.configuration], 'Background'],
+      ['tmux', this.tmuxLabel, [tmuxBin, '-f', join(this.root, 'tmux.conf'), '-D'], 'Interactive'],
     ]) {
       const path = join(directory, label + '.plist');
       await writeFile(path, plist({ Label: label, ProgramArguments: args, WorkingDirectory: this.home, EnvironmentVariables: env,
-        RunAtLoad: true, KeepAlive: true, ThrottleInterval: 5, ProcessType: 'Background',
+        RunAtLoad: true, KeepAlive: true, ThrottleInterval: 5, ProcessType: processType,
+        AssociatedBundleIdentifiers: ['com.anymux.app'], MaterializeDatalessFiles: true,
         StandardOutPath: join(this.paths.logs, name + '.stdout.log'), StandardErrorPath: join(this.paths.logs, name + '.stderr.log') }), { mode: 0o600 });
       const loginPath = join(this.home, 'Library/LaunchAgents', label + '.plist');
       if (await exists(loginPath)) {

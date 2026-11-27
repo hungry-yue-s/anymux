@@ -1,0 +1,9 @@
+{
+  "serve": ["."],
+  "head": [
+    { "order": 50.8, "style": "/css/macos-permissions.css" }
+  ],
+  "body": [
+    { "order": 240, "script": "/js/macos-permissions.js" }
+  ]
+}
