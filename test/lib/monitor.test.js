@@ -609,6 +609,21 @@ describe('StatusMonitor', () => {
       expect(agentEvents.getPaneState('%6')).toBeNull();
     });
 
+    it('invalidates late-attached notificationStore immediately when serverInstance is already known', async () => {
+      const snapshotServerState = vi.fn().mockResolvedValue({
+        serverInstance: '3000:1700000800',
+        sessions: [{ id: '$1', name: 'work', windows: 1, attached: true, lastActivity: '1' }],
+        windowsBySession: new Map([['$1', [{ id: '@1', index: 0, name: 'sh', active: true, width: 80, height: 24, bell: false, activity: 1 }]]]),
+        paneCommandsBySession: new Map([['$1', [{ windowIndex: 0, paneId: '%1', command: 'fish', path: '/', pid: 3001 }]]]),
+      });
+      monitor = new StatusMonitor({ scanProcesses: async () => new Map(), snapshotServerState });
+      await monitor.poll();
+
+      const lateStore = { ...recordingStore(), invalidateForServer: vi.fn(() => 2) };
+      monitor.useNotificationStore(lateStore);
+      expect(lateStore.invalidateForServer).toHaveBeenCalledWith('3000:1700000800');
+    });
+
     it('does not broadcast when plain shell stays idle', async () => {
       monitor = new StatusMonitor({ scanProcesses: async () => new Map() });
       const ws = createMockWs();

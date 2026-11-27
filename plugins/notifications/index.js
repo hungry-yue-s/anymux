@@ -16,6 +16,11 @@ export function apply(ctx) {
     store.startReaper();
     return () => store.stopReaper();
   }, 'notifications.reaper');
+  ctx.inject(['tmux'], (innerCtx) => {
+    innerCtx.tmux.getServerInstance().then((instanceId) => {
+      if (instanceId) store.invalidateForServer(instanceId);
+    }).catch(() => {});
+  });
   ctx.on('status/tmux-instance', (instanceId) => {
     if (instanceId) store.invalidateForServer(instanceId);
   });
