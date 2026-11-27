@@ -3,8 +3,10 @@
 // status, diffs, history, staging and commits of the repository a path
 // belongs to, within the file roots (root CLAUDE.md, 文件预览分窗契约).
 
+import { join } from 'node:path';
 import { createGitRouter } from '../../lib/api/git.js';
 import { PaneRepoTracker } from '../../lib/git/repo-discovery.js';
+import { appDir } from '../../lib/legacy-names.js';
 import { resolvePreviewSource } from '../../lib/preview-source.js';
 
 export const name = 'git';
@@ -44,8 +46,14 @@ export function apply(ctx) {
   const paneRepoTracker = new PaneRepoTracker({
     pathGuard: ctx.fileAccess.pathGuard,
     roots: ctx.fileAccess.roots,
+    storagePath: join(appDir('config'), 'pane-repos.json'),
     onChange: (paneId, repoRoot) => schedulePaneNotify(paneId, repoRoot),
   });
+
+  const initReady = Promise.resolve(ctx.tmux?.getServerInstance?.())
+    .then((instance) => paneRepoTracker.loadPersisted(instance || ''))
+    .catch(() => false);
+  paneRepoTracker.setReadyPromise(initReady);
 
   ctx.on('agent-events/raw', ({ event, raw }) => {
     paneRepoTracker.ingestAgentEvent(raw, event).catch(() => {});
@@ -55,7 +63,17 @@ export function apply(ctx) {
     pendingNotify.clear();
     lastNotifiedAt.clear();
     paneRepoTracker.clear();
+    const nextReady = Promise.resolve(ctx.tmux?.getServerInstance?.())
+      .then((instance) => paneRepoTracker.setServerInstance(instance || ''))
+      .catch(() => {});
+    paneRepoTracker.setReadyPromise(nextReady);
   });
+
+  ctx.effect(() => () => {
+    for (const timer of pendingNotify.values()) clearTimeout(timer);
+    pendingNotify.clear();
+    paneRepoTracker.dispose();
+  }, 'git.paneRepoTracker');
 
   const router = createGitRouter({
     pathGuard: ctx.fileAccess.pathGuard,

@@ -9,6 +9,7 @@ import { createPathGuard } from '../../lib/api/files.js';
 import { createGitRouter, runGit } from '../../lib/api/git.js';
 import {
   PaneRepoTracker,
+  bootstrapAntigravityPaneRepos,
   discoverPaneRepos,
   extractPathsFromAgentPayload,
   formatDisplayPath,
@@ -237,5 +238,139 @@ describe('git repo discovery & worktree identity', () => {
     expect(found).toContain(apiPath(siblingRepo));
     expect(found).toContain(apiPath(wtRepo));
     expect(new Set(found).size).toBe(found.length);
+  });
+
+  it('extracts Antigravity toolCall.args, JSON-quoted paths, embedded command paths, and workspacePaths', () => {
+    const agyRead = extractPathsFromAgentPayload({
+      hookEventName: 'PreToolUse',
+      cwd: workspaceDir,
+      workspacePaths: [externalRepo],
+      toolCall: {
+        name: 'edit_file',
+        args: {
+          Path: JSON.stringify(join(siblingRepo, 'index.js')),
+        },
+      },
+    });
+    expect(agyRead.kind).toBe('write');
+    expect(agyRead.paths).toContain(apiPath(externalRepo));
+    expect(agyRead.paths).toContain(apiPath(join(siblingRepo, 'index.js')));
+
+    const agyCmd = extractPathsFromAgentPayload({
+      hookEventName: 'PostToolUse',
+      cwd: workspaceDir,
+      toolCall: {
+        name: 'run_command',
+        args: {
+          CommandLine: `for spec in "srv:${externalRepo}" "wt:${wtRepo}"; do echo "$spec"; done && curl https://example.com/a/b`,
+        },
+      },
+    });
+    expect(agyCmd.kind).toBe('write');
+    expect(agyCmd.paths).toContain(apiPath(externalRepo));
+    expect(agyCmd.paths).toContain(apiPath(wtRepo));
+  });
+
+  it('persists PaneRepoTracker state across matching serverInstance and caps cross-repo sibling worktrees', async () => {
+    const stateFile = join(rootDir, 'pane-repos.json');
+    let clock = 5000;
+    const tracker1 = new PaneRepoTracker({
+      roots: [apiPath(rootDir)],
+      now: () => clock,
+      storagePath: stateFile,
+    });
+    tracker1.loadPersisted('100:200');
+    tracker1.recordRepo('%0', externalRepo, { kind: 'write', touchedAt: 5000 });
+    await tracker1.savePersisted();
+    tracker1.dispose();
+
+    const tracker2 = new PaneRepoTracker({
+      roots: [apiPath(rootDir)],
+      now: () => clock,
+      storagePath: stateFile,
+    });
+    expect(await tracker2.loadPersisted('100:200')).toBe(true);
+    expect(tracker2.getPaneRepos('%0')[0]).toMatchObject({ root: apiPath(externalRepo), kind: 'write' });
+
+    const tracker3 = new PaneRepoTracker({
+      roots: [apiPath(rootDir)],
+      now: () => clock,
+      storagePath: stateFile,
+    });
+    expect(await tracker3.loadPersisted('999:999')).toBe(false);
+    expect(tracker3.getPaneRepos('%0')).toHaveLength(0);
+
+    // Multi-worktree cap for cross-repo agent-write seeds (> 3 worktrees)
+    const manyWtBase = join(rootDir, 'many-wt-base');
+    initRepo(manyWtBase, 'main');
+    await writeFile(join(manyWtBase, 'a.txt'), 'a\n');
+    commitFile(manyWtBase, 'a.txt', 'a\n', 'init');
+    const wts = [];
+    for (let i = 0; i < 5; i += 1) {
+      const wtPath = join(rootDir, `many-wt-${i}`);
+      execFileSync('git', ['-C', manyWtBase, 'worktree', 'add', '-q', '-b', `br-${i}`, wtPath]);
+      wts.push(wtPath);
+    }
+    const emptyDir = join(rootDir, 'non-git-coord');
+    await mkdir(emptyDir, { recursive: true });
+    const wtTracker = new PaneRepoTracker({ roots: [apiPath(rootDir)] });
+    wtTracker.recordRepo('%20', manyWtBase, { kind: 'write', silent: true });
+    const disc = await discoverPaneRepos({
+      paneId: '%20',
+      cwd: apiPath(emptyDir),
+      roots: [apiPath(rootDir)],
+      tracker: wtTracker,
+      runGit,
+    });
+    const worktreeCands = disc.candidates.filter((c) => c.source === 'worktree');
+    expect(worktreeCands).toHaveLength(3);
+  });
+
+  it('bootstraps Antigravity panes from transcript.jsonl and distributes /pane-repos fairly across panes', async () => {
+    const fakeHome = join(rootDir, 'fake-home');
+    const sessionId = 'session-12345678';
+    const logDir = join(fakeHome, '.gemini', 'antigravity-cli', 'brain', sessionId, '.system_generated', 'logs');
+    await mkdir(logDir, { recursive: true });
+    const transcriptLines = [
+      JSON.stringify({
+        type: 'PLANNER_RESPONSE',
+        created_at: new Date().toISOString(),
+        tool_calls: [
+          {
+            name: 'edit_file',
+            args: {
+              Path: JSON.stringify(join(externalRepo, 'srv.js')),
+            },
+          },
+          {
+            name: 'run_command',
+            args: {
+              CommandLine: JSON.stringify(`git -C "${wtRepo}" status`),
+            },
+          },
+          {
+            name: 'view_file',
+            args: {
+              AbsolutePath: join(fakeHome, '.gemini', 'antigravity-cli', 'brain', sessionId, 'scratch', 'note.md'),
+            },
+          },
+        ],
+      }),
+    ];
+    await writeFile(join(logDir, 'transcript.jsonl'), transcriptLines.join('\n') + '\n');
+
+    const tracker = new PaneRepoTracker({ roots: [apiPath(rootDir)] });
+    const hits = await bootstrapAntigravityPaneRepos({
+      paneId: '%50',
+      sessionId,
+      tracker,
+      home: fakeHome,
+    });
+    expect(hits).toBe(2);
+    const roots50 = tracker.getPaneRepos('%50').map((r) => r.root);
+    expect(roots50).toContain(apiPath(externalRepo));
+    expect(roots50).toContain(apiPath(wtRepo));
+    // Re-running is skipped once bootstrapped
+    expect(await bootstrapAntigravityPaneRepos({ paneId: '%50', sessionId, tracker, home: fakeHome })).toBe(0);
   });
 });
