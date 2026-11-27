@@ -5920,7 +5920,11 @@ var FilePreview = (function () {
       if (term.options) term.options.linkHandler = _hyperlinkHandler(term, actOnPane, isCurrent);
     } catch (_) { /* a terminal without the option only has detected links */ }
     var latest = 0;
-    return term.registerLinkProvider({
+    var scrollSub = term.onScroll ? term.onScroll(function () { _underlineRows(term, []); }) : null;
+    var el = term.element;
+    var onMouseLeave = function () { _underlineRows(term, []); };
+    if (el && el.addEventListener) el.addEventListener('mouseleave', onMouseLeave);
+    var registration = term.registerLinkProvider({
       provideLinks: function (lineNumber, callback) {
         var seq = ++latest;
         var bufRow = lineNumber - 1;
@@ -5944,18 +5948,38 @@ var FilePreview = (function () {
           return _rowLinkLines(term.buffer.active, bufRow, null, settled, lookupFor(layout ? layout.fresh() : null));
         };
         var first = read(false);
+        // Also collect spaced-path candidates on the current logical line(s) for filesystem resolution.
+        if (typeof LinkDetect !== 'undefined' && typeof LinkDetect.spacedPathCandidates === 'function') {
+          first.lines.forEach(function (logical) {
+            _findLinks(logical.text).forEach(function (m) {
+              var cands = LinkDetect.spacedPathCandidates(logical.text, m);
+              var pane = paneFor(layout ? layout.fresh() : null, { lo: 0 });
+              if (!pane) return;
+              cands.forEach(function (c) {
+                if (c.text && _knownToExist(machine, pane, c.text) === undefined && first.pending.indexOf(c.text) < 0) {
+                  first.pending.push(c.text);
+                }
+              });
+            });
+          });
+        }
         if (first.pending.length === 0 || (isCurrent && !isCurrent())) {
-          return callback(linksOn(first.lines, lineNumber));
+          return callback(linksOn(first.lines, lineNumber, lookupFor(layout ? layout.fresh() : null)));
         }
         var askPanes = function (panes) {
           // Each pane is asked about its own paths, against its own directory.
           var groups = [];
           _rowLinkLines(term.buffer.active, bufRow, null, false, lookupFor(panes)).parts.forEach(function (part) {
-            if (!part.pending.length) return;
             var pane = paneFor(panes, part.seg);
             var group = groups.filter(function (g) { return g.pane === pane; })[0];
-            if (!group) groups.push(group = { pane: pane, paths: [] });
+            if (!group && (part.pending.length || first.pending.length)) {
+              groups.push(group = { pane: pane, paths: [] });
+            }
+            if (!group) return;
             part.pending.forEach(function (path) {
+              if (group.paths.indexOf(path) < 0) group.paths.push(path);
+            });
+            first.pending.forEach(function (path) {
               if (group.paths.indexOf(path) < 0) group.paths.push(path);
             });
           });
@@ -5971,23 +5995,46 @@ var FilePreview = (function () {
           // would land in its place.
           if (seq !== latest) return;
           // Read the screen again: it may have changed while the machine answered.
-          callback(linksOn(read(true).lines, lineNumber));
+          var currentLookup = lookupFor(layout ? layout.fresh() : null);
+          callback(linksOn(read(true).lines, lineNumber, currentLookup));
         });
       },
     });
+    return {
+      dispose: function () {
+        _underlineRows(term, []);
+        if (scrollSub && scrollSub.dispose) scrollSub.dispose();
+        if (el && el.removeEventListener) el.removeEventListener('mouseleave', onMouseLeave);
+        if (registration && registration.dispose) registration.dispose();
+      },
+    };
 
     // xterm's links for one row, from the logical lines of its segments, or
     // undefined without any.
-    function linksOn(lines, lineNumber) {
+    function linksOn(lines, lineNumber, lookupSeg) {
       var all = [];
       lines.forEach(function (logical) {
-        all = all.concat(linksOf(logical, lineNumber));
+        all = all.concat(linksOf(logical, lineNumber, lookupSeg));
       });
       return all.length > 0 ? all : undefined;
     }
 
-    function linksOf(logical, lineNumber) {
+    function linksOf(logical, lineNumber, lookupSeg) {
       var found = _findLinks(logical.text);
+      if (typeof LinkDetect !== 'undefined' && typeof LinkDetect.spacedPathCandidates === 'function' && lookupSeg) {
+        var check = lookupSeg({ lo: 0 });
+        found = found.map(function (m) {
+          var cands = LinkDetect.spacedPathCandidates(logical.text, m);
+          for (var ci = cands.length - 1; ci >= 0; ci--) {
+            if (check(cands[ci].text) === true) {
+              var extended = Object.assign({}, m, { text: cands[ci].text, endCol: cands[ci].end });
+              if (extended.end !== undefined) extended.end = cands[ci].end;
+              return extended;
+            }
+          }
+          return m;
+        });
+      }
       if (found.length === 0) return [];
 
       if (window._FP_DEBUG) {

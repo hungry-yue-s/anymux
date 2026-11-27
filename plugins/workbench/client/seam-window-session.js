@@ -1,5 +1,35 @@
 import { validateTarget, validateWindowTarget, newId } from './model.js';
 import { TileRegistry, parseTilePayload } from './tile-registry.js';
+import {
+  DEFAULT_PASTE_CHUNK_MAX_BYTES,
+  iterateUtf8InputChunks,
+  markTerminalBracketedPasteInterrupted,
+  observeTerminalBracketedPasteModeOutput,
+  pasteTerminalText,
+} from './terminal/paste.js';
+import { activateAnymuxUnicodeProvider } from './terminal/unicode-provider.js';
+import {
+  TerminalKittyKeyboardModeTracker,
+  createImeDeferredNewlineTracker,
+  createTerminalKeyHandler,
+} from './terminal/keyboard.js';
+import { createPaneSearchController } from './terminal/search.js';
+import {
+  applyDomBlockFills,
+  createWebglRecoveryPolicy,
+  forceRepaintThroughRenderPause,
+  readStableCellSize,
+  repairPaneWebglCanvasDpr,
+  resolveMinimumContrastRatio,
+  stripTerminalSelectionGutter,
+} from './terminal/rendering.js';
+import {
+  createLinkPtyMouseSuppressor,
+  createOsc52Coalescer,
+  mode2031SequenceFor,
+  scanAndReplyOscColorQueries,
+  scanMode2031ReplyDecision,
+} from './terminal/protocol-replies.js';
 
 const FONT_FAMILY = "'Anymux Mono', 'Maple Mono NF CN', 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Symbols Nerd Font Mono', monospace";
 const MAX_WEBGL_PANES = 6;
@@ -715,10 +745,16 @@ export class SeamWindowSession {
       if (this.disposed) return;
       const theme = global.Theme?.getTerminalTheme?.();
       const allowTransparency = Boolean(global.Theme?.isBackdropActive?.() || (global.Theme?.getTransparency?.() || 0) > 0);
+      const colorScheme = global.Theme?.getColorScheme?.() || 'dark';
+      const minContrast = resolveMinimumContrastRatio(colorScheme);
       for (const pane of this.panes.values()) {
         if (pane.term) {
           pane.term.options.theme = theme;
           pane.term.options.allowTransparency = allowTransparency;
+          pane.term.options.minimumContrastRatio = minContrast;
+        }
+        if (pane.mode2031Subscribed && !pane.isRich && this.status === 'live' && pane.hydrated && !pane.restoring) {
+          this._sendInput(pane.paneId, mode2031SequenceFor(colorScheme), false);
         }
       }
     };
@@ -1070,6 +1106,7 @@ export class SeamWindowSession {
         return;
       }
       if (entry.hydrated) {
+        this._observeLivePaneOutput(entry, frame.data);
         this._queueLiveWrite(entry, frame.data, epoch);
       }
       return;
@@ -1153,9 +1190,23 @@ export class SeamWindowSession {
       entry.hydrated = true;
       entry.everHydrated = true;
       entry.restoring = false;
+      if (entry.kittyTracker) {
+        try {
+          const decodedSnap = frame.data.byteLength ? (this._utf8Decoder || (this._utf8Decoder = new TextDecoder())).decode(frame.data) : '';
+          entry.kittyTracker.adoptSnapshot(decodedSnap);
+        } catch {
+          entry.kittyTracker.resetForSnapshot();
+        }
+      }
+      entry.mode2031Subscribed = false;
+      entry.mode2031State = { tail: '', pendingSubscribe: false };
+      entry.oscColorTail = '';
       const queued = entry.pendingWrites.splice(0);
       entry.pendingBytes = 0;
-      for (const chunk of queued) this._queueLiveWrite(entry, chunk, epoch);
+      for (const chunk of queued) {
+        this._observeLivePaneOutput(entry, chunk);
+        this._queueLiveWrite(entry, chunk, epoch);
+      }
       if (preserveScrollFromBottom > 0) {
         const nextBuf = entry.term.buffer?.active;
         if (nextBuf && nextBuf.type !== 'alternate' && Number(nextBuf.baseY) > 0) {
@@ -1341,9 +1392,10 @@ export class SeamWindowSession {
 
   _createTerminalInstance() {
     const mobile = !!this.global.MobileUI?.isMobile();
+    const colorScheme = this.global.Theme?.getColorScheme?.() || 'dark';
     const term = new this.global.Terminal({
       theme: this.global.Theme?.getTerminalTheme?.(),
-      minimumContrastRatio: 4.5,
+      minimumContrastRatio: resolveMinimumContrastRatio(colorScheme),
       allowTransparency: Boolean(this.global.Theme?.isBackdropActive?.() || (this.global.Theme?.getTransparency?.() || 0) > 0),
       fontFamily: this.fontReady ? FONT_FAMILY : 'monospace',
       fontSize: this.fontSize,
@@ -1362,6 +1414,7 @@ export class SeamWindowSession {
     });
     const fitAddon = this.global.FitAddon?.FitAddon ? new this.global.FitAddon.FitAddon() : null;
     if (fitAddon) term.loadAddon(fitAddon);
+    activateAnymuxUnicodeProvider(term, this.global);
     return { term, fitAddon };
   }
 
@@ -1375,6 +1428,10 @@ export class SeamWindowSession {
       else cleanup?.dispose?.();
     }
     entry.cleanups = [];
+    entry.searchController?.dispose?.();
+    entry.searchController = null;
+    entry.linkMouseSuppressor?.dispose?.();
+    entry.linkMouseSuppressor = null;
     entry.linkProvider?.dispose?.();
     entry.linkProvider = null;
     entry.webglAddon?.dispose?.();
@@ -1615,6 +1672,13 @@ export class SeamWindowSession {
       historyPrevLines: 0,
       historyLastAttemptAt: 0,
       snapshotAssembly: null,
+      kittyTracker: new TerminalKittyKeyboardModeTracker(),
+      mode2031Subscribed: false,
+      mode2031State: { tail: '', pendingSubscribe: false },
+      oscColorTail: '',
+      webglRecovery: createWebglRecoveryPolicy(),
+      searchController: null,
+      linkMouseSuppressor: null,
     };
 
     const focusThisPane = () => {
@@ -1660,13 +1724,64 @@ export class SeamWindowSession {
     return entry;
   }
 
+  _observeLivePaneOutput(entry, bytes) {
+    if (!entry || !bytes?.byteLength || this.disposed || this.status !== 'live' || !entry.hydrated || entry.restoring) return;
+    let text;
+    try {
+      text = (this._utf8Decoder || (this._utf8Decoder = new TextDecoder())).decode(bytes, { stream: true });
+    } catch {
+      return;
+    }
+    if (!text) return;
+    entry.kittyTracker?.scan(text);
+    observeTerminalBracketedPasteModeOutput(entry.term, text);
+
+    const isFocused = entry.paneId === this.activePaneId;
+    if (isFocused) {
+      const opaqueColors = this.global.Theme?.getOpaqueTerminalTheme?.() || this.global.Theme?.getTerminalTheme?.();
+      const colorScan = scanAndReplyOscColorQueries(
+        text,
+        opaqueColors,
+        (reply) => this._sendInput(entry.paneId, reply, false),
+        entry.oscColorTail || '',
+      );
+      entry.oscColorTail = colorScan.tail;
+    }
+
+    const modeScan = scanMode2031ReplyDecision(entry.mode2031State, text);
+    entry.mode2031State = modeScan.state;
+    if (modeScan.decision === 'subscribed') {
+      entry.mode2031Subscribed = true;
+      const scheme = this.global.Theme?.getColorScheme?.() || 'dark';
+      this._sendInput(entry.paneId, mode2031SequenceFor(scheme), false);
+    } else if (modeScan.decision === 'unsubscribed') {
+      entry.mode2031Subscribed = false;
+    }
+  }
+
+  openSearch(paneId = this.activePaneId) {
+    const entry = paneId && this.panes.get(paneId);
+    if (!entry || entry.isRich || !entry.term) return false;
+    if (!entry.searchController) {
+      entry.searchController = createPaneSearchController({
+        entry,
+        globalObj: this.global,
+        onFocusTerminal: () => entry.term?.focus?.(),
+      });
+    }
+    entry.searchController.open();
+    return true;
+  }
+
   _setupPaneAddonsAndBindings(entry) {
     const { paneId, term, body, cleanups } = entry;
     const global = this.global;
+    const isMac = /Mac|iPhone|iPad|iPod/i.test(String(global.navigator?.platform || global.navigator?.userAgent || ''));
 
-    cleanups.push(installClipboardHandler(term, (text) => {
+    const coalescedCopy = createOsc52Coalescer((text) => {
       if (!this.disposed && this.status === 'live' && entry.hydrated) this.copy(text);
-    }));
+    });
+    cleanups.push(installClipboardHandler(term, (text) => coalescedCopy(text)));
     if (term.onTitleChange) {
       cleanups.push(term.onTitleChange((title) => {
         if (this.disposed) return;
@@ -1675,7 +1790,29 @@ export class SeamWindowSession {
         if (paneId === this.activePaneId) this.onTitle(title);
       }));
     }
+    entry.linkMouseSuppressor = createLinkPtyMouseSuppressor(term, { isMac, globalObj: global });
+    cleanups.push(() => { entry.linkMouseSuppressor?.dispose?.(); entry.linkMouseSuppressor = null; });
+
+    if (typeof term.attachCustomKeyEventHandler === 'function') {
+      const keyHandler = createTerminalKeyHandler({
+        isMac,
+        getKittyFlags: () => entry.kittyTracker?.flags || 0,
+        getModifyOtherKeys: () => entry.kittyTracker?.modifyOtherKeys || 0,
+        sendInput: (seq) => this.send(seq, true, paneId),
+        onSearch: () => this.openSearch(paneId),
+        getSelection: () => term.getSelection?.() || '',
+        onCopySelection: (sel) => this.copy(stripTerminalSelectionGutter(sel)),
+        onScrollViewport: (pos) => {
+          if (pos === 'top') term.scrollToTop?.();
+          else if (pos === 'bottom') term.scrollToBottom?.();
+        },
+        onCtrlInterrupt: () => markTerminalBracketedPasteInterrupted(term),
+      });
+      term.attachCustomKeyEventHandler(keyHandler);
+    }
+
     cleanups.push(installInputHandler(term, (data, user) => {
+      if (entry.linkMouseSuppressor?.shouldSuppressReport?.(data)) return;
       if (user) {
         if (!entry.composing && !this._duplicateComposition(entry, data)) {
           this.send(data, !entry.pointerDispatch, paneId);
@@ -1686,6 +1823,7 @@ export class SeamWindowSession {
     }));
     if (term.onBinary) {
       cleanups.push(term.onBinary((data) => {
+        if (entry.linkMouseSuppressor?.shouldSuppressReport?.(data)) return;
         if (this.status === 'live' && entry.hydrated) {
           if (!entry.pointerDispatch) this.inputVersion++;
           this._sendInput(paneId, data, true);
@@ -1714,11 +1852,16 @@ export class SeamWindowSession {
     const onMouseUp = () => {
       if (!global.MobileUI?.isMobile()) {
         const selection = term.getSelection?.();
-        if (selection) this.copy(selection);
+        if (selection) this.copy(stripTerminalSelectionGutter(selection));
       }
     };
     term.element?.addEventListener('mouseup', onMouseUp);
     cleanups.push(() => term.element?.removeEventListener('mouseup', onMouseUp));
+    if (term.onRender) {
+      cleanups.push(term.onRender((range) => {
+        if (!entry.webglAddon && term.element) applyDomBlockFills(term.element, range);
+      }));
+    }
     if (term.onScroll) {
       cleanups.push(term.onScroll(() => {
         this._checkHistoryExpand(entry);
@@ -1742,12 +1885,32 @@ export class SeamWindowSession {
     if (this.disposed || this.parked || !this.global.WebglAddon || this.panes.size > MAX_WEBGL_PANES || !entry?.term || entry.isRich || entry.webglAddon) {
       return;
     }
+    if (entry.webglRecovery && !entry.webglRecovery.canRetry()) {
+      return;
+    }
     try {
       const addon = new this.global.WebglAddon.WebglAddon();
-      addon.onContextLoss(() => { addon.dispose(); if (entry.webglAddon === addon) entry.webglAddon = null; if (!this.disposed) entry.term?.refresh?.(0, entry.term.rows - 1); });
+      addon.onContextLoss(() => {
+        addon.dispose();
+        if (entry.webglAddon === addon) entry.webglAddon = null;
+        if (this.disposed) return;
+        entry.webglRecovery?.recordLoss();
+        entry.term?.refresh?.(0, Math.max(0, entry.term.rows - 1));
+        if (entry.webglRecovery?.canRetry() && !this.parked && this.visible) {
+          this.global.setTimeout(() => {
+            if (!this.disposed && !this.parked && this.visible && entry.term && !entry.webglAddon) {
+              this._attachWebglAddon(entry);
+            }
+          }, 120);
+        } else if (entry.term?.element) {
+          applyDomBlockFills(entry.term.element);
+        }
+      });
       entry.term.loadAddon(addon);
       entry.webglAddon = addon;
-    } catch { /* canvas fallback */ }
+    } catch {
+      if (entry.term?.element) applyDomBlockFills(entry.term.element);
+    }
   }
 
   _cancelWebglAttach() {
@@ -2834,11 +2997,12 @@ export class SeamWindowSession {
           y: clientY,
           label: '终端操作',
           items: [
-            { id: 'copy', label: '复制选中', disabled: !sel, action: () => { if (sel) this.copy(sel); } },
+            { id: 'copy', label: '复制选中', disabled: !sel, action: () => { if (sel) this.copy(stripTerminalSelectionGutter(sel)); } },
             { id: 'paste', label: '粘贴', action: async () => {
               const text = await this.global.navigator.clipboard?.readText?.();
               if (text) this.paste(text, paneId);
             } },
+            { id: 'search', label: '查找', action: () => this.openSearch(paneId) },
             { id: 'clear', label: '清屏', action: () => this.onAction('clear-pane', { paneId }) },
             { separator: true },
             { id: 'split-h', label: '左右分窗', action: () => this.onAction('split', { paneId, direction: 'horizontal' }) },
@@ -3001,8 +3165,8 @@ export class SeamWindowSession {
   _sendInputImmediate(paneId, data, binary = false) {
     if (this.disposed || typeof data !== 'string' || !paneId) return false;
     if (!binary) {
-      for (let start = 0; start < data.length; start += INPUT_CHUNK_BYTES) {
-        if (!this._send({ type: 'input', paneId, data: data.slice(start, start + INPUT_CHUNK_BYTES) })) return false;
+      for (const chunk of iterateUtf8InputChunks(data, DEFAULT_PASTE_CHUNK_MAX_BYTES)) {
+        if (!this._send({ type: 'input', paneId, data: chunk })) return false;
       }
       return true;
     }
@@ -3064,12 +3228,13 @@ export class SeamWindowSession {
     return this._sendInput(paneId, data, false);
   }
 
-  paste(text, paneId = this.activePaneId) {
+  paste(text, paneId = this.activePaneId, options = {}) {
     const entry = paneId && this.panes.get(paneId);
     if (this.status !== 'live' || !this._isPaneInputAllowed(paneId) || !entry?.term || !entry?.hydrated || entry.restoring) return false;
-    if (entry.term.paste) entry.term.paste(text);
-    else this.send(text, true, paneId);
-    return true;
+    return pasteTerminalText(entry.term, text, {
+      ...options,
+      sendFallback: (payload) => this.send(payload, true, paneId),
+    });
   }
 
   selectPane(paneId) {
@@ -3218,6 +3383,8 @@ export class SeamWindowSession {
     const ordered = active ? [active, ...this.panes.values()] : [...this.panes.values()];
     for (const entry of ordered) {
       if (!entry?.term) continue;
+      const stable = readStableCellSize(entry.term, this.global.devicePixelRatio || 1);
+      if (stable) return stable;
       const dims = entry.term?._core?._renderService?.dimensions?.css?.cell;
       if (dims?.width > 2 && dims?.height > 4) return { width: dims.width, height: dims.height };
       if (entry.body?.isConnected) {
@@ -3415,7 +3582,10 @@ export class SeamWindowSession {
     }
     for (const pane of this.panes.values()) {
       if (!pane.isRich && pane.term) {
-        pane.term.refresh?.(0, Math.max(0, pane.term.rows - 1));
+        repairPaneWebglCanvasDpr(pane.term);
+        if (!forceRepaintThroughRenderPause(pane.term)) {
+          pane.term.refresh?.(0, Math.max(0, pane.term.rows - 1));
+        }
       }
     }
     this._scheduleWebglAddons();
@@ -3433,6 +3603,12 @@ export class SeamWindowSession {
       this._send({ type: 'visibility', visible, ...(visible && this.parked ? { background: true } : {}) });
     }
     if (visible && !this.parked) {
+      for (const pane of this.panes.values()) {
+        if (!pane.isRich && pane.term) {
+          repairPaneWebglCanvasDpr(pane.term);
+          forceRepaintThroughRenderPause(pane.term);
+        }
+      }
       this.fit();
       if (!this.ws && this.rendererPrepared && !this.retryTimer) this._connect();
     }
@@ -3481,24 +3657,35 @@ export class SeamWindowSession {
     for (const [key, value] of Object.entries({ autocapitalize: 'off', autocomplete: 'off', autocorrect: 'off', spellcheck: 'false', enterkeyhint: 'send' })) {
       area.setAttribute(key, value);
     }
+    const deferredNewline = createImeDeferredNewlineTracker({
+      globalObj: this.global,
+      getKittyFlags: () => entry.kittyTracker?.flags || 0,
+      getModifyOtherKeys: () => entry.kittyTracker?.modifyOtherKeys || 0,
+      sendInput: (seq) => this.send(seq, true, entry.paneId),
+    });
     const onStart = () => { entry.composing = true; entry.imeSent = false; entry.imeText = ''; };
     const onEnd = (event) => {
       entry.composing = false;
       entry.imeText = event.data || '';
       entry.imeSent = false;
       entry.imeUntil = Date.now() + (/Android/i.test(this.global.navigator.userAgent) ? 300 : 150);
+      deferredNewline.onCompositionEnd();
       this.global.clearTimeout(entry.imeTimer);
       entry.imeTimer = this.global.setTimeout(() => { if (!this.disposed) area.value = ''; }, 120);
     };
     const onKeyDown = (event) => {
       if (!(entry.composing || event.isComposing)) return;
-      if (event.key === 'Enter' || event.keyCode === 13) { event.stopPropagation(); event.preventDefault(); }
-      else if (event.key === 'Backspace' || event.keyCode === 8) event.stopPropagation();
+      if (event.key === 'Enter' || event.keyCode === 13) {
+        deferredNewline.captureComposingKeydown(event);
+        event.stopPropagation();
+        event.preventDefault();
+      } else if (event.key === 'Backspace' || event.keyCode === 8) event.stopPropagation();
     };
     area.addEventListener('compositionstart', onStart);
     area.addEventListener('compositionend', onEnd);
     area.addEventListener('keydown', onKeyDown, true);
     entry.cleanups.push(() => {
+      deferredNewline.dispose();
       this.global.clearTimeout(entry.imeTimer);
       area.removeEventListener('compositionstart', onStart);
       area.removeEventListener('compositionend', onEnd);

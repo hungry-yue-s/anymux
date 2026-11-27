@@ -358,9 +358,95 @@ var LinkDetect = (function () {
   // input (very long wrapped runs).
   var MAX_LINE = 16384;
 
+  // Markdown `[label](path)` extractor (Orca pattern): supports file:/ links,
+  // relative/absolute paths with optional :line[:col], and suppresses label/syntax noise.
+  function _parseMarkdownFileLinks(line) {
+    if (!line || line.indexOf('](') === -1) return { matches: [], masked: line };
+    var matches = [];
+    var openings = [];
+    var parts = [];
+    var unclaimed = 0;
+    var ESCAPABLE = /^[!"#$%&'()*+,\-./:;<=>?@[\]\\^_`{|}~]$/;
+    for (var i = 0; i < line.length; i++) {
+      var ch = line.charAt(i);
+      if (ch === '\\' && ESCAPABLE.test(line.charAt(i + 1) || '')) {
+        i += 1;
+        continue;
+      }
+      if (ch === '[') { openings.push(i); continue; }
+      if (ch !== ']') continue;
+      var open = openings.pop();
+      if (open === undefined || line.charAt(i + 1) !== '(' || /[\\/]/.test(line.charAt(open - 1) || '')) continue;
+      var limit = Math.min(line.length, i + 2 + 2048);
+      var destStart = i + 2;
+      while (destStart < limit && /\s/.test(line.charAt(destStart))) destStart++;
+      var angle = line.charAt(destStart) === '<';
+      if (angle) destStart++;
+      var destEnd = -1, closeIdx = -1, depth = 0;
+      for (var c = destStart; c < limit; c++) {
+        var dc = line.charAt(c);
+        if (dc === '\\' && ESCAPABLE.test(line.charAt(c + 1) || '')) { c++; continue; }
+        if (dc === '\n' || dc === '\r' || dc === '<') break;
+        if (angle ? dc === '>' : (depth === 0 && (dc === ')' || /\s/.test(dc)))) {
+          var after = angle ? c + 1 : c;
+          while (after < limit && /\s/.test(line.charAt(after))) after++;
+          if (line.charAt(after) === ')') {
+            if (c > destStart) { destEnd = c; closeIdx = after; }
+          } else if (after > c && (line.charAt(after) === '"' || line.charAt(after) === "'" || line.charAt(after) === '(')) {
+            var q = line.charAt(after) === '(' ? ')' : line.charAt(after);
+            var qc = after + 1;
+            while (qc < limit) {
+              if (line.charAt(qc) === '\\' && ESCAPABLE.test(line.charAt(qc + 1) || '')) { qc += 2; continue; }
+              if (line.charAt(qc) === q) {
+                var endAfter = qc + 1;
+                while (endAfter < limit && /\s/.test(line.charAt(endAfter))) endAfter++;
+                if (line.charAt(endAfter) === ')' && c > destStart) { destEnd = c; closeIdx = endAfter; }
+                break;
+              }
+              qc++;
+            }
+          }
+          break;
+        }
+        if (!angle) {
+          if (dc === '(') depth++;
+          else if (dc === ')') depth--;
+        }
+      }
+      if (destEnd < 0 || closeIdx < 0) continue;
+      var rawDest = line.slice(destStart, destEnd);
+      var cleanDest = (/^[A-Za-z]:[\\/]/.test(rawDest) || rawDest.indexOf('/') === -1)
+        ? rawDest
+        : rawDest.replace(/\\([!"#$%&'()*+,\-./:;<=>?@[\]\\^_`{|}~])/g, '$1');
+      if (/^file:/i.test(cleanDest)) {
+        var fRes = _processFileUrl(line, destStart, rawDest);
+        if (fRes) matches.push(fRes);
+      } else if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(cleanDest) && cleanDest.charAt(0) !== '#') {
+        var hashIdx = cleanDest.indexOf('#');
+        var cleanPath = hashIdx >= 0 ? cleanDest.slice(0, hashIdx) : cleanDest;
+        var parsed = parseLineRef(cleanPath);
+        if (parsed.path && !/^https?:/i.test(parsed.path)) {
+          matches.push({ kind: 'file', text: parsed.path, href: null, lineRef: parsed.lineRef, start: destStart, end: destEnd });
+        }
+      }
+      parts.push(line.slice(unclaimed, open));
+      parts.push(' '.repeat(closeIdx + 1 - open));
+      unclaimed = closeIdx + 1;
+      i = closeIdx;
+      openings.length = 0;
+    }
+    if (!parts.length) return { matches: matches, masked: line };
+    parts.push(line.slice(unclaimed));
+    return { matches: matches, masked: parts.join('') };
+  }
+
   function findLinks(line) {
     if (!line || line.length > MAX_LINE) return [];
     var out = [];
+    // 0) Markdown `[label](dest)` first so brackets inside markdown don't fracture targets.
+    var md = _parseMarkdownFileLinks(line);
+    for (var mi = 0; mi < md.matches.length; mi++) out.push(md.matches[mi]);
+    line = md.masked;
     // 1) Web (highest authority) and file:// first.
     _runWeb(line, HTTP_RE, out);
     _runWeb(line, WWW_RE, out);
@@ -397,12 +483,37 @@ var LinkDetect = (function () {
     return _dedup(out);
   }
 
+  /** Spaced filename candidate extensions (verified asynchronously against filesystem by caller). */
+  function spacedPathCandidates(line, match) {
+    if (!line || !match || match.kind !== 'file') return [];
+    var rooted = /^(?:\/|~|\.\.?\/|[A-Za-z]:[\\/])/.test(match.text);
+    var out = [];
+    var after = line.slice(match.end);
+    var WORD_RE = / ([^\s()[\]{}'",;<>|`]+)/g;
+    var m, words = 0;
+    while (words < 8 && (m = WORD_RE.exec(after)) !== null) {
+      if (m.index > 0 && words === 0 && after.charAt(0) !== ' ') break;
+      var tok = m[1];
+      if (/^(?:\/|~|\.\.?\/|[A-Za-z]:[\\/])/.test(tok) || tok.indexOf('://') !== -1) break;
+      var candidate = _pathTrim(line.slice(match.start, match.end + m.index + m[0].length), false);
+      if (!candidate || candidate.length <= match.text.length) continue;
+      if (!rooted && /\.[a-z][a-z0-9]{0,5}$/i.test(tok)) {
+        out.push({ text: candidate, end: match.start + candidate.length });
+        break;
+      }
+      if (rooted) out.push({ text: candidate, end: match.start + candidate.length });
+      words++;
+    }
+    return out;
+  }
+
   return {
     findLinks: findLinks,
     computeHref: computeHref,
     parseLineRef: parseLineRef,
     parseHyperlink: parseHyperlink,
     shouldJoinHardWrap: shouldJoinHardWrap,
+    spacedPathCandidates: spacedPathCandidates,
     _isAmbiguousDomain: _isAmbiguousDomain,   // exposed for tests
   };
 })();

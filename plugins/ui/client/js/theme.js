@@ -1823,10 +1823,19 @@ var Theme = (function () {
     dispatchEventSafe('anymux-appearance-change');
   }
 
-  function getTerminalTheme(themeId) {
+  function getOpaqueTerminalTheme(themeId) {
     var id = resolveThemeId(themeId || getEffectiveThemeId());
     var t = getCompiledTheme(id, !themeId || themeId === getEffectiveThemeId()).terminal;
-    var copy = cloneObj(t);
+    return cloneObj(t);
+  }
+
+  function getColorScheme(themeId) {
+    var id = resolveThemeId(themeId || getEffectiveThemeId());
+    return getCompiledTheme(id, !themeId || themeId === getEffectiveThemeId()).colorScheme;
+  }
+
+  function getTerminalTheme(themeId) {
+    var copy = getOpaqueTerminalTheme(themeId);
     if (isBackdropActive()) copy.background = 'rgba(0, 0, 0, 0)';
     return copy;
   }
@@ -2103,6 +2112,8 @@ var Theme = (function () {
     previewTheme: previewTheme,
     clearPreview: clearPreview,
     getTerminalTheme: getTerminalTheme,
+    getOpaqueTerminalTheme: getOpaqueTerminalTheme,
+    getColorScheme: getColorScheme,
     getThemeList: getThemeList,
     getName: getName,
     supportsTransparency: supportsTransparency,

@@ -462,6 +462,8 @@ describe('index.html script order', () => {
       'xterm.js?v=6.0.0',
       'addon-fit.js?v=0.11.0',
       'addon-webgl.js?v=0.19.0',
+      'addon-unicode11.js?v=0.9.0',
+      'addon-search.js?v=0.16.0',
     ]) {
       expect(INDEX).toContain(`/vendor/xterm/${asset}`);
       expect(existsSync(`plugins/terminal/client/vendor/xterm/${asset.split('?')[0]}`)).toBe(true);

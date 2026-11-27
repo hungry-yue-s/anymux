@@ -784,6 +784,58 @@
 .wb-window-message:not(.terminal-status-notice) { position: absolute; top: 45px; left: 12px; right: 12px; z-index: 8; width: fit-content; max-width: calc(100% - 24px); padding: 8px 10px; border: 1px solid var(--workspace-line, var(--border)); border-radius: 5px; color: var(--workspace-text, var(--text-primary)); background: var(--workspace-panel, var(--bg-card)); font-size: 12px; pointer-events: none; }
 .wb-empty { padding: 24px; color: var(--workspace-muted, var(--text-secondary)); font-size: 13px; line-height: 1.7; }
 .wb-touch-copy { position: absolute; top: 8px; right: 12px; z-index: 8; min-width: 80px; min-height: 44px; padding: 8px 12px; border: 1px solid var(--workspace-accent, var(--accent-blue)); border-radius: 7px; color: var(--workspace-text, var(--text-primary)); background: var(--workspace-panel, var(--bg-card)); font: inherit; font-size: 13px; touch-action: manipulation; }
+.wb-pane-search {
+  position: absolute;
+  top: 40px;
+  right: 10px;
+  z-index: 14;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px;
+  border: 1px solid var(--workspace-line-strong, var(--border));
+  border-radius: 7px;
+  background: var(--workspace-panel, var(--bg-card));
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+  font-size: 12px;
+}
+.wb-pane-search[hidden] { display: none; }
+.wb-pane-search-input {
+  width: 150px;
+  min-width: 90px;
+  padding: 3px 6px;
+  border: 1px solid var(--workspace-line, var(--border-subtle));
+  border-radius: 4px;
+  background: var(--workspace-bg, var(--bg-primary));
+  color: var(--workspace-text, var(--text-primary));
+  font: inherit;
+  outline: none;
+}
+.wb-pane-search-input:focus { border-color: var(--workspace-accent, var(--accent-blue)); }
+.wb-pane-search-count {
+  min-width: 34px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  color: var(--workspace-muted, var(--text-secondary));
+  font-size: 11px;
+}
+.wb-pane-search-btn {
+  min-width: 24px;
+  height: 24px;
+  padding: 0 5px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--workspace-text, var(--text-primary));
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.wb-pane-search-btn:hover { background: var(--workspace-hover, var(--bg-hover)); }
+.wb-pane-search-btn.is-active {
+  border-color: var(--workspace-accent, var(--accent-blue));
+  background: color-mix(in srgb, var(--workspace-accent, var(--accent-blue)) 18%, transparent);
+}
 .wb-stage .fab-drawer-mount { z-index: 90; }
 html[data-native-transparency] .wb-stage.terminal-view,
 html[data-native-transparency] .wb-window-terminal,
