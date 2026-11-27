@@ -17,7 +17,9 @@ export const inject = ['launch', 'http'];
 export function apply(ctx) {
   // Notices and agent hook state are optional: the socket carries workspace
   // changes and server health with or without them.
-  const monitor = new StatusMonitor();
+  const monitor = new StatusMonitor({
+    onServerRestart: (info) => ctx.emit('status/tmux-restarted', info),
+  });
   ctx.inject(['notifications'], (ctx) => {
     ctx.effect(() => monitor.useNotificationStore(ctx.notifications), 'status.notifications');
   });

@@ -128,12 +128,20 @@ function postJson(url, payload, token) {
   });
 }
 
+function parseTmuxServerPid(tmuxEnv) {
+  const parts = String(tmuxEnv || '').split(',');
+  if (parts.length < 3) return '';
+  const pid = parts[parts.length - 2].trim();
+  return /^\d+$/.test(pid) ? pid : '';
+}
+
 const args = parseArgs(process.argv);
 const input = await readStdin();
 const event = args.event || input.hook_event_name || input.event || 'notification';
 const session = args.session || input.session || input.tmux_session || '';
 const windowId = args.windowId || args['window-id'] || input.windowId || input.window_id || '';
 const paneId = args.paneId || args['pane-id'] || input.paneId || input.pane_id || process.env.TMUX_PANE || '';
+const tmuxServerPid = args.tmuxServerPid || args['tmux-server-pid'] || input.tmuxServerPid || input.tmux_server_pid || parseTmuxServerPid(process.env.TMUX);
 if (!paneId && !session && !windowId && !process.env.TMUX && !process.env.TMUX_PANE) {
   process.exit(0);
 }
@@ -147,6 +155,7 @@ const payload = {
   windowIndex: args.windowIndex ?? args['window-index'] ?? input.windowIndex ?? input.window_index,
   windowId,
   paneId,
+  ...(tmuxServerPid ? { tmuxServerPid } : {}),
   tty: args.tty || input.tty || process.env.TTY || '',
 };
 

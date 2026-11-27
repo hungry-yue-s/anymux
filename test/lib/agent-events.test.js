@@ -242,6 +242,62 @@ describe('agent event normalization', () => {
     });
     expect(service.getPaneState('%8').sessionId).toBe('');
   });
+
+  it('tracks tmuxServerPid, isolates state across server PIDs, supports resetForServer and pruneMissingPanes', () => {
+    let now = 10_000;
+    const service = new AgentEventService({ now: () => now });
+
+    service.ingest({
+      agent: 'antigravity',
+      event: 'PreInvocation',
+      paneId: '%11',
+      tmux: '/private/tmp/tmux-501/default,1000,0',
+      prompt: 'old server prompt',
+      model: 'gemini-4-neon',
+    });
+    expect(service.getPaneState('%11')).toMatchObject({
+      tmuxServerPid: '1000',
+      prompt: 'old server prompt',
+      model: 'gemini-4-neon',
+    });
+
+    // Incoming hook from a new tmux server resets per-pane history rather than inheriting old prompt/model
+    now = 25_000;
+    service.ingest({
+      agent: 'codex',
+      event: 'SessionStart',
+      paneId: '%11',
+      tmuxServerPid: '2000',
+    });
+    expect(service.getPaneState('%11')).toMatchObject({
+      tmuxServerPid: '2000',
+      agentType: 'codex',
+      status: 'idle',
+      prompt: '',
+      model: '',
+    });
+
+    // Add an unstamped hook predating server start and an old-server hook on %12, plus a fresh hook on %13
+    now = 19_000;
+    service.ingest({ agent: 'antigravity', event: 'Stop', paneId: '%12', tmuxServerPid: '1000' });
+    now = 31_000;
+    service.ingest({ agent: 'antigravity', event: 'Stop', paneId: '%13', tmuxServerPid: '2000' });
+    service.ingest({ agent: 'antigravity', event: 'Stop', paneId: '%14' }); // missing tmuxServerPid
+
+    // Strict reset for server 2000 (startedAtMs=24_000): %11 and %13 stay; %12 (old pid & timestamp) and %14 (unverified pid) drop
+    const removed = service.resetForServer({ serverPid: '2000', startedAtMs: 24_000, strict: true });
+    expect(removed).toBe(2);
+    expect(service.getPaneState('%11')).not.toBeNull();
+    expect(service.getPaneState('%13')).not.toBeNull();
+    expect(service.getPaneState('%12')).toBeNull();
+    expect(service.getPaneState('%14')).toBeNull();
+
+    // pruneMissingPanes only removes panes missing from livePaneIds whose updatedAt < beforeTimestamp
+    const pruned = service.pruneMissingPanes(new Set(['%11']), { beforeTimestamp: 35_000 });
+    expect(pruned).toBe(1);
+    expect(service.getPaneState('%13')).toBeNull();
+    expect(service.getPaneState('%11')).not.toBeNull();
+  });
 });
 
 describe('agent events API', () => {

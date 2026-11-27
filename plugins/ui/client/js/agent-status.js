@@ -395,8 +395,8 @@
     if (cOld) return cOld[3].toLowerCase() + '-' + (cOld[2] ? cOld[1] + '.' + cOld[2] : cOld[1]);
     var gpt = clean.match(/^(gpt-\d+(?:\.\d+)?)(?:-codex.*)?$/i);
     if (gpt) return gpt[1].toLowerCase();
-    var gem = clean.match(/^(gemini-\d+(?:\.\d+)?)/i);
-    if (gem) return gem[1].toLowerCase();
+    var gem = clean.match(/^(gemini)[\s-]+(\d+(?:\.\d+)?)/i);
+    if (gem) return gem[1].toLowerCase() + '-' + gem[2];
     return clean.length > 18 ? clean.slice(0, 18) : clean;
   }
 

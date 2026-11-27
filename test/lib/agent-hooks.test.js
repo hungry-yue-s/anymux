@@ -53,7 +53,7 @@ describe('AgentHookManager', () => {
     const paths = await manager.refreshManagedScript();
     expect(paths.scriptPath).toBe(join(dataDir, 'agent-hooks', 'agent-event-router.mjs'));
     const script = await readFile(paths.scriptPath, 'utf8');
-    expect(script).toContain('anymux-managed-hook-router v4');
+    expect(script).toContain('anymux-managed-hook-router v5');
     if (process.platform !== 'win32') {
       const mode = (await stat(paths.scriptPath)).mode & 0o777;
       expect(mode & 0o100).toBe(0o100);
@@ -211,6 +211,7 @@ describe('AgentHookManager', () => {
         agent: 'claude',
         event: 'user_prompt_submit',
         paneId: '%42',
+        tmuxServerPid: '1',
         model: 'claude-opus-4-5',
         prompt: 'Hello router',
       });

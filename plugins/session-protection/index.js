@@ -35,6 +35,9 @@ export async function apply(ctx) {
     protection.start();
     return () => protection.stop();
   }, 'session-protection.loop');
+  ctx.on('workspace/pane-label-changed', () => {
+    protection.syncPaneLabels().catch(() => {});
+  });
   ctx.http.mount('/api/session-protection', createSessionProtectionRouter({ protection }));
   ctx.provide('sessionProtection', protection);
   // The front end, where there are pages at all.

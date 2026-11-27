@@ -15,7 +15,10 @@ export const inject = ['http', 'tmux'];
 export function apply(ctx) {
   const service = new WorkspaceService({
     tmux: ctx.tmux,
-    onChange: (revision) => ctx.emit('status/workspace-changed', revision),
+    onChange: (revision, meta) => {
+      ctx.emit('status/workspace-changed', revision);
+      if (meta?.paneLabelChanged) ctx.emit('workspace/pane-label-changed');
+    },
   });
   ctx.http.mount('/api/workspace', createWorkspaceRouter({ workspaceService: service }));
   ctx.provide('workspace', service);

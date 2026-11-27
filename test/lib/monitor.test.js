@@ -488,6 +488,121 @@ describe('StatusMonitor', () => {
       expect(store.notifications[0]).toMatchObject({ source: 'antigravity', state: 'agent_stopped', paneId: '%2' });
     });
 
+    it('purges stale pane hooks, statuses, and triggers onServerRestart when tmux serverInstance changes', async () => {
+      let now = 1_700_000_100_000;
+      vi.setSystemTime(now);
+      const store = recordingStore();
+      const agentEvents = new AgentEventService({ notificationStore: store, now: () => now });
+      const onServerRestart = vi.fn();
+      const snapshotServerState = vi.fn();
+      monitor = new StatusMonitor({
+        notificationStore: store,
+        agentEvents,
+        scanProcesses: async () => new Map(),
+        snapshotServerState,
+        onServerRestart,
+      });
+
+      const snapServer = (instance, windows, panes) => ({
+        serverInstance: instance,
+        sessions: [{ id: '$1', name: 'work', windows: windows.length, attached: true, lastActivity: '1' }],
+        windowsBySession: new Map([['$1', windows]]),
+        paneCommandsBySession: new Map([['$1', panes]]),
+      });
+
+      // Server 1000: %11 & %12 are agy panes (working and done)
+      snapshotServerState.mockResolvedValue(snapServer(
+        '1000:1700000000',
+        [{ id: '@5', index: 0, name: 'tmux panel', active: true, width: 80, height: 24, bell: false, activity: 1 }],
+        [
+          { windowIndex: 0, paneId: '%11', command: 'agy', path: '/repo/panel', pid: 1011, title: 'agy' },
+          { windowIndex: 0, paneId: '%12', command: 'agy', path: '/repo/panel', pid: 1012, title: 'agy' },
+        ],
+      ));
+      agentEvents.ingest({ agent: 'antigravity', event: 'PreInvocation', paneId: '%11', tmuxServerPid: '1000', prompt: '要' });
+      agentEvents.ingest({ agent: 'antigravity', event: 'Stop', paneId: '%12', tmuxServerPid: '1000', prompt: '再看一下现在的情况' });
+
+      await monitor.poll();
+      expect(monitor.getAgentStatus().panes['%11']).toMatchObject({ status: 'working', label: '要' });
+      expect(monitor.getAgentStatus().panes['%12']).toMatchObject({ status: 'done', label: '再看一下现在的情况' });
+
+      // Tmux server restarts (PID 2000 at t=1_700_000_500s): %11 and %12 are reassigned to fish in window dsh
+      now = 1_700_000_505_000;
+      vi.setSystemTime(now);
+      store.notifications = [];
+      snapshotServerState.mockResolvedValue(snapServer(
+        '2000:1700000500',
+        [{ id: '@6', index: 1, name: 'dsh', active: true, width: 80, height: 24, bell: false, activity: 2 }],
+        [
+          { windowIndex: 1, paneId: '%11', command: 'fish', path: '/Users/me', pid: 2011, title: '~' },
+          { windowIndex: 1, paneId: '%12', command: 'fish', path: '/Users/me', pid: 2012, title: '~' },
+        ],
+      ));
+
+      await monitor.poll();
+      expect(onServerRestart).toHaveBeenCalledWith({
+        prevInstance: '1000:1700000000',
+        nextInstance: '2000:1700000500',
+      });
+      expect(tmux.ensurePaneBorderConfig).toHaveBeenCalledTimes(2);
+      expect(monitor.getAgentStatus().panes).toEqual({});
+      expect(monitor.getAgentStatus().hasAgents).toBe(false);
+      expect(agentEvents.getPaneState('%11')).toBeNull();
+      expect(agentEvents.getPaneState('%12')).toBeNull();
+      expect(store.notifications).toHaveLength(0);
+    });
+
+    it('clears closed panes, clears respawned pane pid changes, and ignores hooks from old tmuxServerPid', async () => {
+      let now = 1_700_000_100_000;
+      vi.setSystemTime(now);
+      const agentEvents = new AgentEventService({ now: () => now });
+      const snapshotServerState = vi.fn();
+      monitor = new StatusMonitor({
+        agentEvents,
+        scanProcesses: async () => new Map(),
+        snapshotServerState,
+      });
+
+      const snapServer = (instance, panes) => ({
+        serverInstance: instance,
+        sessions: [{ id: '$1', name: 'work', windows: 1, attached: true, lastActivity: '1' }],
+        windowsBySession: new Map([['$1', [{ id: '@5', index: 0, name: 'panel', active: true, width: 80, height: 24, bell: false, activity: 1 }]]]),
+        paneCommandsBySession: new Map([['$1', panes]]),
+      });
+
+      snapshotServerState.mockResolvedValue(snapServer('2000:1700000000', [
+        { windowIndex: 0, paneId: '%5', command: 'agy', path: '/repo', pid: 500, title: 'agy' },
+        { windowIndex: 0, paneId: '%6', command: 'agy', path: '/repo', pid: 600, title: 'agy' },
+      ]));
+      agentEvents.ingest({ agent: 'antigravity', event: 'Stop', paneId: '%5', tmuxServerPid: '2000', prompt: 'first' });
+      agentEvents.ingest({ agent: 'antigravity', event: 'Stop', paneId: '%6', tmuxServerPid: '2000', prompt: 'closing' });
+      await monitor.poll();
+      expect(monitor.getAgentStatus().panes['%5']).toBeDefined();
+      expect(monitor.getAgentStatus().panes['%6']).toBeDefined();
+
+      // Hook arriving with stale tmuxServerPid 1000 is ignored in fast path
+      monitor.handleAgentEvent({
+        paneId: '%5',
+        agentType: 'antigravity',
+        state: 'agent_running',
+        tmuxServerPid: '1000',
+        prompt: 'stale pid event',
+      });
+      await monitor.poll();
+      expect(monitor.getAgentStatus().panes['%5'].prompt).toBe('first');
+
+      // %5 respawns with new pid 999 as fish, and %6 closes
+      now += 5000;
+      vi.setSystemTime(now);
+      snapshotServerState.mockResolvedValue(snapServer('2000:1700000000', [
+        { windowIndex: 0, paneId: '%5', command: 'fish', path: '/repo', pid: 999, title: '~' },
+      ]));
+      await monitor.poll();
+      expect(monitor.getAgentStatus().panes['%5']).toBeUndefined();
+      expect(agentEvents.getPaneState('%5')).toBeNull();
+      expect(agentEvents.getPaneState('%6')).toBeNull();
+    });
+
     it('does not broadcast when plain shell stays idle', async () => {
       monitor = new StatusMonitor({ scanProcesses: async () => new Map() });
       const ws = createMockWs();

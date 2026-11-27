@@ -362,6 +362,7 @@ describe('by-id tmux helpers', () => {
       exec: async (_cmd, args) => {
         calls.push(args);
         const stdout = [
+          ['I', '4242:1700000000'].join(SEP),
           ['S', '$1', 'main', '1', '1', '1700000000'].join(SEP),
           ['W', '$1', '@1', '0', 'work', '1', '120', '40', '0', '1700000001', '0', 'abcd,120x40,0,0,1'].join(SEP),
           ['C', '$1', '0', '%1', 'zsh', '/repo', '1234'].join(SEP),
@@ -372,6 +373,7 @@ describe('by-id tmux helpers', () => {
     });
     const snap = await api.snapshotServerState();
     expect(calls).toHaveLength(1);
+    expect(snap.serverInstance).toBe('4242:1700000000');
     expect(snap.sessions).toEqual([
       { id: '$1', name: 'main', windows: 1, attached: true, lastActivity: '1700000000' },
     ]);

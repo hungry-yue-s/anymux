@@ -314,6 +314,7 @@ describe('agent-status core detection and fusion', () => {
     expect(formatShortModel('anthropic/claude-sonnet-4-20250514')).toBe('sonnet-4');
     expect(formatShortModel('gpt-5.3-codex')).toBe('gpt-5.3');
     expect(formatShortModel('gemini-2.5-pro-preview')).toBe('gemini-2.5');
+    expect(formatShortModel('Gemini 4 Neon')).toBe('gemini-4');
   });
 
   it('fuses hook, title, process, and edge transitions cleanly', () => {
@@ -371,6 +372,25 @@ describe('agent-status core detection and fusion', () => {
       now,
     });
     expect(customNamed.label).toBe('自更新');
+
+    // Stale idle hook without a live agent process must NOT create a ghost agent entry on a plain shell pane
+    expect(fusePaneAgentStatus({
+      pane: { id: '%6', command: 'fish', path: '/Users/me', windowId: '@4' },
+      hookState: { status: 'idle', state: 'session_started', agentType: 'antigravity', updatedAt: now - 5000 },
+      now,
+    })).toBeNull();
+
+    // Stale done hook with mismatched windowId or cwd and no live process must be rejected
+    expect(fusePaneAgentStatus({
+      pane: { id: '%11', command: 'fish', path: '/Users/me', windowId: '@6' },
+      hookState: { status: 'done', agentType: 'antigravity', windowId: '@7', prompt: '要', updatedAt: now - 5000 },
+      now,
+    })).toBeNull();
+    expect(fusePaneAgentStatus({
+      pane: { id: '%12', command: 'fish', path: '/Users/me/', windowId: '@6' },
+      hookState: { status: 'done', agentType: 'antigravity', cwd: '/Users/me/projects/tmux-web-panel', prompt: '再看一下', updatedAt: now - 5000 },
+      now,
+    })).toBeNull();
   });
 
   it('builds multi-session rolled-up snapshots respecting priority', () => {

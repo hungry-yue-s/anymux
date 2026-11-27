@@ -79,6 +79,9 @@ export function apply(ctx, options = {}) {
       if (service.notificationStore === ctx.notifications) service.notificationStore = null;
     }, 'agent-events.notices');
   });
+  ctx.on('status/tmux-restarted', () => {
+    boundPaneAgents.clear();
+  });
   ctx.http.mount('/api/agent-events', createAgentEventsRouter(service, {
     onNotifications: (notifications) => ctx.emit('status/notifications', notifications),
     onEvent: async (result) => {
