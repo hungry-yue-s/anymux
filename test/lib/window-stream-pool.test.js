@@ -739,4 +739,54 @@ describe('ControlPool multi-pane window-stream', () => {
     lease.close();
     pool.dispose();
   });
+
+  it('scales asymmetric multi-pane layouts proportionally on resizeWindow and updates intent only on explicit pane resize', async () => {
+    const { pool, controls, target, setWindowSpec } = makeFixture();
+    // 1:3 initial split (30 : 90 across 121 cols)
+    setWindowSpec({
+      cols: 121,
+      rows: 40,
+      panes: [
+        { id: '%3', index: 0, x: 0, y: 0, width: 30, height: 40, command: 'zsh', label: 'left', cwd: '/a' },
+        { id: '%4', index: 1, x: 31, y: 0, width: 90, height: 40, command: 'codex', label: 'right', cwd: '/b' },
+      ],
+    });
+    const frames = [];
+    const lease = await pool.subscribeWindow(target, f => frames.push(Buffer.isBuffer(f) ? decodeBinaryFrame(f) : f));
+
+    // Shrink 121 -> 81 cols: issues resize-window + proportional select-layout (20:60) & persists @anymux_layout_ratios
+    setWindowSpec({
+      cols: 81,
+      rows: 40,
+      panes: [
+        { id: '%3', index: 0, x: 0, y: 0, width: 20, height: 40, command: 'zsh', label: 'left', cwd: '/a' },
+        { id: '%4', index: 1, x: 21, y: 0, width: 60, height: 40, command: 'codex', label: 'right', cwd: '/b' },
+      ],
+    });
+    expect(await lease.resizeWindow(81, 40)).toBe(true);
+    expect(controls[0].commands).toContain('resize-window -t @2 -x 81 -y 40');
+    const selectCmd = controls[0].commands.find((c) => c.startsWith('select-layout -t @2 '));
+    expect(selectCmd).toBeTruthy();
+    expect(selectCmd).toContain('81x40,0,0{20x40,0,0,3,60x40,21,0,4}');
+
+    // Now drag divider explicitly to 50:30 at 81 cols -> updates intent ratio to 5:3!
+    setWindowSpec({
+      cols: 81,
+      rows: 40,
+      panes: [
+        { id: '%3', index: 0, x: 0, y: 0, width: 50, height: 40, command: 'zsh', label: 'left', cwd: '/a' },
+        { id: '%4', index: 1, x: 51, y: 0, width: 30, height: 40, command: 'codex', label: 'right', cwd: '/b' },
+      ],
+    });
+    expect(await lease.resizePaneBatch([{ paneId: '%3', cols: 50 }])).toBe(true);
+    expect(controls[0].commands.some((c) => c.includes('@anymux_layout_ratios'))).toBe(true);
+
+    // Re-expand 81 -> 161 cols: uses updated 5:3 intent => 100:60!
+    await lease.resizeWindow(161, 40);
+    const expandCmd = controls[0].commands.filter((c) => c.startsWith('select-layout -t @2 ')).at(-1);
+    expect(expandCmd).toContain('161x40,0,0{100x40,0,0,3,60x40,101,0,4}');
+
+    lease.close();
+    pool.dispose();
+  });
 });

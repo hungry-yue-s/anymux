@@ -1,5 +1,13 @@
 import { describe, it, expect } from 'vitest';
-import { parseTmuxLayout, tmuxLayoutChecksum } from '../../lib/terminal/tmux-layout.js';
+import {
+  extractLayoutRatios,
+  layoutTopologySignature,
+  parseLayoutRatios,
+  parseTmuxLayout,
+  scaleTmuxLayout,
+  serializeTmuxLayout,
+  tmuxLayoutChecksum,
+} from '../../lib/terminal/tmux-layout.js';
 
 const withChecksum = (body) => `${tmuxLayoutChecksum(body)},${body}`;
 
@@ -72,5 +80,50 @@ describe('tmux layout parser', () => {
     expect(parseTmuxLayout(withChecksum('0x24,0,0,0'))).toBeNull();
     expect(parseTmuxLayout(withChecksum('80x24,0,0{40x24,0,0,1'))).toBeNull();
     expect(parseTmuxLayout(withChecksum('80x24,0,0{40x24,0,0,1}extra'))).toBeNull();
+  });
+
+  it('round-trips serialized layouts and scales asymmetrically split trees proportionally across shrink and expand', () => {
+    const src = withChecksum('121x40,0,0{30x40,0,0,1,90x40,31,0,2}');
+    const tree = parseTmuxLayout(src);
+    expect(serializeTmuxLayout(tree)).toBe(src);
+    expect(layoutTopologySignature(tree)).toBe('row(pane(%1),pane(%2))');
+
+    const intent = extractLayoutRatios(tree);
+    expect(parseLayoutRatios(JSON.stringify(intent))).toEqual(intent);
+
+    // Shrink 121 -> 81 cols: separator=1, 80 usable cols in 1:3 => 20:60 (NOT 10:70 equal subtraction)
+    const shrunkStr = scaleTmuxLayout(tree, 81, 30, intent);
+    const shrunk = parseTmuxLayout(shrunkStr);
+    expect(shrunk.children.map((c) => [c.paneId, c.width, c.height, c.x])).toEqual([
+      ['%1', 20, 30, 0],
+      ['%2', 60, 30, 21],
+    ]);
+
+    // Extreme shrink where pane %1 (5% weight of 9 => clamped to 1 col), then re-expand to 201 cols:
+    // passing original `intent` recovers exact 1:3 (50:150) rather than drifting!
+    const extremeTinyStr = withChecksum('100x40,0,0{5x40,0,0,1,94x40,6,0,2}');
+    const tinyIntent = extractLayoutRatios(parseTmuxLayout(extremeTinyStr));
+    const clampedStr = scaleTmuxLayout(parseTmuxLayout(extremeTinyStr), 11, 20, tinyIntent);
+    const clamped = parseTmuxLayout(clampedStr);
+    expect(clamped.children[0].width).toBe(1);
+    expect(clamped.children[1].width).toBe(9);
+
+    const restoredStr = scaleTmuxLayout(clamped, 100, 40, tinyIntent);
+    const restored = parseTmuxLayout(restoredStr);
+    expect(restored.children.map((c) => c.width)).toEqual([5, 94]);
+  });
+
+  it('scales nested mixed splits proportionally and honors pane-border minimums', () => {
+    const nested = parseTmuxLayout(withChecksum('160x48,0,0{40x48,0,0,5,119x48,41,0[119x12,41,0,6,119x35,41,13{59x35,41,13,7,59x35,101,13,8}]}'));
+    const intent = extractLayoutRatios(nested);
+    const scaled = parseTmuxLayout(scaleTmuxLayout(nested, 80, 24, intent, {
+      paneMinById: new Map([['%6', { w: 1, h: 2 }]]),
+    }));
+    expect(scaled.width).toBe(80);
+    expect(scaled.height).toBe(24);
+    expect(scaled.children[0].width).toBe(20);
+    expect(scaled.children[1].width).toBe(59);
+    expect(scaled.children[1].children[0].height).toBeGreaterThanOrEqual(5);
+    expect(scaled.children[1].children[1].children.map((c) => c.width)).toEqual([29, 29]);
   });
 });

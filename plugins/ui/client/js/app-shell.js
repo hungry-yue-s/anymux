@@ -1162,17 +1162,42 @@
       this._serverPickerAnchor = null;
     },
 
-    setSidebarCollapsed: function (collapsed) {
+    _applySidebarCollapsedDom: function (collapsed) {
       var app = global.document.querySelector('.ms-app');
       if (!app) return;
       app.classList.toggle('sidebar-collapsed', Boolean(collapsed));
-      global.Store.setUi({ sidebarCollapsed: Boolean(collapsed) });
       var toggle = global.document.querySelector('.sidebar-toggle');
       if (toggle) {
         var label = collapsed ? '展开侧边栏' : '收起侧边栏';
         toggle.setAttribute('aria-expanded', String(!collapsed));
         toggle.setAttribute('aria-label', label);
         toggle.title = label;
+      }
+    },
+
+    setSidebarCollapsed: function (collapsed) {
+      var next = Boolean(collapsed);
+      this._sidebarAutoCollapsed = false;
+      this._sidebarManualNarrowOverride = !next && global.innerWidth >= 768 && global.innerWidth < 960;
+      this._applySidebarCollapsedDom(next);
+      global.Store.setUi({ sidebarCollapsed: next });
+    },
+
+    syncResponsiveSidebar: function () {
+      var ui = global.Store && global.Store.getState && global.Store.getState().ui;
+      if (!ui) return;
+      var w = Number(global.innerWidth) || 0;
+      if (w >= 768 && w < 960) {
+        if (!ui.sidebarCollapsed && !this._sidebarManualNarrowOverride) {
+          this._sidebarAutoCollapsed = true;
+          this._applySidebarCollapsedDom(true);
+        }
+      } else if (w >= 960) {
+        this._sidebarManualNarrowOverride = false;
+        if (this._sidebarAutoCollapsed) {
+          this._sidebarAutoCollapsed = false;
+          this._applySidebarCollapsedDom(Boolean(ui.sidebarCollapsed));
+        }
       }
     },
 
@@ -1193,6 +1218,7 @@
       var ui = global.Store.getState().ui;
       this.setSidebarWidth(ui.sidebarWidth);
       this.setSidebarCollapsed(ui.sidebarCollapsed);
+      this.syncResponsiveSidebar();
     },
   };
 
@@ -1250,6 +1276,10 @@
   global.document.addEventListener('anymux-native-fullscreen', function (event) {
     var active = Boolean(event && event.detail && event.detail.active);
     global.document.documentElement.classList.toggle('tmux-native-fullscreen', active);
+  });
+
+  global.addEventListener('resize', function () {
+    AppShell.syncResponsiveSidebar();
   });
 
   global.document.addEventListener('click', function (event) {

@@ -83,6 +83,8 @@ var FilePreview = (function () {
   var _sideSetWidth = null;
   var BLOCK_SIDE_WIDTH = 560;
   var BLOCK_WIDTH_KEY = 'anymux_block_side_width';
+  var BLOCK_RATIO_KEY = 'anymux_block_side_ratio_v1';
+  var _dockWidthRatio = 0;
   var PREFS_KEY = 'anymux_dock_prefs_v1';
   var MAX_PREFS_ENTRIES = 64;
   var _applyingRemote = false;
@@ -262,11 +264,15 @@ var FilePreview = (function () {
         return null;
       }
       var width = Number(parsed.width);
+      var ratio = Number(parsed.ratio);
+      var ratioForWidth = Number(parsed.ratioForWidth);
       var loaded = {
         tabs: tabs,
         activePath: typeof parsed.activePath === 'string' ? parsed.activePath : tabs[0].path,
         hidden: parsed.hidden === true,
         width: isFinite(width) && width > 0 ? width : 0,
+        ratio: isFinite(ratio) && ratio > 0 && ratio <= 0.7 ? ratio : 0,
+        ratioForWidth: isFinite(ratioForWidth) && ratioForWidth > 0 ? ratioForWidth : 0,
       };
       if (typeof parsed.activeBlock === 'string') loaded.activeBlock = parsed.activeBlock;
       if (Array.isArray(parsed.order)) {
@@ -279,7 +285,7 @@ var FilePreview = (function () {
     }
   }
 
-  function _persistDockState(widthOverride) {
+  function _persistDockState(widthOverride, ratioOverride) {
     var key = _currentDockStateKey();
     if (_persistenceSuspended || !key) return;
     if (_dockTabs.length === 0 && !(_queuedDockDocuments[_dockContextKey] || []).length) {
@@ -288,11 +294,23 @@ var FilePreview = (function () {
       return;
     }
     var active = _activeDockTab();
+    var bounds = _sideWidthBounds();
     var width = Number(widthOverride) || 0;
     if (!width && _dockOverlay) {
       width = parseFloat(_dockOverlay.style.flexBasis)
         || (_dockOverlay.isConnected ? _dockOverlay.getBoundingClientRect().width : 0);
     }
+    var ratio = Number(ratioOverride);
+    if (!isFinite(ratio) || ratio <= 0 || ratio > 0.7) {
+      if (Number(widthOverride) > 0 && bounds.available > 0) {
+        ratio = _ratioFromWidth(widthOverride, bounds.available);
+      } else if (_dockWidthRatio > 0 && _dockWidthRatio <= 0.7) {
+        ratio = _dockWidthRatio;
+      } else {
+        ratio = width > 0 && bounds.available > 0 ? _ratioFromWidth(width, bounds.available) : 0;
+      }
+    }
+    if (ratio > 0 && ratio <= 0.7) _dockWidthRatio = ratio;
     var state = {
       version: DOCK_STATE_VERSION,
       tabs: _fileTabs().slice(0, MAX_PERSISTED_DOCK_TABS).map(function (tab) {
@@ -308,6 +326,10 @@ var FilePreview = (function () {
       hidden: _dockHidden,
       width: width > 0 ? Math.round(width) : 0,
     };
+    if (ratio > 0 && ratio <= 0.7) {
+      state.ratio = Math.round(ratio * 1000000) / 1000000;
+      if (state.width > 0) state.ratioForWidth = state.width;
+    }
     if (active && active.block) state.activeBlock = active.block.persistKey;
     // Files and blocks in the order they are shown, which the user may have dragged.
     state.order = _dockTabs.map(_tabOrderKey).slice(0, MAX_PERSISTED_TAB_ORDER);
@@ -318,6 +340,7 @@ var FilePreview = (function () {
       _savePrefs(_dockContextKey, {
         hidden: _dockHidden,
         width: state.width,
+        ratio: state.ratio || 0,
         order: state.order,
         activeBlock: state.activeBlock || null,
       });
@@ -326,6 +349,7 @@ var FilePreview = (function () {
     _savePrefs(_dockContextKey, {
       hidden: _dockHidden,
       width: state.width,
+      ratio: state.ratio || 0,
     });
     try { window.localStorage.setItem(key, JSON.stringify(state)); } catch (_) {}
   }
@@ -435,7 +459,13 @@ var FilePreview = (function () {
     // widths. Keep the file in a modal when the 320px minimum cannot fit.
     var max = Math.floor(available * 0.7);
     var preferred = Math.min(max, 360);
-    return { min: min, max: max, preferred: Math.min(preferred, max) };
+    return { available: available, min: min, max: max, preferred: Math.min(preferred, max) };
+  }
+
+  function _ratioFromWidth(width, available) {
+    if (!available || available <= 0 || !width || width <= 0) return 0;
+    var raw = Math.min(0.7, Math.max(0.05, width / available));
+    return Math.round(raw * 1000000) / 1000000;
   }
 
   function _clampSideWidth(width) {
@@ -465,10 +495,15 @@ var FilePreview = (function () {
     sideOverlay.insertBefore(grip, sideOverlay.firstChild);
 
     var startX = 0, startWidth = 0;
-    function rememberBlockWidth(width) {
+    function rememberBlockWidth(width, ratio) {
       var active = _activeDockTab();
       if (!active || !active.block) return;
-      try { window.localStorage.setItem(BLOCK_WIDTH_KEY, String(Math.round(width))); } catch (_) {}
+      try {
+        window.localStorage.setItem(BLOCK_WIDTH_KEY, String(Math.round(width)));
+        if (ratio > 0 && ratio <= 0.7) {
+          window.localStorage.setItem(BLOCK_RATIO_KEY, String(ratio));
+        }
+      } catch (_) {}
     }
     function setWidth(width) {
       var next = Math.round(_clampSideWidth(width));
@@ -496,8 +531,9 @@ var FilePreview = (function () {
       e.preventDefault();
       e.stopPropagation();
       var next = setWidth(width);
-      rememberBlockWidth(next);
-      _persistDockState(next);
+      _dockWidthRatio = _ratioFromWidth(next, _sideWidthBounds().available);
+      rememberBlockWidth(next, _dockWidthRatio);
+      _persistDockState(next, _dockWidthRatio);
     }
     setWidth(parseFloat(sideOverlay.style.width) || 0);
     _sideSetWidth = setWidth;
@@ -507,8 +543,9 @@ var FilePreview = (function () {
       window.removeEventListener('pointercancel', onUp);
       document.body.classList.remove('fp-side-resizing');
       var width = Math.round(sideOverlay.getBoundingClientRect().width);
-      rememberBlockWidth(width);
-      _persistDockState(width);
+      _dockWidthRatio = _ratioFromWidth(width, _sideWidthBounds().available);
+      rememberBlockWidth(width, _dockWidthRatio);
+      _persistDockState(width, _dockWidthRatio);
     }
     function onDown(e) {
       if (e.button !== 0) return;
@@ -534,8 +571,9 @@ var FilePreview = (function () {
         items: [
           { id: 'reset-width', label: '重置宽度 (420px)', action: function () {
             var next = setWidth(420);
-            rememberBlockWidth(next);
-            _persistDockState(next);
+            _dockWidthRatio = _ratioFromWidth(next, _sideWidthBounds().available);
+            rememberBlockWidth(next, _dockWidthRatio);
+            _persistDockState(next, _dockWidthRatio);
           } },
           { id: 'toggle-max', label: maximized ? '还原右侧栏' : '最大化右侧栏', action: function () {
             _toggleDockMaximize();
@@ -553,8 +591,12 @@ var FilePreview = (function () {
         _hideDock();
         return;
       }
+      var bounds = _sideWidthBounds();
       var current = parseFloat(sideOverlay.style.flexBasis) || sideOverlay.getBoundingClientRect().width;
-      setWidth(current);
+      var target = _dockWidthRatio > 0 && bounds.available > 0
+        ? Math.round(bounds.available * _dockWidthRatio)
+        : current;
+      setWidth(target);
     }
     window.addEventListener('resize', onLayoutResize);
     var layoutObserver = null;
@@ -1075,23 +1117,53 @@ var FilePreview = (function () {
     _dockRestoreButton = null;
   }
 
+  function _resolveTargetDockWidth(savedWidth, savedRatio, ratioForWidth, bounds) {
+    var available = bounds.available;
+    var ratio = Number(savedRatio);
+    var width = Number(savedWidth) || 0;
+    var boundWidth = Number(ratioForWidth) || 0;
+    var ratioValid = isFinite(ratio) && ratio > 0 && ratio <= 0.7;
+    var widthMatchesRatio = ratioValid && (!width || (boundWidth > 0 && Math.abs(width - boundWidth) <= 1));
+    if (ratioValid && available > 0 && widthMatchesRatio) {
+      _dockWidthRatio = ratio;
+      return _clampSideWidth(Math.round(available * ratio));
+    }
+    var clamped = _clampSideWidth(width);
+    _dockWidthRatio = _ratioFromWidth(clamped, available);
+    return clamped;
+  }
+
   function _showDock(preserveRequest) {
     if (!_dockOverlay || _dockTabs.length === 0 || !_canDockRight()) return;
     _dockHidden = false;
     _removeDockRestoreButton();
     var layout = _dockLayout();
     if (layout && !_restoringHidden) layout.appendChild(_dockOverlay);
+    var bounds = _sideWidthBounds();
     var savedWidth = 0;
+    var savedRatio = 0;
+    var savedRatioForWidth = 0;
     var persisted = _loadDockState();
-    if (persisted) savedWidth = persisted.width;
-    // A dock holding only blocks has no saved state yet: keep its current width.
-    if (!savedWidth) savedWidth = parseFloat(_dockOverlay.style.width) || 0;
-    // Nothing to go on, and git needs more room than a document.
-    if (!savedWidth && _fileTabs().length === 0) {
-      try { savedWidth = Number(window.localStorage.getItem(BLOCK_WIDTH_KEY)) || 0; } catch (_) {}
-      savedWidth = savedWidth || BLOCK_SIDE_WIDTH;
+    if (persisted) {
+      savedWidth = persisted.width;
+      savedRatio = persisted.ratio || 0;
+      savedRatioForWidth = persisted.ratioForWidth || 0;
     }
-    var dockWidth = _clampSideWidth(savedWidth);
+    // A dock holding only blocks has no saved state yet: keep its current width.
+    if (!savedRatio && !savedWidth) {
+      if (_dockWidthRatio > 0) savedRatio = _dockWidthRatio;
+      else savedWidth = parseFloat(_dockOverlay.style.width) || 0;
+    }
+    // Nothing to go on, and git needs more room than a document.
+    if (!savedRatio && !savedWidth && _fileTabs().length === 0) {
+      try {
+        savedRatio = Number(window.localStorage.getItem(BLOCK_RATIO_KEY)) || 0;
+        savedWidth = Number(window.localStorage.getItem(BLOCK_WIDTH_KEY)) || 0;
+      } catch (_) {}
+      if (!(savedRatio > 0 && savedRatio <= 0.7)) savedRatio = 0;
+      if (!savedRatio && !savedWidth) savedWidth = BLOCK_SIDE_WIDTH;
+    }
+    var dockWidth = _resolveTargetDockWidth(savedWidth, savedRatio, savedRatioForWidth, bounds);
     _dockOverlay.style.flexBasis = dockWidth + 'px';
     _dockOverlay.style.width = dockWidth + 'px';
     _dockOverlay.classList.toggle('fp-restoring', _restoringDock);
@@ -1101,15 +1173,16 @@ var FilePreview = (function () {
     }
     _activateDockTab(_activeDockTabId || _dockTabs[0].id, preserveRequest);
     _installSideResize();
-    _persistDockState(dockWidth);
+    _persistDockState(dockWidth, _dockWidthRatio);
   }
 
   /** The dock's place in the layout, empty and invisible until _showDock fills it. */
-  function _reserveDockSpace(savedWidth) {
+  function _reserveDockSpace(savedWidth, savedRatio, ratioForWidth) {
     var layout = _dockLayout();
     if (!layout) return;
     _ensureDockOverlay();
-    var dockWidth = _clampSideWidth(savedWidth);
+    var bounds = _sideWidthBounds();
+    var dockWidth = _resolveTargetDockWidth(savedWidth, savedRatio, ratioForWidth, bounds);
     _dockOverlay.style.flexBasis = dockWidth + 'px';
     _dockOverlay.style.width = dockWidth + 'px';
     _dockOverlay.classList.add('fp-restoring');
@@ -1361,6 +1434,7 @@ var FilePreview = (function () {
       _stopAutoRefresh();
     }
     _cleanupSideResize();
+    _dockWidthRatio = 0;
     if (!keepModal) _pauseVideos(separateOverlay);
     _dockTabs.forEach(function (tab) { _pauseVideos(tab.modal); });
     if (!keepModal) {
@@ -2156,7 +2230,7 @@ var FilePreview = (function () {
     _savedTabOrder = saved.order || saved.tabs.map(function (t) { return 'file:' + t.path; });
     // The terminal measures itself next, and its tabs take a while to load. Holding
     // the space now means it attaches at the final size, not once more when they arrive.
-    if (!saved.hidden) _reserveDockSpace(saved.width);
+    if (!saved.hidden) _reserveDockSpace(saved.width, saved.ratio, saved.ratioForWidth);
 
     var eagerLoaded = false;
     var primaryIndex = 0;

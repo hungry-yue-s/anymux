@@ -1407,4 +1407,34 @@ describe('native titlebar drag regions', () => {
     expect(messages.at(-1)).toMatchObject({ height: 0, exclusions: [] });
     dom.window.close();
   });
+
+  it('temporarily auto-collapses expanded sidebar in narrow desktop band (< 960px) and restores when widened', () => {
+    const ctx = loadShell();
+    const app = ctx.document.querySelector('.ms-app');
+    Object.defineProperty(ctx.win, 'innerWidth', { value: 1200, writable: true, configurable: true });
+    ctx.Shell.setSidebarCollapsed(false);
+    ctx.Shell.syncResponsiveSidebar();
+    expect(app.classList.contains('sidebar-collapsed')).toBe(false);
+    expect(ctx.Store.getState().ui.sidebarCollapsed).toBe(false);
+
+    // Shrink below 960px -> DOM collapses, but Store preference stays expanded (false)
+    ctx.win.innerWidth = 840;
+    ctx.win.dispatchEvent(new ctx.win.Event('resize'));
+    expect(app.classList.contains('sidebar-collapsed')).toBe(true);
+    expect(ctx.Store.getState().ui.sidebarCollapsed).toBe(false);
+
+    // Widen back >= 960px -> restores expanded automatically
+    ctx.win.innerWidth = 1100;
+    ctx.win.dispatchEvent(new ctx.win.Event('resize'));
+    expect(app.classList.contains('sidebar-collapsed')).toBe(false);
+
+    // Manual expand inside narrow band stays respected while narrow
+    ctx.win.innerWidth = 840;
+    ctx.win.dispatchEvent(new ctx.win.Event('resize'));
+    expect(app.classList.contains('sidebar-collapsed')).toBe(true);
+    ctx.Shell.setSidebarCollapsed(false);
+    ctx.Shell.syncResponsiveSidebar();
+    expect(app.classList.contains('sidebar-collapsed')).toBe(false);
+    ctx.win.close();
+  });
 });

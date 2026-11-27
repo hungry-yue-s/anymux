@@ -1530,6 +1530,39 @@ describe('file preview dock tabs', () => {
     preview.closeDocked(); dom.window.close();
   });
 
+  it('scales right dock proportionally by intent ratio on viewport resize without clobbering ratio', async () => {
+    const { dom, preview } = createPreview();
+    const doc = dom.window.document;
+    Object.defineProperty(dom.window, 'innerWidth', { value: 1600, writable: true, configurable: true });
+    const main = doc.querySelector('.ms-app.mode-terminal .ms-main');
+    let workstageWidth = 1000;
+    main.getBoundingClientRect = () => ({ width: workstageWidth });
+    await preview.openFile('/tmp/one.md', '%1'); dockCurrent(dom);
+    const dock = doc.querySelector('.fp-dock');
+    const grip = dock.querySelector('.fp-side-resizer');
+    dock.getBoundingClientRect = () => ({ width: parseFloat(dock.style.width) });
+
+    // Drag wider by 140px => 360 + 140 = 500px (50% ratio of 1000px workstage)
+    grip.dispatchEvent(new dom.window.MouseEvent('pointerdown', { clientX: 600, bubbles: true }));
+    dom.window.dispatchEvent(new dom.window.MouseEvent('pointermove', { clientX: 460, bubbles: true }));
+    dom.window.dispatchEvent(new dom.window.MouseEvent('pointerup', { bubbles: true }));
+    expect(dock.style.width).toBe('500px');
+
+    // Shrink workstage 1000 -> 800: scales proportionally to 400px (50%)
+    workstageWidth = 800;
+    dom.window.dispatchEvent(new dom.window.Event('resize'));
+    expect(doc.querySelector('.fp-dock').style.width).toBe('400px');
+
+    // Shrink below auto-hide threshold then expand back to 1400 -> restores at 700px (50%)
+    workstageWidth = 440;
+    dom.window.dispatchEvent(new dom.window.Event('resize'));
+    expect(doc.querySelector('.fp-dock')).toBeNull();
+    workstageWidth = 1400;
+    doc.querySelector('.fp-dock-restore').click();
+    expect(doc.querySelector('.fp-dock').style.width).toBe('700px');
+    preview.closeDocked(); dom.window.close();
+  });
+
   it('opens the palette above the file modal and returns focus on Escape without closing the file', async () => {
     const { dom, preview } = createPreview();
     const doc = dom.window.document;
