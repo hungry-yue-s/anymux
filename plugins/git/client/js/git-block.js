@@ -939,6 +939,9 @@
         var box = el('div', 'git-diff-scroll');
         var files = ui.renderDiffInto(box, data.diff, {
           fileHeaders: false,
+          reviewScope: 'git:' + (status && status.root || target.path || ''),
+          paneId: (ui.selectedContext() || {}).paneId,
+          serverId: api.serverId,
           actions: file.untracked ? null : function (f, hunk, picked) {
             function apply(reverse, cached, all) {
               var patch = ui.buildPatch(f, hunk, all ? null : picked(), reverse);
@@ -1671,7 +1674,7 @@
 
     // Background refresh while the block is on screen.
     function poll() {
-      if (api.isVisible() && document.visibilityState === 'visible' && !document.querySelector('.blk-dialog-overlay')) load(false);
+      if (api.isVisible() && document.visibilityState === 'visible' && !document.querySelector('.blk-dialog-overlay, [data-blk-note-editor]')) load(false);
     }
     pollTimer = setInterval(poll, 4000);
     function onFocus() { poll(); }

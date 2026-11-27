@@ -57,7 +57,8 @@
 body.fp-side-resizing .fp-side-resizer::after { width: 3px; background: var(--fp-accent); }
 .fp-side-resizer:focus-visible { outline: 2px solid var(--fp-accent); }
 .fp-dock-tabs {
-  min-height: 34px;
+  min-height: 36px;
+  height: 36px;
   gap: 1px;
   padding: 0 6px;
   background: color-mix(in srgb, var(--workspace-sidebar, var(--fp-panel)) 55%, var(--fp-bg));
@@ -74,7 +75,7 @@ body.fp-side-resizing .fp-side-resizer::after { width: 3px; background: var(--fp
 .fp-dock-tab-item.fp-drop-after { box-shadow: inset -2px 0 0 var(--fp-accent); }
 .fp-dock-tab-close { width: 22px; height: 22px; border-radius: 4px; opacity: 0.72; }
 .fp-dock-tab-close:hover { opacity: 1; background: var(--fp-hover); color: var(--accent-red, var(--fp-text)); }
-.fp-overlay.fp-side .fp-header { min-height: 36px; padding: 4px 10px; gap: 6px; background: transparent; border-bottom: 1px solid color-mix(in srgb, var(--fp-line) 72%, transparent); }
+.fp-overlay.fp-side .fp-header { min-height: 30px; padding: 2px 10px; gap: 6px; background: transparent; border-bottom: 1px solid color-mix(in srgb, var(--fp-line) 72%, transparent); }
 .fp-overlay.fp-side .fp-btn { flex-basis: 28px; width: 28px; min-width: 28px; height: 28px; }
 .fp-overlay.fp-side .fp-title { font-size: 12px; font-weight: 400; color: var(--fp-muted); direction:rtl; text-align:left; }
 .fp-overlay.fp-side .fp-actions .fp-btn-more { width:auto; min-width:58px; flex-basis:auto; }
@@ -175,6 +176,9 @@ html[data-native-transparency] .fp-dock .fp-dock-tab-item.active {
   background: transparent;
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
+}
+html:is([data-native-transparency], [data-wallpaper-active]) :is(.fp-dock-tabs, .fp-dir-crumb) {
+  background: transparent;
 }
 html[data-native-transparency] .fp-overlay.fp-side.fp-side-maximized {
   background: color-mix(in srgb, var(--fp-bg) 82%, transparent);
@@ -278,3 +282,98 @@ html[data-wallpaper-active] :is(.fp-mermaid-embed, .fp-mermaid-dialog) [data-fp-
 @media (prefers-reduced-motion: reduce) {
   .fp-overlay, .fp-modal, .fp-side-resizer::after { animation: none; transition: none; }
 }
+.fp-image-wrap {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 240px;
+}
+.fp-panzoom-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--fp-line);
+  background: var(--fp-panel);
+  font-size: 12px;
+}
+.fp-panzoom-btn {
+  min-height: 26px;
+  padding: 2px 8px;
+  border: 1px solid var(--fp-line);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--fp-text);
+  font: inherit;
+  cursor: pointer;
+}
+.fp-panzoom-btn:hover,
+.fp-panzoom-btn.is-active {
+  background: var(--fp-hover);
+  border-color: var(--fp-accent);
+}
+.fp-panzoom-meta { margin-left: auto; color: var(--fp-muted); font-variant-numeric: tabular-nums; }
+.fp-panzoom-stage {
+  position: relative;
+  flex: 1 1 auto;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: grab;
+  user-select: none;
+}
+.fp-panzoom-stage.is-dragging { cursor: grabbing; }
+.fp-panzoom-stage.is-checkerboard {
+  background-image:
+    linear-gradient(45deg, rgba(128, 128, 128, 0.16) 25%, transparent 25%),
+    linear-gradient(-45deg, rgba(128, 128, 128, 0.16) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, rgba(128, 128, 128, 0.16) 75%),
+    linear-gradient(-45deg, transparent 75%, rgba(128, 128, 128, 0.16) 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+}
+.fp-panzoom-stage img {
+  transform-origin: center center;
+  max-width: none;
+  pointer-events: none;
+}
+.fp-svg-source { flex: 1 1 auto; overflow: auto; }
+.fp-md-block-row { position: relative; }
+.fp-md-note-btn {
+  position: absolute;
+  right: 4px;
+  top: 2px;
+  opacity: 0;
+  padding: 1px 6px;
+  border: 1px solid var(--fp-line);
+  border-radius: 4px;
+  background: var(--fp-panel);
+  color: var(--fp-accent);
+  font-size: 11px;
+  cursor: pointer;
+}
+[data-fp-source-line]:hover .fp-md-note-btn,
+[data-fp-source-line] .fp-md-note-btn:focus-visible { opacity: 1; }
+.fp-md-note-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 6px 0 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--fp-accent);
+  border-radius: 7px;
+  background: var(--fp-panel);
+}
+.fp-md-note-editor textarea {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--fp-line);
+  border-radius: 5px;
+  background: var(--fp-bg);
+  color: var(--fp-text);
+  font: inherit;
+  font-size: 12px;
+}
+.fp-md-note-actions { display: flex; gap: 6px; justify-content: flex-end; }

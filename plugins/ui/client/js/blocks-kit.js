@@ -704,6 +704,8 @@ var Blocks = (function () {
       box.appendChild(bar);
       var rows = el('div', 'blk-hunk-lines');
       box.appendChild(rows);
+      var notesBar = el('div', 'blk-diff-notes-bar');
+      box.appendChild(notesBar);
       fileBox.querySelector('.blk-diff-filebody').appendChild(box);
       var m = /^@@ -(\d+)(?:,\d+)? \+(\d+)/.exec(hunk.header);
       var chars = 0;
@@ -711,10 +713,102 @@ var Blocks = (function () {
         chars += line.length;
         return chars > DIFF_RENDER_CHARS;
       });
-      return {
-        hunk: hunk, box: box, rows: rows, selected: selected, pairs: large ? {} : pairChanges(hunk.lines),
+      var hunkCtx = {
+        file: file, hunk: hunk, box: box, rows: rows, notesBar: notesBar, selected: selected,
+        pairs: large ? {} : pairChanges(hunk.lines),
         oldNo: m ? Number(m[1]) : 0, newNo: m ? Number(m[2]) : 0,
       };
+      renderHunkNotes(hunkCtx);
+      return hunkCtx;
+    }
+
+    var reviewScopeKey = options.reviewScope || (files.map(function (f) { return f.name; }).join('|') || 'diff');
+    var dragState = null;
+
+    function rowLineNo(row) {
+      var n = row.dataset.diffLineNew || row.dataset.diffLineOld || '1';
+      return Math.max(1, Number(n) || 1);
+    }
+
+    function clearDragSelection() {
+      container.querySelectorAll('.blk-line.is-note-range').forEach(function (r) {
+        r.classList.remove('is-note-range');
+      });
+    }
+
+    function openInlineNoteEditor(hCtx, anchorRow, startLine, endLine, excerpt, side) {
+      if (!window.ReviewNotes) return;
+      var existing = hCtx.box.querySelector('.blk-diff-note-editor');
+      if (existing) existing.remove();
+      var editor = el('form', 'blk-diff-note-editor');
+      editor.setAttribute('data-blk-note-editor', '1');
+      var head = el('div', 'blk-diff-note-editor-head', hCtx.file.name + ':L' + startLine + (endLine > startLine ? '-L' + endLine : ''));
+      var textarea = document.createElement('textarea');
+      textarea.className = 'blk-diff-note-input';
+      textarea.rows = 2;
+      textarea.placeholder = '输入针对该代码段的批注…';
+      var btns = el('div', 'blk-diff-note-editor-actions');
+      var saveBtn = document.createElement('button');
+      saveBtn.type = 'submit';
+      saveBtn.className = 'blk-btn-ghost blk-btn-small';
+      saveBtn.textContent = '添加批注';
+      var cancelBtn = button('取消', function () { editor.remove(); }, { className: 'blk-btn-ghost blk-btn-small' });
+      btns.append(saveBtn, cancelBtn);
+      editor.append(head, textarea, btns);
+      editor.addEventListener('click', function (e) { e.stopPropagation(); });
+      editor.addEventListener('submit', function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        var val = textarea.value.trim();
+        if (!val) return;
+        window.ReviewNotes.addNote({
+          scopeKey: reviewScopeKey,
+          path: hCtx.file.name,
+          startLine: startLine,
+          endLine: endLine,
+          side: side,
+          excerpt: excerpt,
+          comment: val,
+        });
+        editor.remove();
+        renderHunkNotes(hCtx);
+      });
+      if (anchorRow && anchorRow.nextSibling) hCtx.rows.insertBefore(editor, anchorRow.nextSibling);
+      else hCtx.rows.appendChild(editor);
+      textarea.focus();
+    }
+
+    function renderHunkNotes(hCtx) {
+      if (!hCtx || !hCtx.notesBar) return;
+      hCtx.notesBar.replaceChildren();
+      if (!window.ReviewNotes || options.reviewNotes === false) return;
+      var hunkStart = Number((/^@@ -\d+(?:,\d+)? \+(\d+)/.exec(hCtx.hunk.header) || [])[1] || 1);
+      var hunkEnd = hunkStart + Math.max(1, hCtx.hunk.lines.length);
+      var allNotes = window.ReviewNotes.listNotes(reviewScopeKey).filter(function (n) {
+        return n.path === hCtx.file.name && n.startLine >= hunkStart && n.startLine <= hunkEnd;
+      });
+      if (!allNotes.length) return;
+      allNotes.forEach(function (n) {
+        var chip = el('div', 'blk-diff-note-chip');
+        var loc = n.path + ':L' + n.startLine + (n.endLine > n.startLine ? '-L' + n.endLine : '');
+        chip.appendChild(el('strong', 'blk-diff-note-loc', loc));
+        chip.appendChild(el('span', 'blk-diff-note-body', n.comment));
+        var del = button('×', function (e) {
+          e.stopPropagation();
+          window.ReviewNotes.removeNote(reviewScopeKey, n.id);
+          renderHunkNotes(hCtx);
+        }, { className: 'blk-btn-ghost blk-btn-small', label: '删除批注' });
+        chip.appendChild(del);
+        hCtx.notesBar.appendChild(chip);
+      });
+      var sendAll = button('注入到终端 (不回车)', function (e) {
+        e.stopPropagation();
+        window.ReviewNotes.injectToTerminal(window.ReviewNotes.listNotes(reviewScopeKey), {
+          paneId: options.paneId,
+          serverId: options.serverId,
+        }).catch(function (err) { toast(err); });
+      }, { className: 'blk-btn-ghost blk-btn-small blk-diff-note-inject' });
+      hCtx.notesBar.appendChild(sendAll);
     }
 
     function addRow(h, i) {
@@ -723,8 +817,45 @@ var Blocks = (function () {
       var row = el('div', 'blk-line' + (kind === '+' ? ' is-add' : kind === '-' ? ' is-del' : kind === '\\' ? ' is-meta' : ''));
       var a = kind === '+' || kind === '\\' ? '' : h.oldNo++;
       var b = kind === '-' || kind === '\\' ? '' : h.newNo++;
-      row.appendChild(el('span', 'blk-ln', String(a)));
-      row.appendChild(el('span', 'blk-ln', String(b)));
+      row.dataset.diffFile = h.file.name;
+      row.dataset.diffSide = kind === '-' ? 'old' : 'new';
+      row.dataset.diffLineOld = a === '' ? '' : String(a);
+      row.dataset.diffLineNew = b === '' ? '' : String(b);
+      var lnA = el('span', 'blk-ln', String(a));
+      var lnB = el('span', 'blk-ln', String(b));
+      if (options.reviewNotes !== false && typeof window !== 'undefined' && window.ReviewNotes && kind !== '\\') {
+        var noteBtn = document.createElement('button');
+        noteBtn.type = 'button';
+        noteBtn.className = 'blk-diff-note-btn';
+        noteBtn.textContent = '+';
+        noteBtn.setAttribute('aria-label', '添加行级评审批注（可拖拽选多行）');
+        noteBtn.addEventListener('mousedown', function (e) {
+          e.stopPropagation();
+          e.preventDefault();
+          dragState = { h: h, anchorRow: row, endRow: row, rows: [row] };
+          clearDragSelection();
+          row.classList.add('is-note-range');
+        });
+        noteBtn.addEventListener('click', function (e) {
+          e.stopPropagation();
+          e.preventDefault();
+        });
+        row.addEventListener('mouseenter', function () {
+          if (!dragState || dragState.h !== h) return;
+          dragState.endRow = row;
+          var allRows = Array.from(h.rows.querySelectorAll('.blk-line'));
+          var i0 = allRows.indexOf(dragState.anchorRow);
+          var i1 = allRows.indexOf(row);
+          if (i0 === -1 || i1 === -1) return;
+          var lo = Math.min(i0, i1), hi = Math.max(i0, i1);
+          clearDragSelection();
+          dragState.rows = allRows.slice(lo, hi + 1);
+          dragState.rows.forEach(function (r) { r.classList.add('is-note-range'); });
+        });
+        lnB.appendChild(noteBtn);
+      }
+      row.appendChild(lnA);
+      row.appendChild(lnB);
       var code = codeWithSpan(line, h.pairs[i]);
       row.appendChild(code);
       if (line.length - 1 > DIFF_LINE_CHARS) {
@@ -811,6 +942,24 @@ var Blocks = (function () {
       }
     }
     draw(budget);
+    if (options.reviewNotes !== false && typeof window !== 'undefined' && window.ReviewNotes) {
+      var onDocMouseUp = function () {
+        if (!dragState) return;
+        var st = dragState;
+        dragState = null;
+        clearDragSelection();
+        var startL = Math.min.apply(null, st.rows.map(rowLineNo));
+        var endL = Math.max.apply(null, st.rows.map(rowLineNo));
+        var excerpt = st.rows.map(function (r) {
+          var codeEl = r.querySelector('code');
+          return codeEl ? codeEl.textContent : '';
+        }).filter(Boolean).join('\n');
+        openInlineNoteEditor(st.h, st.endRow, startL, endL, excerpt, st.anchorRow.dataset.diffSide || 'new');
+      };
+      if (container.__blkNoteMouseUp) document.removeEventListener('mouseup', container.__blkNoteMouseUp);
+      container.__blkNoteMouseUp = onDocMouseUp;
+      document.addEventListener('mouseup', onDocMouseUp);
+    }
     return files;
   }
 

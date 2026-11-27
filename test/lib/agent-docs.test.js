@@ -275,6 +275,59 @@ describe('agent documents API', () => {
     expect(calls).toHaveLength(3);
   });
 
+  it('prefills multi-line text via bracketed paste-buffer without Enter and sanitizes ESC', async () => {
+    const { project, root } = await setup();
+    const { createTmuxApi } = await import('../../lib/tmux.js');
+    const recorded = [];
+    const mockTmux = createTmuxApi({
+      exec: async (_bin, args, opts = {}) => {
+        recorded.push({ args, input: opts.input });
+        if (args[0] === 'display-message') return { stdout: '0\n' };
+        return { stdout: '' };
+      },
+    });
+    await mockTmux.prefillText('%4', 'Line 1 \x1b[31mred\x1b[0m\nLine 2');
+    expect(recorded).toHaveLength(3);
+    expect(recorded[1].args[0]).toBe('load-buffer');
+    expect(recorded[1].input).toBe('Line 1 \u241b[31mred\u241b[0m\nLine 2');
+    expect(recorded[2].args.slice(0, 4)).toEqual(['paste-buffer', '-p', '-d', '-b']);
+    expect(recorded.flatMap((c) => c.args)).not.toContain('Enter');
+
+    const { createAgentDocsRouter } = await import('../../lib/api/agent-docs.js');
+    const prefilled = [];
+    const customApp = express();
+    customApp.use(express.json());
+    customApp.use('/api/agent-docs', createAgentDocsRouter({
+      pathGuard: await createPathGuard(() => [root.api]),
+      roots: () => [root.api],
+      typeText: () => {},
+      prefillText: async (paneId, text) => { prefilled.push([paneId, text]); },
+      getServerInstance: async () => '18130:1795755662',
+    }));
+
+    const okRes = await request(customApp).post('/api/agent-docs/prefill').send({
+      paneId: '%4',
+      text: 'Note line 1\nNote line 2 \x1b',
+      serverInstance: '18130:1795755662',
+    });
+    expect(okRes.status).toBe(200);
+    expect(prefilled).toEqual([['%4', 'Note line 1\nNote line 2 \u241b']]);
+
+    const overRes = await request(customApp).post('/api/agent-docs/prefill').send({
+      paneId: '%4',
+      text: 'x'.repeat(16 * 1024 + 1),
+    });
+    expect(overRes.status).toBe(400);
+
+    const staleRes = await request(customApp).post('/api/agent-docs/prefill').send({
+      paneId: '%4',
+      text: 'stale',
+      serverInstance: '9999:1',
+    });
+    expect(staleRes.status).toBe(409);
+    expect(project).toBeTruthy();
+  });
+
   it('passes the dock options of anymux open through, filled in for known documents', async () => {
     const { project, app, events } = await setup();
     await mkdir(join(project.native, '.superpowers', 'sdd', 'x'), { recursive: true });

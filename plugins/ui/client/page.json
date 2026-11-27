@@ -18,6 +18,7 @@
     { "order": 90, "script": "/js/api.js?v=3" },
     { "order": 100, "script": "/js/terminal-target.js?v=5" },
     { "order": 175, "script": "/js/blocks-kit.js" },
+    { "order": 177, "script": "/js/review-notes.js" },
     { "order": 180, "script": "/js/block-host.js?v=1" },
     { "order": 200, "script": "/js/mobile-ui.js?v=2" },
     { "order": 320, "script": "/js/app.js?v=18" },

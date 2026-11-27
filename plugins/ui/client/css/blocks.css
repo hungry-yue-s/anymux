@@ -39,7 +39,7 @@
 .blk-btn:focus-visible { outline: 2px solid var(--b-accent); outline-offset: 1px; }
 .blk-btn:disabled { opacity: .45; cursor: default; }
 .blk-btn .blk-svg { width: 15px; height: 15px; }
-.blk-btn-primary { background: var(--b-accent); border-color: var(--b-accent); color: #fff; }
+.blk-btn-primary { background: var(--b-accent); border-color: var(--b-accent); color: var(--workspace-bg, var(--b-bg)); font-weight: 600; }
 .blk-btn-primary:hover:not(:disabled) { background: color-mix(in srgb, var(--b-accent) 88%, #fff); }
 .blk-btn-ghost { background: transparent; border-color: transparent; color: var(--b-muted); }
 .blk-btn-ghost:hover:not(:disabled) { color: var(--b-text); }
@@ -52,7 +52,7 @@
 .blk-btn.has-badge { position: relative; color: var(--b-text); }
 .blk-btn.has-badge::after { content: ""; position: absolute; top: 5px; right: 5px; width: 6px; height: 6px; border-radius: 50%; background: var(--b-accent); box-shadow: 0 0 0 2px var(--b-panel); }
 .blk-btn .blk-kbd { margin-left: 2px; }
-.blk-btn-primary .blk-kbd kbd { color: rgba(255, 255, 255, .85); border-color: rgba(255, 255, 255, .35); background: transparent; }
+.blk-btn-primary .blk-kbd kbd { color: color-mix(in srgb, currentColor 82%, transparent); border-color: color-mix(in srgb, currentColor 35%, transparent); background: transparent; }
 
 .blk-kbd { display: inline-flex; align-items: center; gap: 3px; }
 .blk-kbd kbd, .cmd-palette-hint kbd {
@@ -93,7 +93,7 @@
 .blk-tag.is-key { color: var(--b-yellow); background: color-mix(in srgb, var(--b-yellow) 14%, transparent); }
 
 .blk-toolbar {
-  display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 44px; padding: 7px 12px;
+  display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 36px; padding: 4px 10px;
   border-bottom: 1px solid var(--b-line); box-sizing: border-box; flex: none; background: var(--b-panel); color: var(--b-text);
 }
 .blk-toolbar-sub { min-height: 40px; background: transparent; }
@@ -809,6 +809,70 @@ html[data-wallpaper-active] .blk-diff-filehead {
 html[data-wallpaper-active] :is(.blk-mode-float, .blk-mode-max, .blk-menu, .blk-dialog) {
   background: var(--g-float);
   box-shadow: var(--b-shadow), inset 0 1px 0 var(--g-edge);
-  -webkit-backdrop-filter: blur(var(--anymux-float-blur, 26px)) saturate(var(--anymux-wp-saturate, 1.25));
-  backdrop-filter: blur(var(--anymux-float-blur, 26px)) saturate(var(--anymux-wp-saturate, 1.25));
+  -webkit-backdrop-filter: blur(var(--anymux-float-blur, 26px)) saturate(var(--anymux-wp-saturate, 135%));
+  backdrop-filter: blur(var(--anymux-float-blur, 26px)) saturate(var(--anymux-wp-saturate, 135%));
 }
+.blk-ln { position: relative; }
+.blk-diff-note-btn {
+  display: none;
+  position: absolute;
+  right: 2px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: var(--workspace-accent, var(--accent-blue));
+  color: var(--workspace-bg, var(--bg-primary));
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 18px;
+  cursor: pointer;
+}
+.blk-line:hover .blk-diff-note-btn,
+.blk-line.is-note-range .blk-diff-note-btn { display: inline-block; }
+.blk-line.is-note-range { background: color-mix(in srgb, var(--workspace-accent, var(--accent-blue)) 14%, transparent); }
+.blk-diff-note-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 4px 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--workspace-accent, var(--accent-blue));
+  border-radius: 7px;
+  background: var(--workspace-panel, var(--bg-card));
+}
+.blk-diff-note-editor-head { font-size: 11.5px; font-weight: 600; color: var(--workspace-accent, var(--accent-blue)); }
+.blk-diff-note-input {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--workspace-line-strong, var(--border));
+  border-radius: 5px;
+  background: var(--workspace-bg, var(--bg-primary));
+  color: var(--workspace-text, var(--text-primary));
+  font: inherit;
+  font-size: 12px;
+  resize: vertical;
+}
+.blk-diff-note-editor-actions { display: flex; gap: 6px; justify-content: flex-end; }
+.blk-diff-notes-bar:empty { display: none; }
+.blk-diff-notes-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 12px;
+  border-top: 1px solid var(--workspace-line, var(--border-subtle));
+  background: color-mix(in srgb, var(--workspace-accent, var(--accent-blue)) 6%, transparent);
+}
+.blk-diff-note-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+.blk-diff-note-loc { color: var(--workspace-accent, var(--accent-blue)); font-weight: 600; }
+.blk-diff-note-body { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.blk-diff-note-inject { align-self: flex-end; }

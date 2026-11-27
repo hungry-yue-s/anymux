@@ -10,9 +10,38 @@ var CommandPalette = (function () {
     '/': { mode: 'files', label: '文件', placeholder: '按文件名查找…' },
   };
   var MAX_RESULTS = 80;
+  var MRU_KEY = 'anymux_palette_mru_v1';
+  var _mru = Object.create(null);
+  var _lastSearchState = { mode: '', query: '', poolRef: null, matches: null };
+
+  try {
+    var savedMru = JSON.parse(window.localStorage.getItem(MRU_KEY) || '{}');
+    if (savedMru && typeof savedMru === 'object') _mru = savedMru;
+  } catch (_) {}
 
   function normalized(value) {
-    return String(value || '').normalize('NFKC').toLocaleLowerCase();
+    return String(value || '')
+      .normalize('NFKD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .normalize('NFKC')
+      .toLocaleLowerCase();
+  }
+
+  function recordMru(key) {
+    if (!key) return;
+    _mru[key] = Date.now();
+    try {
+      var entries = Object.entries(_mru).sort(function (a, b) { return b[1] - a[1]; }).slice(0, 100);
+      _mru = Object.fromEntries(entries);
+      window.localStorage.setItem(MRU_KEY, JSON.stringify(_mru));
+    } catch (_) {}
+  }
+
+  function mruBoostFor(key) {
+    var ts = _mru && key ? Number(_mru[key] || 0) : 0;
+    if (!ts) return 0;
+    var ageHours = Math.max(0, (Date.now() - ts) / 3600000);
+    return Math.max(0, 30 - Math.min(30, ageHours * 1.5));
   }
 
   /** `C:\\Users\\me\\.local\\bin\\claude.exe` → `claude`. */
@@ -23,49 +52,116 @@ var CommandPalette = (function () {
 
   // --- matching ----------------------------------------------------------------
 
+  function separatorFolded(value) {
+    return normalized(value).replace(/[_\-]+/g, ' ');
+  }
+
+  function isWordBoundary(rawText, idx) {
+    if (idx <= 0) return true;
+    var prev = rawText.charAt(idx - 1);
+    var cur = rawText.charAt(idx);
+    if (/[\s/\\·._\-:]/.test(prev)) return true;
+    // camelCase boundary: lowercase followed by uppercase in original text
+    return prev >= 'a' && prev <= 'z' && cur >= 'A' && cur <= 'Z';
+  }
+
   /**
-   * Scores one query word against `text`; null when it does not match.
-   * Substrings win (more at the start or a word boundary). ASCII words may also
-   * match as a subsequence, the way editors match `gst` to `git status`.
+   * Scores one query word against `rawText`; null when it does not match.
+   * Supports substring, separator equivalence (`foo_bar` == `foo-bar` == `foo bar`),
+   * and camelCase/boundary-aware fuzzy subsequence (`fb` -> `fooBar`).
    */
-  function matchWord(word, text) {
-    var at = text.indexOf(word);
+  function matchWord(word, rawText) {
+    var source = String(rawText || '');
+    var text = normalized(source);
+    var qWord = normalized(word);
+    if (!qWord) return null;
+
+    var at = text.indexOf(qWord);
+    if (at === -1 && /[\s_\-]/.test(qWord)) {
+      var folded = separatorFolded(source);
+      var foldedWord = separatorFolded(qWord);
+      at = folded.indexOf(foldedWord);
+      if (at !== -1) text = folded;
+    }
     if (at !== -1) {
-      var boundary = at === 0 || /[\s/\\·._\-:]/.test(text.charAt(at - 1));
+      var boundary = isWordBoundary(source, at);
       var positions = [];
-      for (var i = 0; i < word.length; i++) positions.push(at + i);
+      for (var i = 0; i < qWord.length; i++) positions.push(at + i);
       return { score: 100 + (at === 0 ? 40 : 0) + (boundary ? 20 : 0) - Math.min(at, 40) * 0.5, positions: positions };
     }
-    if (!/^[\x21-\x7e]+$/.test(word) || word.length < 2) return null;
+    if (!/^[\x21-\x7e]+$/.test(qWord) || qWord.length < 2) return null;
     var pos = [];
     var from = 0;
     var gaps = 0;
-    for (var k = 0; k < word.length; k++) {
-      var found = text.indexOf(word.charAt(k), from);
+    for (var k = 0; k < qWord.length; k++) {
+      var ch = qWord.charAt(k);
+      if (ch === '-' || ch === '_') ch = '';
+      var found = ch ? text.indexOf(ch, from) : from;
+      if (found === -1 && (qWord.charAt(k) === '-' || qWord.charAt(k) === '_')) continue;
       if (found === -1) return null;
       if (k > 0) gaps += found - pos[pos.length - 1] - 1;
       pos.push(found);
       from = found + 1;
     }
-    if (gaps > word.length * 6) return null;
-    var starts = pos.filter(function (p) { return p === 0 || /[\s/\\·._\-:]/.test(text.charAt(p - 1)); }).length;
-    return { score: 40 + starts * 8 - gaps * 1.5, positions: pos };
+    if (!pos.length || gaps > qWord.length * 6) return null;
+    var starts = pos.filter(function (p) { return isWordBoundary(source, p); }).length;
+    return { score: 40 + starts * 10 - gaps * 1.5, positions: pos };
   }
 
-  /** Every word must match the item's search text; highlights come from its title. */
+  /** Every word must match the item's search text; highlights come from both title and meta. */
   function scoreItem(item, words) {
-    if (!words.length) return { score: 0, highlight: [] };
+    if (!words.length) return { score: 0, highlight: [], metaHighlight: [] };
     var total = 0;
-    var title = normalized(item.searchTitle || item.display);
+    var rawTitle = item.searchTitle || item.display || '';
+    var rawMeta = item.meta || '';
     var highlight = {};
+    var metaHighlight = {};
     for (var i = 0; i < words.length; i++) {
-      var inTitle = matchWord(words[i], title);
-      var anywhere = inTitle || matchWord(words[i], item.search);
+      var inTitle = matchWord(words[i], rawTitle);
+      var inMeta = !inTitle ? matchWord(words[i], rawMeta) : null;
+      var anywhere = inTitle || inMeta || matchWord(words[i], item.search);
       if (!anywhere) return null;
-      total += anywhere.score + (inTitle ? 25 : 0);
+      total += anywhere.score + (inTitle ? 28 : inMeta ? 12 : 0);
       if (inTitle) inTitle.positions.forEach(function (p) { highlight[p] = true; });
+      if (inMeta) inMeta.positions.forEach(function (p) { metaHighlight[p] = true; });
     }
-    return { score: total, highlight: Object.keys(highlight).map(Number) };
+    total += mruBoostFor(item.key);
+    return {
+      score: total,
+      highlight: Object.keys(highlight).map(Number),
+      metaHighlight: Object.keys(metaHighlight).map(Number),
+    };
+  }
+
+  function topKEntries(list, k, cmp) {
+    if (list.length <= k) return list.slice().sort(cmp);
+    // Min-heap of size k keeps best items in O(N log K) without sorting full large lists.
+    var heap = [];
+    var swap = function (i, j) { var t = heap[i]; heap[i] = heap[j]; heap[j] = t; };
+    for (var idx = 0; idx < list.length; idx++) {
+      var entry = list[idx];
+      if (heap.length < k) {
+        heap.push(entry);
+        var c = heap.length - 1;
+        while (c > 0) {
+          var p = (c - 1) >> 1;
+          if (cmp(heap[c], heap[p]) > 0) { swap(c, p); c = p; }
+          else break;
+        }
+      } else if (cmp(entry, heap[0]) < 0) {
+        heap[0] = entry;
+        var cur = 0;
+        for (;;) {
+          var l = cur * 2 + 1, r = cur * 2 + 2, worst = cur;
+          if (l < heap.length && cmp(heap[l], heap[worst]) > 0) worst = l;
+          if (r < heap.length && cmp(heap[r], heap[worst]) > 0) worst = r;
+          if (worst === cur) break;
+          swap(cur, worst);
+          cur = worst;
+        }
+      }
+    }
+    return heap.sort(cmp);
   }
 
   // --- sources -----------------------------------------------------------------
@@ -258,24 +354,46 @@ var CommandPalette = (function () {
 
   function search(text) {
     _clear.hidden = !text && _mode === 'all';
-    var words = normalized(text).trim().split(/\s+/).filter(Boolean);
+    var normText = normalized(text).trim();
+    var words = normText.split(/\s+/).filter(Boolean);
     if (_mode === 'files') { searchFiles(words); return; }
-    var pool = _mode === 'commands' ? _all.filter(function (i) { return i.run && i.section === 'commands'; })
+    var basePool = _mode === 'commands' ? _all.filter(function (i) { return i.run && i.section === 'commands'; })
       : _mode === 'hosts' ? hostItems()
         : _all;
+    // Incremental prefix narrowing: reuse matched items when extending a prior query.
+    var canNarrow = _lastSearchState.mode === _mode
+      && _lastSearchState.query
+      && normText.indexOf(_lastSearchState.query) === 0
+      && Array.isArray(_lastSearchState.matches);
+    var pool = canNarrow ? _lastSearchState.matches : basePool;
     var scored = [];
+    var matchedItems = [];
     pool.forEach(function (item, order) {
       var result = scoreItem(item, words);
-      if (result) scored.push({ item: item, score: result.score, highlight: result.highlight, order: order });
+      if (result) {
+        matchedItems.push(item);
+        scored.push({
+          item: item,
+          score: result.score,
+          highlight: result.highlight,
+          metaHighlight: result.metaHighlight,
+          order: order,
+        });
+      }
     });
-    if (words.length) scored.sort(function (a, b) { return b.score - a.score || a.order - b.order; });
-    else if (_mode === 'all') {
-      scored.sort(function (a, b) {
+    _lastSearchState = { mode: _mode, query: normText, matches: words.length ? matchedItems : null };
+    var topScored;
+    if (words.length) {
+      topScored = topKEntries(scored, MAX_RESULTS, function (a, b) { return b.score - a.score || a.order - b.order; });
+    } else if (_mode === 'all') {
+      topScored = topKEntries(scored, MAX_RESULTS, function (a, b) {
         return SECTION_ORDER.indexOf(a.item.section) - SECTION_ORDER.indexOf(b.item.section) || a.order - b.order;
       });
+    } else {
+      topScored = scored.slice(0, MAX_RESULTS);
     }
     var grouped = !words.length && _mode === 'all';
-    render(scored.slice(0, MAX_RESULTS), {
+    render(topScored, {
       grouped: grouped,
       empty: _mode === 'hosts' ? '没有匹配的主机' : _mode === 'commands' ? '没有匹配的命令' : '没有匹配的服务器、会话或窗口',
       hint: _mode === 'hosts' ? '在“状态”页可以添加新的主机。' : _mode === 'commands' ? '试试 git、主题、浏览器或快捷键。'
@@ -408,8 +526,9 @@ var CommandPalette = (function () {
       var body = document.createElement('span'); body.className = 'cmd-palette-item-body';
       var title = mobileTitle(item);
       var name = highlighted(title, title === (item.searchTitle || item.display) ? entry.highlight : null);
-      var meta = document.createElement('span'); meta.className = 'cmd-palette-item-meta';
-      meta.textContent = item.context && mobile ? item.context + ' · ' + item.meta : item.meta;
+      var metaText = item.context && mobile ? item.context + ' · ' + item.meta : item.meta;
+      var meta = highlighted(metaText, !mobile || !item.context ? entry.metaHighlight : null);
+      meta.className = 'cmd-palette-item-meta';
       body.append(name, meta);
       var kind = document.createElement('span'); kind.className = 'cmd-palette-item-kind';
       if (item.keys && !mobile) kind.appendChild(keysNode(item.keys));
@@ -442,6 +561,7 @@ var CommandPalette = (function () {
   }
 
   function select(item) {
+    recordMru(item.key);
     close(false);
     if (item.run) { item.run(); return; }
     // A route selection dismisses a transient file modal, including when the
@@ -453,6 +573,6 @@ var CommandPalette = (function () {
 
   return {
     open: open, close: close, isOpen: function () { return !!_overlay; },
-    _test: { matchWord: matchWord, commandLabel: commandLabel },
+    _test: { matchWord: matchWord, commandLabel: commandLabel, scoreItem: scoreItem, topKEntries: topKEntries, normalized: normalized },
   };
 })();
