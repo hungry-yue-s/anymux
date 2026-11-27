@@ -108,6 +108,10 @@ fi
 mkdir -p "$TMUX_INSTALL_PREFIX/bin"
 new_bin="$TMUX_INSTALL_PREFIX/bin/.tmux.new.$$"
 install -m 755 "$staged_bin" "$new_bin"
+if [[ "$platform" == "Darwin" ]] && command -v codesign >/dev/null 2>&1; then
+  codesign -s - --force "$new_bin"
+fi
+"$new_bin" -V >/dev/null
 if [[ -x "$TMUX_INSTALL_BIN" ]]; then
   install -m 755 "$TMUX_INSTALL_BIN" "$TMUX_INSTALL_PREFIX/bin/tmux.previous"
 fi
