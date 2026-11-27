@@ -10,5 +10,6 @@
 .wt-branch { font-weight: 600; font-size: 13px; color: var(--workspace-text, var(--text-primary)); }
 .wt-badge { padding: 1px 6px; border-radius: 4px; font-size: 11px; border: 1px solid var(--workspace-line, var(--border)); color: var(--workspace-muted, var(--text-secondary)); }
 .wt-badge.is-warn { color: var(--accent-yellow, #e0af68); border-color: color-mix(in srgb, var(--accent-yellow, #e0af68) 40%, transparent); }
+.wt-badge.is-ok { color: var(--accent-green, #9ece6a); border-color: color-mix(in srgb, var(--accent-green, #9ece6a) 40%, transparent); }
 .wt-path { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; color: var(--workspace-muted, var(--text-secondary)); word-break: break-all; }
 .wt-actions { display: flex; gap: 6px; flex-wrap: wrap; }

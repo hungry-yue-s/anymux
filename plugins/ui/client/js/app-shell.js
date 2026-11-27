@@ -374,10 +374,13 @@
       var localViews = terminalViews().map(function (entry) {
         return entry.renderNavigation ? entry.renderNavigation(serverId, route, workspace) : '';
       }).join('');
+      var params = (route && route.params) || {};
       var head = localViews + '<div class="tree-section-head"><span>会话</span>'
         + providerBadge(workspace)
         + (actions.createSession
-          ? '<button class="tree-add-button" data-action="new-session" title="在当前服务器新建会话"'
+          ? '<button class="tree-view-toggle" data-action="toggle-worktree-grouping"'
+            + ' title="按工作区/Worktree 分组" aria-pressed="' + (this._worktreeGrouping ? 'true' : 'false') + '">⎇</button>'
+            + '<button class="tree-add-button" data-action="new-session" title="在当前服务器新建会话"'
             + ' aria-label="新建会话">+</button>'
           : '')
         + '</div>';
@@ -387,8 +390,11 @@
           + '<p>tmux 可用，新建会话后即可进入。</p></div>';
       }
 
+      if (this._worktreeGrouping) {
+        return head + '<div class="tree">' + this._renderWorktreeGroupedTree(serverId, sessions, params) + '</div>';
+      }
+
       var self = this;
-      var params = (route && route.params) || {};
       var focused = global.Blocks && global.Blocks.ui && typeof global.Blocks.ui.selectedContext === 'function'
         ? global.Blocks.ui.selectedContext()
         : null;
@@ -433,6 +439,51 @@
       }).join('');
 
       return head + '<div class="tree">' + tree + '</div>';
+    },
+
+    _renderWorktreeGroupedTree: function (serverId, sessions, params) {
+      var groups = Object.create(null);
+      var order = [];
+      for (var sIdx = 0; sIdx < sessions.length; sIdx += 1) {
+        var session = sessions[sIdx];
+        var windows = session.windows || [];
+        for (var wIdx = 0; wIdx < windows.length; wIdx += 1) {
+          var win = windows[wIdx];
+          var panes = win.panes || [];
+          var ap = panes.find(function (p) { return p.active; }) || panes[0];
+          var cwd = (ap && (ap.cwd || ap.path)) || '';
+          var folder = cwd ? (cwd.split(/[\\/]+/).filter(Boolean).pop() || cwd) : session.name;
+          var key = cwd || ('session:' + session.id);
+          if (!groups[key]) {
+            groups[key] = { label: folder, cwd: cwd, items: [] };
+            order.push(key);
+          }
+          groups[key].items.push({ session: session, win: win });
+        }
+      }
+      var activeWinId = (params && params.windowId) || '';
+      return order.map(function (key) {
+        var grp = groups[key];
+        var rows = grp.items.map(function (entry) {
+          var route = global.Router.serialize({
+            name: 'terminal',
+            params: { serverId: serverId, sessionId: entry.session.id, windowId: entry.win.id },
+          });
+          var isAct = activeWinId && activeWinId === entry.win.id;
+          return '<button class="tree-item tree-window-item' + (isAct ? ' active' : '') + '" data-route="' + esc(route) + '" title="' + esc(grp.cwd || entry.win.name) + '">'
+            + '<span>' + esc(entry.win.name || entry.win.id) + '</span>'
+            + '<span class="cmd">' + esc(entry.session.name) + '</span>'
+            + '</button>';
+        }).join('');
+        return '<div class="tree-session-group"><div class="tree-session-row"><span class="tree-item" title="' + esc(grp.cwd) + '"><strong>' + esc(grp.label) + '</strong><span class="cmd">' + grp.items.length + '</span></span></div>' + rows + '</div>';
+      }).join('');
+    },
+
+    setWorktreeGrouping: function (enabled) {
+      this._worktreeGrouping = Boolean(enabled);
+      if (typeof this.render === 'function' && global.Router && typeof global.Router.current === 'function') {
+        try { this.render(global.Router.current()); } catch { /* ignore */ }
+      }
     },
 
     _renderAgentRows: function (serverId, session, win, params, windowAction) {
@@ -1191,6 +1242,13 @@
     global.addEventListener('resize', syncTitlebar);
     syncTitlebar();
   }
+
+  global.document.addEventListener('click', function (event) {
+    var wtBtn = event.target && event.target.closest && event.target.closest('[data-action="toggle-worktree-grouping"]');
+    if (!wtBtn) return;
+    event.preventDefault();
+    AppShell.setWorktreeGrouping(!AppShell._worktreeGrouping);
+  });
 
   global.AppShell = AppShell;
 })(typeof window !== 'undefined' ? window : globalThis);

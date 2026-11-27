@@ -25,7 +25,8 @@
     modal.innerHTML = '<div class="wt-head"><strong>Git Worktrees · 并行分支工作树</strong><button type="button" class="ms-btn" data-wt-close>关闭</button></div>'
       + '<div class="wt-body">'
       + '<form class="wt-form" data-wt-form>'
-      + '<input type="text" class="wt-input" name="branch" placeholder="新分支名，例如 feat/auth-fix" required>'
+      + '<input type="text" class="wt-input" name="branch" placeholder="新分支名，例如 feat/auth-fix">'
+      + '<button type="button" class="ms-btn" data-wt-slug>随机分支</button>'
       + '<label class="wt-check"><input type="checkbox" name="openWindow" checked> 同时在 tmux 中新建窗口</label>'
       + '<button type="submit" class="ms-btn primary">创建 Worktree</button>'
       + '</form>'
@@ -67,6 +68,23 @@
             active.className = 'wt-badge';
             active.textContent = wt.activePanes.length + ' 个活动窗格';
             left.append(' ', active);
+          }
+          if (wt.lifecycle && !wt.isMain) {
+            var lifeBadge = document.createElement('span');
+            if (wt.lifecycle.status === 'merged') {
+              lifeBadge.className = 'wt-badge is-ok';
+              lifeBadge.textContent = '已合入可清理';
+            } else if (wt.lifecycle.status === 'safe') {
+              lifeBadge.className = 'wt-badge is-ok';
+              lifeBadge.textContent = '可安全清理';
+            } else if (wt.lifecycle.status === 'at_risk') {
+              lifeBadge.className = 'wt-badge is-warn';
+              lifeBadge.textContent = '存在风险';
+            } else {
+              lifeBadge.className = 'wt-badge';
+              lifeBadge.textContent = '受保护';
+            }
+            left.append(' ', lifeBadge);
           }
           var actions = document.createElement('div');
           actions.className = 'wt-actions';
@@ -110,18 +128,31 @@
       });
     }
 
+    var slugBtn = modal.querySelector('[data-wt-slug]');
+    if (slugBtn) {
+      slugBtn.addEventListener('click', function () {
+        ctx.client.get('/api/worktrees/slug').then(function (data) {
+          var input = modal.querySelector('[data-wt-form] input[name="branch"]');
+          if (input && data?.slug) input.value = 'feat/' + data.slug;
+        }).catch(function () {});
+      });
+    }
+
     modal.querySelector('[data-wt-form]').addEventListener('submit', function (event) {
       event.preventDefault();
       var form = event.currentTarget;
       var branch = form.branch.value.trim();
-      if (!branch) return;
       ctx.client.post('/api/worktrees', {
         path: currentRepoRoot,
         paneId: ctx.paneId || undefined,
-        branch: branch,
+        branch: branch || undefined,
+        autoName: !branch,
         openWindow: form.openWindow.checked,
-      }).then(function () {
+      }).then(function (created) {
         form.branch.value = '';
+        if (created?.setupHook?.ran && !created.setupHook.ok) {
+          window.AppShell?.toast?.('Worktree 已创建，但 setupScript 执行失败：' + (created.setupHook.stderr || ''));
+        }
         if (window.MsApp?.refreshWorkspace) window.MsApp.refreshWorkspace(ctx.serverId);
         renderList();
       }).catch(function (err) {

@@ -148,7 +148,7 @@ export function apply(ctx, options = {}) {
       }
     }).catch(() => {});
   });
-  ctx.on('status/tmux-restarted', () => {
+  ctx.on?.('status/tmux-restarted', () => {
     boundPaneAgents.clear();
     validator.invalidate();
   });
