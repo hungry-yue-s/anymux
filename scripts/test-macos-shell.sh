@@ -17,6 +17,7 @@ swiftc \
   "$PACKAGE_DIR/Sources/Anymux/PanelEndpoint.swift" \
   "$PACKAGE_DIR/Sources/Anymux/ServiceInspector.swift" \
   "$PACKAGE_DIR/Sources/Anymux/PanelTitlebarDragView.swift" \
+  "$PACKAGE_DIR/Sources/Anymux/NativeAppearanceConfig.swift" \
   "$PACKAGE_DIR/Tests/main.swift" \
   -o "$TEST_BINARY"
 

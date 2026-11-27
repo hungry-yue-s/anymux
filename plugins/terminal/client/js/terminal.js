@@ -311,10 +311,27 @@ var terminalState = {
 function _updateTerminalTheme() {
   if (!terminalState.term) return;
   terminalState.term.options.theme = Theme.getTerminalTheme();
-  terminalState.term.options.allowTransparency = !!(Theme.getTransparency && Theme.getTransparency() > 0);
+  terminalState.term.options.allowTransparency = !!(
+    (Theme.isBackdropActive && Theme.isBackdropActive())
+    || (Theme.getTransparency && Theme.getTransparency() > 0)
+  );
+}
+function _updateTerminalTypography() {
+  if (!terminalState.term || !Theme.getTerminalTypography) return;
+  var typo = Theme.getTerminalTypography();
+  terminalState.term.options.fontSize = _isMobileTerminal()
+    ? Math.max(MOBILE_MIN_FONT_SIZE, Math.min(22, MOBILE_BASE_FONT_SIZE + _getFontOffset()))
+    : Math.max(8, Math.min(22, (typo.fontSize || DESKTOP_BASE_FONT_SIZE) + _getFontOffset()));
+  terminalState.term.options.lineHeight = typo.lineHeight || 1.2;
+  terminalState.term.options.cursorStyle = typo.cursorStyle || 'block';
+  terminalState.term.options.cursorBlink = typo.cursorBlink !== false;
+  if (typeof terminalState.term.clearTextureAtlas === 'function') terminalState.term.clearTextureAtlas();
+  if (terminalState.fitAddon && typeof terminalState.fitAddon.fit === 'function') terminalState.fitAddon.fit();
 }
 document.addEventListener('tmux-theme-change', _updateTerminalTheme);
 document.addEventListener('tmux-transparency-change', _updateTerminalTheme);
+document.addEventListener('tmux-wallpaper-change', _updateTerminalTheme);
+document.addEventListener('tmux-typography-change', _updateTerminalTypography);
 
 /** The element the terminal is mounted in, while it is still in the page. */
 function _terminalContainer() {
@@ -738,20 +755,27 @@ function _calcTerminalFontSize(paneCols, paneRows, containerEl) {
     return Math.max(MOBILE_MIN_FONT_SIZE, Math.min(22, mobileSize));
   }
 
-  return Math.max(8, Math.min(22, DESKTOP_BASE_FONT_SIZE + _getFontOffset()));
+  var baseDesktop = (typeof Theme !== 'undefined' && Theme.getTerminalTypography && Theme.getTerminalTypography().fontSize) || DESKTOP_BASE_FONT_SIZE;
+  return Math.max(8, Math.min(22, baseDesktop + _getFontOffset()));
 }
 
 // === Create xterm Terminal ===
 
 function createTerminalInstance(paneCols, paneRows, nozoom) {
+  var typo = (Theme.getTerminalTypography && Theme.getTerminalTypography()) || {};
   var term = new Terminal({
     theme: Theme.getTerminalTheme(),
     // Resolve contrast against each cell background, including TUI colors.
     minimumContrastRatio: 4.5,
-    allowTransparency: !!(Theme.getTransparency && Theme.getTransparency() > 0),
+    allowTransparency: !!(
+      (Theme.isBackdropActive && Theme.isBackdropActive())
+      || (Theme.getTransparency && Theme.getTransparency() > 0)
+    ),
     fontFamily: 'monospace',
     fontSize: _calcTerminalFontSize(paneCols, paneRows),
-    cursorBlink: true,
+    lineHeight: typo.lineHeight || 1.2,
+    cursorStyle: typo.cursorStyle || 'block',
+    cursorBlink: typo.cursorBlink !== false,
     scrollback: 5000,
     overviewRuler: { width: 0 },
     rescaleOverlappingGlyphs: true,

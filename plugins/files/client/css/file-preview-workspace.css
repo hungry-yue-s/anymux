@@ -207,6 +207,47 @@ html[data-native-transparency] .fp-mermaid-dialog { background: color-mix(in srg
 html[data-native-transparency] body:has(> .fp-mermaid-dialog) > :not(.fp-mermaid-dialog) { visibility: hidden; }
 html[data-native-transparency] :is(.fp-mermaid-embed, .fp-mermaid-dialog) [data-fp-surface="group"] { fill-opacity: .12; }
 html[data-native-transparency] :is(.fp-mermaid-embed, .fp-mermaid-dialog) [data-fp-surface="node"] { fill-opacity: .72; }
+html[data-wallpaper-active] .fp-overlay.fp-side:not(.fp-side-maximized),
+html[data-wallpaper-active] .fp-overlay.fp-side:not(.fp-side-maximized) .fp-modal,
+html[data-wallpaper-active] .fp-dock .fp-embedded,
+html[data-wallpaper-active] .fp-dock .fp-dock-tab-item.active {
+  background: transparent;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+html[data-wallpaper-active] .fp-overlay.fp-side:not(.fp-side-maximized) {
+  background: color-mix(in srgb, var(--fp-bg) var(--anymux-sidebar-alpha, 24%), transparent);
+  -webkit-backdrop-filter: blur(var(--anymux-sidebar-blur, 14px)) saturate(var(--anymux-wp-saturate, 135%));
+  backdrop-filter: blur(var(--anymux-sidebar-blur, 14px)) saturate(var(--anymux-wp-saturate, 135%));
+}
+html[data-wallpaper-active] .fp-overlay.fp-side.fp-side-maximized {
+  background: color-mix(in srgb, var(--fp-bg) 82%, transparent);
+  -webkit-backdrop-filter: blur(var(--anymux-float-blur, 26px)) saturate(var(--anymux-wp-saturate, 125%));
+  backdrop-filter: blur(var(--anymux-float-blur, 26px)) saturate(var(--anymux-wp-saturate, 125%));
+}
+html[data-wallpaper-active] .fp-mermaid-dialog-header,
+html[data-wallpaper-active] .fp-mermaid-dialog-viewport { background: transparent; }
+html[data-wallpaper-active] .fp-mermaid-embed {
+  background: color-mix(in srgb, var(--fp-panel) 12%, transparent);
+  border-color: color-mix(in srgb, var(--fp-text) 14%, transparent);
+  -webkit-backdrop-filter: blur(14px) saturate(1.08);
+  backdrop-filter: blur(14px) saturate(1.08);
+}
+html[data-wallpaper-active] .fp-mermaid-dialog-panel {
+  background: color-mix(in srgb, var(--fp-panel) 16%, transparent);
+  -webkit-backdrop-filter: blur(24px) saturate(1.08);
+  backdrop-filter: blur(24px) saturate(1.08);
+}
+html[data-wallpaper-active] .fp-md-wrap pre {
+  background: color-mix(in srgb, var(--fp-bg) 22%, transparent);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+}
+html[data-wallpaper-active] .fp-md-wrap :not(pre) > code { background: color-mix(in srgb, var(--fp-bg) 22%, transparent); }
+html[data-wallpaper-active] .fp-md-wrap th { background: color-mix(in srgb, var(--fp-bg) 16%, transparent); }
+html[data-wallpaper-active] .fp-mermaid-dialog { background: color-mix(in srgb, var(--fp-bg) 18%, transparent); }
+html[data-wallpaper-active] :is(.fp-mermaid-embed, .fp-mermaid-dialog) [data-fp-surface="group"] { fill-opacity: .12; }
+html[data-wallpaper-active] :is(.fp-mermaid-embed, .fp-mermaid-dialog) [data-fp-surface="node"] { fill-opacity: .72; }
 .fp-dir-wrap { padding: 0; }
 .fp-dir-crumb { padding: 12px 16px; border-color: var(--fp-line); background: var(--fp-panel); }
 .fp-dir-crumb-seg { color: var(--fp-muted); }

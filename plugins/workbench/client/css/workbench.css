@@ -509,12 +509,32 @@
   background: color-mix(in srgb, var(--accent-red, #f7768e) 14%, transparent);
   border: 1px solid color-mix(in srgb, var(--accent-red, #f7768e) 36%, transparent);
 }
+@container pane (max-width: 460px) {
+  .pane-ctx, .pane-cmd-chip { display: none; }
+  .seam-rail.has-pane-git .pane-rail-git-chip.is-primary { display: none; }
+  .seam-rail.has-pane-git .pane-rail-git-more .prg-expand-label { display: none; }
+  .seam-rail.has-pane-git .pane-rail-git-more .prg-compact-label { display: inline-flex; }
+}
 @container pane (max-width: 340px) {
   .pane-ctx, .pane-cmd-chip { display: none; }
 }
 @container pane (max-width: 240px) {
   .pane-status { display: none; }
+  .seam-rail.has-pane-git .pane-rail-git-chip .prg-project,
+  .seam-rail.has-pane-git .pane-rail-git-chip .prg-sep { display: none; }
 }
+.pane-git-slot {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: 56%;
+  flex: 0 1 auto;
+  margin-left: auto;
+}
+.pane-git-slot[hidden] { display: none; }
+.seam-rail.has-pane-git.hide-pane-ctx .pane-ctx { display: none; }
+.seam-rail.has-pane-git .pane-actions { margin-left: 2px; }
 .pane-actions {
   display: inline-flex;
   align-items: center;
@@ -657,7 +677,7 @@
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  padding: 4px 8px 6px;
+  padding: var(--terminal-pane-padding, 4px) calc(var(--terminal-pane-padding, 6px) + 2px) var(--terminal-pane-padding, 6px);
 }
 .pane-body > .xterm { height: 100%; padding: 0; }
 .pane-body .xterm-viewport { background: var(--workspace-bg, var(--bg-primary)); }
@@ -772,6 +792,19 @@ html[data-native-transparency] .seam-pane.is-active,
 html[data-native-transparency] .seam-tile,
 html[data-native-transparency] .seam-tile-diff.blk-frame,
 html[data-native-transparency] .pane-body .xterm-viewport { background: transparent !important; }
+html[data-wallpaper-active] .wb-stage.terminal-view,
+html[data-wallpaper-active] .wb-window-terminal,
+html[data-wallpaper-active] .seam-pane,
+html[data-wallpaper-active] .seam-pane.is-active,
+html[data-wallpaper-active] .seam-tile,
+html[data-wallpaper-active] .seam-tile-diff.blk-frame,
+html[data-wallpaper-active] .pane-body .xterm-viewport { background: transparent !important; }
+html:is([data-native-transparency], [data-wallpaper-active]) .seam-pane:not(.is-active) {
+  background: color-mix(in srgb, var(--workspace-sidebar, #16161e) var(--anymux-pane-inactive-dim, 18%), transparent) !important;
+}
+html:is([data-native-transparency], [data-wallpaper-active]) .seam-pane:not(.is-active) .seam-rail {
+  opacity: 0.78;
+}
 .wb-mobile .wb-toolbar { flex-basis: 44px; }
 .wb-mobile .wb-icon-button, .wb-actions-mobile .wb-icon-button { width: 44px; height: 44px; }
 .wb-mobile .wb-menu-item { min-height: 44px; font-size: 13px; }
@@ -832,6 +865,8 @@ html[data-native-transparency] .pane-body .xterm-viewport { background: transpar
 .wb-history .wb-button:disabled { opacity: .45; cursor: default; }
 html[data-native-transparency] .wb-history { background: color-mix(in srgb, var(--workspace-panel, var(--bg-card)) 86%, transparent); -webkit-backdrop-filter: blur(26px) saturate(1.25); backdrop-filter: blur(26px) saturate(1.25); }
 html[data-native-transparency] .wb-history-content { background: color-mix(in srgb, var(--workspace-bg, var(--bg-primary)) 72%, transparent); }
+html[data-wallpaper-active] .wb-history { background: color-mix(in srgb, var(--workspace-panel, var(--bg-card)) 86%, transparent); -webkit-backdrop-filter: blur(var(--anymux-float-blur, 26px)) saturate(var(--anymux-wp-saturate, 125%)); backdrop-filter: blur(var(--anymux-float-blur, 26px)) saturate(var(--anymux-wp-saturate, 125%)); }
+html[data-wallpaper-active] .wb-history-content { background: color-mix(in srgb, var(--workspace-bg, var(--bg-primary)) 72%, transparent); }
 @media (max-width: 767px), (pointer: coarse) and (max-height: 560px) and (max-width: 1023px) {
   .seam-viewport { --seam-rail-height: 38px; }
   .seam-rail { height: 38px; min-height: 38px; padding: 0 6px 0 10px; }

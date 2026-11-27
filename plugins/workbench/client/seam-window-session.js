@@ -662,8 +662,12 @@ export class SeamWindowSession {
 
     const doc = global.document;
     const mobile = !!global.MobileUI?.isMobile();
+    const typo = global.Theme?.getTerminalTypography?.() || {};
     this._lastMobileMode = mobile;
-    this.fontSize = Math.max(mobile ? 11 : 8, Math.min(22, fontSize || (mobile ? 13 : 14)));
+    this.fontSize = Math.max(mobile ? 11 : 8, Math.min(22, fontSize || typo.fontSize || (mobile ? 13 : 14)));
+    this.lineHeight = typo.lineHeight || 1.2;
+    this.cursorStyle = typo.cursorStyle || 'block';
+    this.cursorBlink = typo.cursorBlink !== false;
     this.fontReady = false;
     this.rendererPrepared = true;
 
@@ -703,7 +707,7 @@ export class SeamWindowSession {
     const themeSync = () => {
       if (this.disposed) return;
       const theme = global.Theme?.getTerminalTheme?.();
-      const allowTransparency = (global.Theme?.getTransparency?.() || 0) > 0;
+      const allowTransparency = Boolean(global.Theme?.isBackdropActive?.() || (global.Theme?.getTransparency?.() || 0) > 0);
       for (const pane of this.panes.values()) {
         if (pane.term) {
           pane.term.options.theme = theme;
@@ -711,8 +715,31 @@ export class SeamWindowSession {
         }
       }
     };
+    const typographySync = () => {
+      if (this.disposed) return;
+      const next = global.Theme?.getTerminalTypography?.();
+      if (!next) return;
+      const mobile = this._isMobile();
+      this.fontSize = Math.max(mobile ? 11 : 8, Math.min(22, next.fontSize || this.fontSize));
+      this.lineHeight = next.lineHeight || 1.2;
+      this.cursorStyle = next.cursorStyle || 'block';
+      this.cursorBlink = next.cursorBlink !== false;
+      for (const pane of this.panes.values()) {
+        if (!pane.term) continue;
+        pane.term.options.fontSize = this.fontSize;
+        pane.term.options.lineHeight = this.lineHeight;
+        pane.term.options.cursorStyle = this.cursorStyle;
+        pane.term.clearTextureAtlas?.();
+      }
+      this._syncInputGates();
+      this.onFontSize(this.fontSize);
+      this._resetResizeGuard();
+      this.fit();
+    };
     this._listen(doc, 'tmux-theme-change', themeSync);
     this._listen(doc, 'tmux-transparency-change', themeSync);
+    this._listen(doc, 'tmux-wallpaper-change', themeSync);
+    this._listen(doc, 'tmux-typography-change', typographySync);
 
     this._bindStageMenus();
 
@@ -811,7 +838,7 @@ export class SeamWindowSession {
       if (pane.term.options.disableStdin !== disableStdin) {
         pane.term.options.disableStdin = disableStdin;
       }
-      pane.term.options.cursorBlink = ready && pane.paneId === this.activePaneId;
+      pane.term.options.cursorBlink = ready && pane.paneId === this.activePaneId && this.cursorBlink;
     }
   }
 
@@ -973,15 +1000,23 @@ export class SeamWindowSession {
       ? this._localActivePaneId
       : (message.activePaneId || activeFromPanes || panes[0]?.id || null);
 
+    let panesTopologyChanged = false;
     for (const paneId of [...this.panes.keys()]) {
-      if (!liveIds.has(paneId)) this._disposePane(paneId);
+      if (!liveIds.has(paneId)) {
+        this._disposePane(paneId);
+        panesTopologyChanged = true;
+      }
     }
     for (const meta of panes) {
+      const existed = this.panes.has(meta.id);
+      const prevCwd = this.panes.get(meta.id)?.meta?.cwd || '';
       const entry = this._ensurePane(meta);
       this._updatePaneMeta(entry, meta);
+      if (!existed || prevCwd !== (meta.cwd || '')) panesTopologyChanged = true;
     }
 
     this._renderTree();
+    if (panesTopologyChanged) this._emitPanesChanged();
     for (const meta of panes) {
       const entry = this.panes.get(meta.id);
       if (!entry) continue;
@@ -1295,10 +1330,12 @@ export class SeamWindowSession {
     const term = new this.global.Terminal({
       theme: this.global.Theme?.getTerminalTheme?.(),
       minimumContrastRatio: 4.5,
-      allowTransparency: (this.global.Theme?.getTransparency?.() || 0) > 0,
+      allowTransparency: Boolean(this.global.Theme?.isBackdropActive?.() || (this.global.Theme?.getTransparency?.() || 0) > 0),
       fontFamily: this.fontReady ? FONT_FAMILY : 'monospace',
       fontSize: this.fontSize,
-      cursorBlink: true,
+      lineHeight: this.lineHeight,
+      cursorStyle: this.cursorStyle,
+      cursorBlink: this.cursorBlink,
       scrollback: 10000,
       scrollSensitivity: 1.15,
       fastScrollSensitivity: 5,
@@ -1448,6 +1485,10 @@ export class SeamWindowSession {
 
     const actions = doc.createElement('div');
     actions.className = 'pane-actions';
+    const gitSlot = doc.createElement('div');
+    gitSlot.className = 'pane-git-slot';
+    gitSlot.dataset.paneId = paneId;
+    gitSlot.hidden = true;
     const makeBtn = (action, label, icon, extraClass = '') => {
       const btn = doc.createElement('button');
       btn.type = 'button';
@@ -1481,7 +1522,7 @@ export class SeamWindowSession {
     confirmNo.textContent = '取消';
     confirmBox.append(confirmLabel, confirmYes, confirmNo);
 
-    rail.append(num, agentStateEl, ico, identity, actions, confirmBox);
+    rail.append(num, agentStateEl, ico, identity, gitSlot, actions, confirmBox);
 
     const body = doc.createElement('div');
     body.className = 'pane-body';
@@ -1524,6 +1565,7 @@ export class SeamWindowSession {
       cmdChip,
       ctxEl,
       statusBadge,
+      gitSlot,
       actions,
       zoomBtn,
       confirmBox,
@@ -1568,6 +1610,7 @@ export class SeamWindowSession {
     };
     el.addEventListener('pointerdown', focusThisPane, true);
     rail.addEventListener('click', (event) => {
+      if (event.target.closest('.pane-git-slot')) return;
       const btn = event.target.closest('[data-pane-action]');
       if (!btn) {
         focusThisPane();
@@ -1807,6 +1850,9 @@ export class SeamWindowSession {
     }
     const primaryTitle = entry.meta.label || (isRich ? richFallbackTitle : fallbackTitle);
     entry.titleEl.textContent = primaryTitle;
+    entry.titleEl.title = isRich && kind === 'diff' && parsedPayload?.path && parsedPayload.path !== '.'
+      ? parsedPayload.path
+      : '双击重命名窗格';
     const rawCmd = isRich ? '' : basenameOf(entry.meta.command);
     const chipCmd = (!isRich && agentInfo?.agentType && agentIcons?.labelOf && /^(?:node|nodejs|python\d?|bun|deno|agy)$/i.test(rawCmd))
       ? agentIcons.labelOf(agentInfo.agentType)
@@ -3072,6 +3118,29 @@ export class SeamWindowSession {
     return this.panes.get(paneId)?.meta || null;
   }
 
+  getPaneRailSlots() {
+    if (this.disposed) return { serverId: this.target.serverId, windowId: this.target.windowId, panes: [] };
+    const panes = [];
+    for (const entry of this.panes.values()) {
+      if (entry.isRich || !entry.gitSlot) continue;
+      panes.push({
+        paneId: entry.paneId,
+        cwd: entry.meta?.cwd || '',
+        slotEl: entry.gitSlot,
+        railEl: entry.rail,
+        paneEl: entry.el,
+      });
+    }
+    return { serverId: this.target.serverId, windowId: this.target.windowId, panes };
+  }
+
+  _emitPanesChanged() {
+    if (typeof this.global?.dispatchEvent !== 'function' || typeof this.global?.CustomEvent !== 'function') return;
+    this.global.dispatchEvent(new this.global.CustomEvent('workbench-panes-changed', {
+      detail: { serverId: this.target.serverId, windowId: this.target.windowId, disposed: this.disposed },
+    }));
+  }
+
   requestResync(paneId = null, forceSnapshot = false) {
     return this._send({
       type: 'resync',
@@ -3337,6 +3406,7 @@ export class SeamWindowSession {
     }
     this._scheduleWebglAddons();
     this.fit();
+    this._emitPanesChanged();
     if (!this.ws && this.visible && this.rendererPrepared && !this.retryTimer && !['detached', 'exited', 'invalid'].includes(this.status)) {
       this._connect();
     }
@@ -3866,5 +3936,6 @@ export class SeamWindowSession {
     this.cleanups = [];
     for (const paneId of [...this.panes.keys()]) this._disposePane(paneId);
     this.stage.remove();
+    this._emitPanesChanged();
   }
 }

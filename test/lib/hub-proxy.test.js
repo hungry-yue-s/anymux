@@ -28,7 +28,7 @@ describe('isRelayable', () => {
       expect(isRelayable(path)).toBe(true);
     }
     for (const path of ['/api/auth/login', '/api/servers', '/api/servers/x/probe', '/api/plugins/a/mcp',
-      '/api/managed-resources', '/login.html', '/s/abc']) {
+      '/api/managed-resources', '/api/appearance', '/api/appearance/wallpapers/wp-1234567890abcdef.png', '/login.html', '/s/abc']) {
       expect(isRelayable(path)).toBe(false);
     }
   });

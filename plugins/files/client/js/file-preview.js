@@ -865,7 +865,8 @@ var FilePreview = (function () {
       if (tab.block) {
         item.classList.add('is-block');
         item.classList.toggle('is-busy', !!tab.block.busy);
-        if (tab.block.subtitle) select.title = tab.block.title + ' · ' + tab.block.subtitle;
+        if (tab.block.tooltip) select.title = tab.block.tooltip;
+        else if (tab.block.subtitle) select.title = tab.block.title + ' · ' + tab.block.subtitle;
         select.addEventListener('dblclick', function () { if (tab.block.onDoubleClick) tab.block.onDoubleClick(); });
         select.addEventListener('auxclick', function (e) { if (e.button === 1) _closeDockTab(tab.id); });
       }
@@ -6863,7 +6864,7 @@ var FilePreview = (function () {
       if (document.visibilityState === 'visible' && !_dockHidden && _placement === 'side' && active && active.unread) _activateDockTab(active.id);
     });
     document.addEventListener('tmux-theme-change', _refreshMermaidTheme);
-    ['tmux-theme-change', 'tmux-transparency-change', 'tmux-glass-change'].forEach(function (event) {
+    ['tmux-theme-change', 'tmux-transparency-change', 'tmux-glass-change', 'tmux-wallpaper-change', 'anymux-appearance-change'].forEach(function (event) {
       document.addEventListener(event, _refreshPresentationTheme);
     });
     window.addEventListener('resize', function () {

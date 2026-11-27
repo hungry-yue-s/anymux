@@ -28,11 +28,18 @@
     var theme = global.Theme;
     var transparency = frame && theme && theme.supportsTransparency() ? theme.getTransparency() : 0;
     var glassIntensity = frame && theme && theme.supportsGlassIntensity() ? theme.getGlassIntensity() : 0;
+    var wallpaperGlass = false;
+    if (transparency === 0 && frame && theme && typeof theme.isWallpaperActive === 'function' && theme.isWallpaperActive() && frame.closest('.fp-dock')) {
+      var g = typeof theme.getGlass === 'function' ? theme.getGlass() : { terminalTint: 66, blurRadius: 22 };
+      transparency = Math.max(1, Math.min(50, Math.round((100 - (g.terminalTint || 66)) * 0.6)));
+      glassIntensity = Math.max(0, Math.min(100, Math.round(((g.blurRadius || 22) / 48) * 100)));
+      wallpaperGlass = true;
+    }
     return { type: MESSAGE, version: 1, themeId: root.getAttribute('data-theme') || '',
       colorScheme: root.getAttribute('data-color-scheme') === 'light' ? 'light' : 'dark', tokens: tokens,
       appearance: {
         // Modal readers and portable snapshots keep an opaque reading surface.
-        material: transparency > 0 && frame.closest('.fp-dock') ? 'native-glass' : 'solid',
+        material: (transparency > 0 || wallpaperGlass) && frame.closest('.fp-dock') ? 'native-glass' : 'solid',
         transparency: transparency, glassIntensity: glassIntensity,
       } };
   }

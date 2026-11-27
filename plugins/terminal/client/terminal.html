@@ -31,6 +31,15 @@
     html[data-native-transparency] { background: transparent; }
     html[data-native-transparency] body { background: var(--native-window-background); }
     html[data-native-transparency] .xterm-viewport { background: transparent !important; }
+    html[data-wallpaper-active] { background: transparent; }
+    html[data-wallpaper-active] body { background: transparent; }
+    html[data-wallpaper-active] .xterm-viewport { background: transparent !important; }
+    .anymux-wallpaper-backdrop { position: fixed; inset: 0; z-index: 0; pointer-events: none; overflow: hidden; background: var(--bg-primary, #1a1b26); }
+    .anymux-wallpaper-backdrop[hidden] { display: none; }
+    .anymux-wp-image { position: absolute; inset: -28px; background-position: center; background-repeat: no-repeat; background-size: cover; filter: blur(var(--anymux-wp-blur, 0px)) saturate(var(--anymux-wp-saturate, 100%)) brightness(var(--anymux-wp-brightness, 100%)); }
+    .anymux-wp-scrim { position: absolute; inset: 0; background: var(--anymux-wp-scrim, transparent); }
+    .anymux-wp-noise { position: absolute; inset: 0; opacity: var(--anymux-wp-noise-opacity, 0); mix-blend-mode: overlay; }
+    #terminal { position: relative; z-index: 1; }
   </style>
 </head>
 <body>
@@ -50,19 +59,38 @@
 
       document.title = 'Terminal — ' + paneId;
 
+      var typo = Theme.getTerminalTypography ? Theme.getTerminalTypography() : {};
       var term = new Terminal({
         theme: Theme.getTerminalTheme(),
         // Resolve contrast against each cell background, including TUI colors.
         minimumContrastRatio: 4.5,
-        allowTransparency: Theme.supportsTransparency(),
+        allowTransparency: Theme.isBackdropActive ? Theme.isBackdropActive() : Theme.supportsTransparency(),
         fontFamily: 'monospace',
-        fontSize: 14,
-        cursorBlink: true,
+        fontSize: typo.fontSize || 14,
+        lineHeight: typo.lineHeight || 1.2,
+        cursorStyle: typo.cursorStyle || 'block',
+        cursorBlink: typo.cursorBlink !== false,
       });
 
-      function updateTheme() { term.options.theme = Theme.getTerminalTheme(); }
+      function updateTheme() {
+        term.options.theme = Theme.getTerminalTheme();
+        term.options.allowTransparency = Theme.isBackdropActive ? Theme.isBackdropActive() : Theme.supportsTransparency();
+      }
+      function updateTypography() {
+        if (!Theme.getTerminalTypography) return;
+        var next = Theme.getTerminalTypography();
+        term.options.fontSize = next.fontSize;
+        term.options.lineHeight = next.lineHeight;
+        term.options.cursorStyle = next.cursorStyle;
+        term.options.cursorBlink = next.cursorBlink;
+        if (typeof term.clearTextureAtlas === 'function') term.clearTextureAtlas();
+        if (fitAddon) fitAddon.fit();
+      }
       document.addEventListener('tmux-theme-change', updateTheme);
       document.addEventListener('tmux-transparency-change', updateTheme);
+      document.addEventListener('tmux-wallpaper-change', updateTheme);
+      document.addEventListener('tmux-glass-change', updateTheme);
+      document.addEventListener('tmux-typography-change', updateTypography);
 
       var fitAddon = new FitAddon.FitAddon();
 

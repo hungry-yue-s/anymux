@@ -286,7 +286,7 @@
    * machine: login, the server registry, plugins, installation management and
    * share links. They are never relayed.
    */
-  var HUB_ONLY = /^\/api\/(auth|servers|plugins|managed-resources|share)(\/|$|\?)/;
+  var HUB_ONLY = /^\/api\/(auth|servers|plugins|managed-resources|share|appearance)(\/|$|\?)/;
 
   function isHubPath(path) {
     return HUB_ONLY.test(String(path || ''));

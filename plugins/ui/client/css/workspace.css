@@ -270,6 +270,13 @@ html[data-native-transparency] .workspace-chrome .brand { background:transparent
 html[data-native-transparency] .ms-app .ms-sidebar { background:color-mix(in srgb,var(--workspace-sidebar) 12%,transparent)!important; backdrop-filter:none; -webkit-backdrop-filter:none; }
 html[data-native-transparency] .ms-app .ms-sidebar .sidebar-footer,html[data-native-transparency] .ms-app.sidebar-collapsed .ms-sidebar .sidebar-footer { background:transparent; }
 html[data-native-transparency] .ms-app .ms-main,html[data-native-transparency] .ms-app .ms-content.terminal-mode { background:transparent!important; }
+html[data-wallpaper-active] .ms-app { background:transparent!important; }
+html[data-wallpaper-active] .workspace-chrome { background:color-mix(in srgb,var(--workspace-bg) var(--anymux-sidebar-alpha,24%),transparent); backdrop-filter:blur(var(--anymux-sidebar-blur,14px)) saturate(var(--anymux-wp-saturate,135%)); -webkit-backdrop-filter:blur(var(--anymux-sidebar-blur,14px)) saturate(var(--anymux-wp-saturate,135%)); }
+html[data-wallpaper-active] .workspace-chrome .brand { background:transparent; }
+html[data-wallpaper-active] .ms-app .ms-sidebar { background:color-mix(in srgb,var(--workspace-sidebar) var(--anymux-sidebar-alpha,24%),transparent)!important; backdrop-filter:blur(var(--anymux-sidebar-blur,14px)) saturate(var(--anymux-wp-saturate,135%)); -webkit-backdrop-filter:blur(var(--anymux-sidebar-blur,14px)) saturate(var(--anymux-wp-saturate,135%)); box-shadow:inset -1px 0 0 color-mix(in srgb,var(--workspace-text) 8%,transparent); }
+html[data-wallpaper-active] .ms-app .ms-sidebar .sidebar-footer,html[data-wallpaper-active] .ms-app.sidebar-collapsed .ms-sidebar .sidebar-footer { background:transparent; }
+html[data-wallpaper-active] .ms-app .ms-main,html[data-wallpaper-active] .ms-app .ms-content.terminal-mode { background:transparent!important; }
+html[data-backdrop-active] :is(.ms-modal,.ms-popover,.ms-sidebar-context-menu,.cmd-palette-modal) { backdrop-filter:blur(var(--anymux-float-blur,22px)) saturate(var(--anymux-wp-saturate,135%)); -webkit-backdrop-filter:blur(var(--anymux-float-blur,22px)) saturate(var(--anymux-wp-saturate,135%)); }
 button { touch-action:manipulation; }
 @media (prefers-reduced-motion:reduce) { .ms-app *,.cmd-palette-overlay * { animation:none!important; transition:none!important; } }
 @media (max-width:1200px) {

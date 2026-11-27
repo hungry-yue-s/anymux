@@ -72,6 +72,9 @@
       });
 
       await this.refreshServers();
+      if (global.Theme && typeof global.Theme.syncFromServer === 'function') {
+        global.Theme.syncFromServer();
+      }
       global.Router.start();
       this._startPolling();
     },
@@ -950,6 +953,59 @@
         if (!global.Theme) return;
         if (event.target.id === 'native-transparency') global.Theme.setTransparency(event.target.value);
         if (event.target.id === 'native-glass-intensity') global.Theme.setGlassIntensity(event.target.value);
+        if (event.target.id === 'appearance-accent-picker' && typeof global.Theme.setAccentOverride === 'function') {
+          global.Theme.setAccentOverride(event.target.value);
+          return;
+        }
+        const sliderSpec = event.target.dataset && event.target.dataset.appearanceSlider;
+        if (sliderSpec) {
+          const parts = sliderSpec.split('.');
+          const group = parts[0], key = parts[1];
+          const val = Number(event.target.value);
+          const out = global.document.getElementById(event.target.id + '-value');
+          if (out) {
+            const unit = event.target.dataset.unit || (group === 'wallpaper' ? '%' : '');
+            out.textContent = (key === 'lineHeight' ? val.toFixed(2) : String(val)) + unit;
+          }
+          const patch = {};
+          patch[key] = val;
+          if (group === 'glass' && typeof global.Theme.setGlass === 'function') global.Theme.setGlass(patch);
+          else if (group === 'wallpaper' && typeof global.Theme.setWallpaper === 'function') global.Theme.setWallpaper(patch);
+          else if (group === 'typography' && typeof global.Theme.setTerminalTypography === 'function') global.Theme.setTerminalTypography(patch);
+        }
+      });
+      global.document.addEventListener('change', (event) => {
+        if (!global.Theme) return;
+        const target = event.target;
+        if (target.id === 'wallpaper-upload-input' && target.files && target.files[0] && typeof global.Theme.uploadCustomWallpaper === 'function') {
+          const file = target.files[0];
+          target.value = '';
+          global.Theme.uploadCustomWallpaper(file).then(() => {
+            global.AppShell.toast('壁纸已上传并应用');
+            return this._onRoute(global.Router.current());
+          }).catch((err) => {
+            global.AppShell.toast(err && err.message ? err.message : '壁纸上传失败');
+          });
+          return;
+        }
+        const selectKey = target.dataset && target.dataset.appearanceSelect;
+        if (selectKey === 'lightThemeId' && typeof global.Theme.setLightThemeId === 'function') {
+          global.Theme.setLightThemeId(target.value);
+          this._onRoute(global.Router.current());
+          return;
+        }
+        if (selectKey === 'darkThemeId' && typeof global.Theme.setDarkThemeId === 'function') {
+          global.Theme.setDarkThemeId(target.value);
+          this._onRoute(global.Router.current());
+        }
+      });
+      global.document.addEventListener('anymux-appearance-change', () => {
+        if (this._handlingAppearanceAction) return;
+        const route = global.Router && global.Router.current ? global.Router.current() : null;
+        if (!route || route.name !== 'settings' || global.ServersPage?.settingsSection !== 'appearance') return;
+        const active = global.document.activeElement;
+        if (active && (active.type === 'range' || active.type === 'color' || active.id === 'theme-import-textarea')) return;
+        this._onRoute(route);
       });
       global.document.addEventListener('tmux-glass-change', () => {
         const slider = global.document.getElementById('native-glass-intensity');
@@ -1170,10 +1226,142 @@
         this.openAddServer();
         return;
       }
-      if (action === 'set-theme') {
-        if (global.Theme && node.dataset.theme) global.Theme.apply(node.dataset.theme);
-        await this._onRoute(global.Router.current());
-        return;
+      if (action === 'set-theme' || action === 'set-theme-mode' || action === 'set-accent' || action === 'reset-accent'
+        || action === 'export-theme-json' || action === 'toggle-import-theme' || action === 'submit-import-theme'
+        || action === 'delete-custom-theme' || action === 'set-wallpaper' || action === 'toggle-follow-theme-wallpaper'
+        || action === 'trigger-upload-wallpaper' || action === 'delete-wallpaper' || action === 'set-wallpaper-fit'
+        || action === 'set-glass-preset' || action === 'set-native-glass-engine' || action === 'set-cursor-style'
+        || action === 'toggle-cursor-blink' || action === 'reset-appearance') {
+        this._handlingAppearanceAction = true;
+        try {
+          if (action === 'set-theme') {
+            if (global.Theme && node.dataset.theme) global.Theme.apply(node.dataset.theme);
+            await this._onRoute(global.Router.current());
+            return;
+          }
+          if (action === 'set-theme-mode') {
+            if (global.Theme?.setThemeMode && node.dataset.mode) global.Theme.setThemeMode(node.dataset.mode);
+            await this._onRoute(global.Router.current());
+            return;
+          }
+          if (action === 'set-accent') {
+            if (global.Theme?.setAccentOverride && node.dataset.accent) global.Theme.setAccentOverride(node.dataset.accent);
+            await this._onRoute(global.Router.current());
+            return;
+          }
+          if (action === 'reset-accent') {
+            if (global.Theme?.setAccentOverride) global.Theme.setAccentOverride(null);
+            await this._onRoute(global.Router.current());
+            return;
+          }
+          if (action === 'export-theme-json') {
+            if (global.Theme?.exportThemeJson) {
+              const jsonText = global.Theme.exportThemeJson();
+              if (global.navigator?.clipboard?.writeText) {
+                try { await global.navigator.clipboard.writeText(jsonText); } catch (_err) { /* clipboard optional */ }
+              }
+              global.AppShell.toast('已复制当前主题 JSON 到剪贴板');
+            }
+            return;
+          }
+          if (action === 'toggle-import-theme') {
+            global.ServersPage._showImportPanel = !global.ServersPage._showImportPanel;
+            const panel = global.document.getElementById('theme-import-panel');
+            if (panel) panel.hidden = !global.ServersPage._showImportPanel;
+            return;
+          }
+          if (action === 'submit-import-theme') {
+            const area = global.document.getElementById('theme-import-textarea');
+            if (!area || !global.Theme?.importThemeJson) return;
+            try {
+              const imported = global.Theme.importThemeJson(area.value);
+              global.ServersPage._showImportPanel = false;
+              global.AppShell.toast('已导入主题：' + imported.name);
+              await this._onRoute(global.Router.current());
+            } catch (err) {
+              global.AppShell.toast(err && err.message ? err.message : '导入失败');
+            }
+            return;
+          }
+          if (action === 'delete-custom-theme') {
+            if (global.Theme?.deleteCustomTheme && node.dataset.theme) {
+              global.Theme.deleteCustomTheme(node.dataset.theme);
+              await this._onRoute(global.Router.current());
+            }
+            return;
+          }
+          if (action === 'set-wallpaper') {
+            if (global.Theme?.setWallpaper && node.dataset.wpMode) {
+              global.Theme.setWallpaper({ mode: node.dataset.wpMode, id: node.dataset.wpId || null });
+              await this._onRoute(global.Router.current());
+            }
+            return;
+          }
+          if (action === 'toggle-follow-theme-wallpaper') {
+            if (global.Theme?.setWallpaper) {
+              global.Theme.setWallpaper({ followTheme: Boolean(node.checked) });
+              await this._onRoute(global.Router.current());
+            }
+            return;
+          }
+          if (action === 'trigger-upload-wallpaper') {
+            const input = global.document.getElementById('wallpaper-upload-input');
+            if (input) input.click();
+            return;
+          }
+          if (action === 'delete-wallpaper') {
+            if (global.Theme?.deleteCustomWallpaper && node.dataset.wpId) {
+              await global.Theme.deleteCustomWallpaper(node.dataset.wpId);
+              global.AppShell.toast('已删除自定义壁纸');
+              await this._onRoute(global.Router.current());
+            }
+            return;
+          }
+          if (action === 'set-wallpaper-fit') {
+            if (global.Theme?.setWallpaper && node.dataset.fit) {
+              global.Theme.setWallpaper({ fit: node.dataset.fit });
+              await this._onRoute(global.Router.current());
+            }
+            return;
+          }
+          if (action === 'set-glass-preset') {
+            if (global.Theme?.applyGlassPreset && node.dataset.preset) {
+              global.Theme.applyGlassPreset(node.dataset.preset);
+              await this._onRoute(global.Router.current());
+            }
+            return;
+          }
+          if (action === 'set-native-glass-engine') {
+            if (global.Theme?.setGlass && node.dataset.engine) {
+              global.Theme.setGlass({ nativeEngine: node.dataset.engine });
+              await this._onRoute(global.Router.current());
+            }
+            return;
+          }
+          if (action === 'set-cursor-style') {
+            if (global.Theme?.setTerminalTypography && node.dataset.cursor) {
+              global.Theme.setTerminalTypography({ cursorStyle: node.dataset.cursor });
+              await this._onRoute(global.Router.current());
+            }
+            return;
+          }
+          if (action === 'toggle-cursor-blink') {
+            if (global.Theme?.setTerminalTypography) {
+              global.Theme.setTerminalTypography({ cursorBlink: Boolean(node.checked) });
+            }
+            return;
+          }
+          if (action === 'reset-appearance') {
+            if (global.Theme?.resetAppearance) {
+              global.Theme.resetAppearance();
+              global.AppShell.toast('已恢复默认外观设置');
+              await this._onRoute(global.Router.current());
+            }
+            return;
+          }
+        } finally {
+          this._handlingAppearanceAction = false;
+        }
       }
       if (action === 'toggle-monitor-page') {
         const key = node.dataset.uiKey;

@@ -438,7 +438,7 @@ describe('native window transparency', () => {
     const doc = dom.window.document;
     const style = doc.createElement('style');
     const concreteCss = (workspaceCss + '\n' + previewWorkspaceCss)
-      .replace(/color-mix\([^;{}]+\)/g, '#16161e')
+      .replace(/color-mix\((?:[^()]|\([^()]*\))*\)/g, '#16161e')
       .replace(/var\(--fp-bg(?:,[^)]+)?\)/g, '#1a1b26')
       .replace(/var\(--fp-panel(?:,[^)]+)?\)/g, '#24283b')
       .replace(/var\(--workspace-bg(?:,[^)]+)?\)/g, '#1a1b26')
@@ -482,5 +482,171 @@ describe('native window transparency', () => {
     expect(dom.window.getComputedStyle(doc.querySelector('.fp-overlay.fp-side.fp-dock')).backgroundColor).toBe('rgb(26, 27, 38)');
     expect(dom.window.getComputedStyle(doc.querySelector('.ms-sidebar .sidebar-footer')).backgroundColor).toBe('rgb(22, 22, 30)');
     expect(dom.window.getComputedStyle(doc.querySelector('.workspace-chrome .brand')).backgroundColor).toBe('rgb(22, 22, 30)');
+  });
+});
+
+describe('wallpapers, glass engine, auto scheme, custom themes & typography', () => {
+  it('exposes 12 built-in wallpapers and resolves theme-matched wallpapers automatically', () => {
+    const Theme = loadTheme('tokyo-night');
+    const wallpapers = Theme.getBuiltInWallpapers();
+    expect(wallpapers).toHaveLength(12);
+    for (const theme of Theme.getThemeList()) {
+      expect(wallpapers.some((w) => w.id === theme.defaultWallpaper)).toBe(true);
+    }
+
+    Theme.setWallpaper({ mode: 'builtin', followTheme: true });
+    const root = dom.window.document.documentElement;
+    expect(Theme.isWallpaperActive()).toBe(true);
+    expect(Theme.isBackdropActive()).toBe(true);
+    expect(Theme.getResolvedWallpaperUrl()).toBe('/wallpapers/tokyo-night-skyline.webp');
+    expect(root.hasAttribute('data-wallpaper-active')).toBe(true);
+    expect(root.hasAttribute('data-backdrop-active')).toBe(true);
+    expect(Theme.getTerminalTheme().background).toBe('rgba(0, 0, 0, 0)');
+    const backdrop = dom.window.document.getElementById('anymux-wallpaper-backdrop');
+    expect(backdrop).not.toBeNull();
+    expect(backdrop.hidden).toBe(false);
+    expect(backdrop.querySelector('.anymux-wp-image').style.backgroundImage).toContain('/wallpapers/tokyo-night-skyline.webp');
+
+    Theme.apply('oyster');
+    expect(Theme.getResolvedWallpaperUrl()).toBe('/wallpapers/oyster-dune.webp');
+    expect(backdrop.querySelector('.anymux-wp-image').style.backgroundImage).toContain('/wallpapers/oyster-dune.webp');
+
+    Theme.apply('tokyo-night');
+    Theme.setWallpaper({ mode: 'builtin', id: 'nord-fjord' });
+    expect(Theme.getWallpaper().followTheme).toBe(false);
+    expect(Theme.getResolvedWallpaperUrl()).toBe('/wallpapers/nord-fjord.webp');
+
+    Theme.setWallpaper({ mode: 'none' });
+    expect(Theme.isWallpaperActive()).toBe(false);
+    expect(backdrop.hidden).toBe(true);
+    expect(Theme.getTerminalTheme().background).toBe('#1a1b26');
+  });
+
+  it('applies glass presets, fine CSS variables, and rich native Material/Liquid Glass payloads', () => {
+    dom = new JSDOM('<!doctype html><html><body></body></html>', {
+      runScripts: 'outside-only',
+      url: 'https://anymux.test/',
+    });
+    dom.window.__anymuxTransparency = true;
+    dom.window.__anymuxGlassEngine = 'material';
+    dom.window.__anymuxLiquidGlass = true;
+    const postMessage = vi.fn();
+    dom.window.webkit = { messageHandlers: { anymuxAppearance: { postMessage } } };
+    dom.window.eval(themeSource);
+    const Theme = dom.window.Theme;
+
+    expect(Theme.supportsMaterialEngine()).toBe(true);
+    expect(Theme.supportsLiquidGlass()).toBe(true);
+    expect(postMessage).toHaveBeenCalledWith(expect.objectContaining({
+      engine: 'material',
+      mode: 'none',
+      colorScheme: 'dark',
+    }));
+
+    Theme.applyGlassPreset('liquid');
+    expect(Theme.getWallpaper().mode).toBe('desktop');
+    expect(Theme.getGlass().nativeEngine).toBe('liquid-regular');
+    expect(Theme.getTransparency()).toBe(38);
+    expect(postMessage).toHaveBeenLastCalledWith(expect.objectContaining({
+      mode: 'desktop',
+      engine: 'liquid-regular',
+      blurRadius: 34,
+      saturation: 1.55,
+      glassIntensity: 95,
+    }));
+
+    Theme.setGlass({ blurRadius: 40, noiseOpacity: 12, inactivePaneDim: 30 });
+    const root = dom.window.document.documentElement;
+    expect(root.style.getPropertyValue('--anymux-wp-blur')).toBe('40px');
+    expect(root.style.getPropertyValue('--anymux-wp-noise-opacity')).toBe('0.120');
+    expect(root.style.getPropertyValue('--anymux-pane-inactive-dim')).toBe('30%');
+  });
+
+  it('switches automatically between light and dark themes when system color scheme changes', () => {
+    dom = new JSDOM('<!doctype html><html><body></body></html>', {
+      runScripts: 'outside-only',
+      url: 'https://anymux.test/',
+    });
+    let lightMatches = false;
+    const listeners = [];
+    dom.window.matchMedia = vi.fn(() => ({
+      get matches() { return lightMatches; },
+      addEventListener: (_evt, cb) => listeners.push(cb),
+    }));
+    dom.window.eval(themeSource);
+    const Theme = dom.window.Theme;
+
+    Theme.setLightThemeId('github-light');
+    Theme.setDarkThemeId('nord');
+    Theme.setThemeMode('system');
+    expect(Theme.getCurrent()).toBe('nord');
+
+    lightMatches = true;
+    listeners.forEach((cb) => cb({ matches: true }));
+    expect(Theme.getCurrent()).toBe('github-light');
+    expect(dom.window.document.documentElement.getAttribute('data-theme')).toBe('github-light');
+  });
+
+  it('enforces WCAG contrast on custom accent overrides and supports custom theme JSON import/export/delete', () => {
+    const Theme = loadTheme('tokyo-night');
+    Theme.setAccentOverride('#1d1e2b');
+    const accent = dom.window.document.documentElement.style.getPropertyValue('--workspace-accent');
+    const bg = dom.window.document.documentElement.style.getPropertyValue('--workspace-bg');
+    expect(contrastRatio(channels(accent), channels(bg))).toBeGreaterThanOrEqual(4.5);
+
+    const imported = Theme.importThemeJson(JSON.stringify({
+      name: 'Midnight Jade',
+      terminal: {
+        background: '#0f1715',
+        foreground: '#dbeae4',
+        blue: '#4fd1c5',
+        green: '#68d391',
+      },
+    }));
+    expect(imported.id).toBe('custom-midnight-jade');
+    expect(Theme.getCurrent()).toBe('custom-midnight-jade');
+    expect(Theme.getThemeList().some((t) => t.id === 'custom-midnight-jade')).toBe(true);
+
+    const exported = JSON.parse(Theme.exportThemeJson('custom-midnight-jade'));
+    expect(exported.name).toBe('Midnight Jade');
+    expect(exported.ui['--workspace-bg']).toBe('#0f1715');
+
+    expect(Theme.deleteCustomTheme('custom-midnight-jade')).toBe(true);
+    expect(Theme.getCurrent()).toBe('tokyo-night');
+  });
+
+  it('bounds terminal typography, syncs with server timestamps, and renders upgraded appearance settings', async () => {
+    const Theme = loadTheme('tokyo-night');
+    const typoListener = vi.fn();
+    dom.window.document.addEventListener('tmux-typography-change', typoListener);
+    Theme.setTerminalTypography({ fontSize: 16, lineHeight: 1.45, cursorStyle: 'bar', cursorBlink: false, panePadding: 10 });
+    expect(typoListener).toHaveBeenCalledOnce();
+    expect(Theme.getTerminalTypography()).toEqual({
+      fontSize: 16,
+      lineHeight: 1.45,
+      cursorStyle: 'bar',
+      cursorBlink: false,
+      panePadding: 10,
+    });
+    expect(dom.window.document.documentElement.style.getPropertyValue('--terminal-pane-padding')).toBe('10px');
+
+    const remoteConfig = {
+      ...Theme.getSnapshot(),
+      updatedAt: Date.now() + 60000,
+      themeId: 'nord',
+      wallpaper: { mode: 'builtin', id: null, followTheme: true, fit: 'cover', brightness: 92 },
+    };
+    dom.window.Api = {
+      get: vi.fn(async () => ({ config: remoteConfig, customWallpapers: [] })),
+      put: vi.fn(async () => ({})),
+    };
+    await Theme.syncFromServer();
+    expect(Theme.getCurrent()).toBe('nord');
+    expect(Theme.getWallpaper().mode).toBe('builtin');
+
+    renderSettings();
+    expect(dom.window.document.querySelectorAll('.wallpaper-card').length).toBeGreaterThanOrEqual(14);
+    expect(dom.window.document.querySelectorAll('.glass-preset-chip').length).toBeGreaterThanOrEqual(4);
+    expect(dom.window.document.getElementById('typo-fontSize')).not.toBeNull();
   });
 });

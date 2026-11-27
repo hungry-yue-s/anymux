@@ -20,6 +20,8 @@ import { fileURLToPath } from 'node:url';
 import { Service } from 'cordis';
 import express from 'express';
 import { REPO_ROOT } from '../../lib/paths.js';
+import { AppearanceStore } from '../../lib/appearance.js';
+import { createAppearanceRouter } from '../../lib/api/appearance.js';
 import { composePage, readContribution } from './compose.js';
 import { moveLegacyRelayConfig } from './relay-config.js';
 
@@ -78,6 +80,11 @@ export default class UiService extends Service {
     }
 
     this.contribute(OWN_CONTRIBUTION);
+    this.appearance = new AppearanceStore(launch?.configDir || null);
+    this.appearance.ready().catch((error) => {
+      ctx.logger?.warn?.('could not load appearance config: %s', error.message);
+    });
+    ctx.http.mount('/api/appearance', createAppearanceRouter(this.appearance), { json: false });
     // The plugins this panel runs, rendered with each page, so the page calls
     // only the APIs that are there (PanelSlots.hasPlugin, slots.js).
     this.part('head', 0, () => {

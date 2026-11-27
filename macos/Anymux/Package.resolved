@@ -1,0 +1,15 @@
+{
+  "originHash" : "8372110913212245c283de48a859e156f5a7754b811fc39556c597f2fcbb4b3b",
+  "pins" : [
+    {
+      "identity" : "materialview",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/OskarGroth/MaterialView.git",
+      "state" : {
+        "revision" : "b3a04ce56eca69d388c48e9621ce61778fe976c7",
+        "version" : "1.0.0"
+      }
+    }
+  ],
+  "version" : 3
+}

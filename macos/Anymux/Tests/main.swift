@@ -140,11 +140,50 @@ private func testTitlebarDragHitTesting() throws {
     try expect(drag.hitTest(NSPoint(x: 500, y: 778)) == nil, "hidden titlebar must not intercept modal clicks")
 }
 
+private func testNativeAppearanceConfig() throws {
+    let legacy = NativeAppearanceConfig(messageBody: ["glassIntensity": 60.0])
+    try expect(legacy.glassIntensity == 60.0, "legacy glassIntensity should parse")
+    try expect(legacy.mode == "desktop", "legacy payload should default to desktop mode")
+    try expect(legacy.blurRadius == 18.0, "legacy payload should derive blurRadius from intensity")
+
+    let rich = NativeAppearanceConfig(messageBody: [
+        "glassIntensity": 140.0,
+        "mode": "desktop",
+        "engine": "liquid-clear",
+        "blurRadius": 99.0,
+        "saturation": 3.5,
+        "brightness": -0.9,
+        "tintHex": " #7AA2F7 ",
+        "tintAlpha": 1.8,
+        "colorScheme": "light",
+    ])
+    try expect(rich.glassIntensity == 100.0, "intensity should clamp to 100")
+    try expect(rich.engine == .liquidClear, "liquid-clear engine should parse")
+    try expect(rich.blurRadius == 60.0, "blurRadius should clamp to 60")
+    try expect(rich.saturation == 2.2, "saturation should clamp to 2.2")
+    try expect(rich.brightness == -0.3, "brightness should clamp to -0.3")
+    try expect(rich.tintHex == "#7aa2f7", "tintHex should normalize lowercase")
+    try expect(rich.tintAlpha == 1.0, "tintAlpha should clamp to 1.0")
+    try expect(rich.isLight == true, "light colorScheme should parse")
+
+    let invalid = NativeAppearanceConfig(messageBody: [
+        "mode": "evil",
+        "engine": "unknown",
+        "tintHex": "not-a-hex",
+        "blurRadius": Double.nan,
+    ], fallback: rich)
+    try expect(invalid.mode == rich.mode, "invalid mode should keep fallback")
+    try expect(invalid.engine == rich.engine, "invalid engine should keep fallback")
+    try expect(invalid.tintHex == nil, "invalid tintHex should reject safely")
+    try expect(invalid.blurRadius == rich.blurRadius, "NaN blurRadius should keep fallback")
+}
+
 do {
     try testEndpointResolution()
     try testServiceStateParsing()
     try MainActor.assumeIsolated { try testTitlebarDragHitTesting() }
-    print("macOS shell self-tests passed: endpoint, TLS pin, loopback policy, service state, native titlebar hit-testing")
+    try testNativeAppearanceConfig()
+    print("macOS shell self-tests passed: endpoint, TLS pin, loopback policy, service state, native titlebar hit-testing, appearance config")
 } catch {
     fputs("macOS shell self-test failed: \(error)\n", stderr)
     exit(1)

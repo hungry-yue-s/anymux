@@ -10,7 +10,15 @@ let package = Package(
     products: [
         .executable(name: "Anymux", targets: ["Anymux"]),
     ],
+    dependencies: [
+        .package(url: "https://github.com/OskarGroth/MaterialView.git", from: "1.0.0"),
+    ],
     targets: [
-        .executableTarget(name: "Anymux"),
+        .executableTarget(
+            name: "Anymux",
+            dependencies: [
+                .product(name: "MaterialView", package: "MaterialView"),
+            ]
+        ),
     ]
 )

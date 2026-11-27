@@ -702,3 +702,45 @@ html[data-native-transparency] :is(.blk-mode-float, .blk-mode-max, .blk-menu, .b
   -webkit-backdrop-filter: blur(26px) saturate(1.25);
   backdrop-filter: blur(26px) saturate(1.25);
 }
+
+html[data-wallpaper-active] :is(.blk-frame, .blk-dialog-overlay) {
+  --g-well: rgba(0, 0, 0, .16);
+  --g-bar: color-mix(in srgb, var(--workspace-panel) 24%, transparent);
+  --g-raised: color-mix(in srgb, var(--workspace-panel) 46%, transparent);
+  --g-float: color-mix(in srgb, var(--workspace-panel) 82%, transparent);
+  --g-edge: rgba(255, 255, 255, .07);
+  --b-bg: var(--g-well);
+  --b-sunken: var(--g-well);
+  --b-panel: var(--g-raised);
+  --b-hover: color-mix(in srgb, var(--workspace-text) 9%, transparent);
+  --b-line: color-mix(in srgb, var(--workspace-text) 11%, transparent);
+  --b-line-strong: color-mix(in srgb, var(--workspace-text) 20%, transparent);
+  --b-accent-soft: color-mix(in srgb, var(--b-accent) 24%, transparent);
+}
+html[data-wallpaper-active][data-color-scheme="light"] :is(.blk-frame, .blk-dialog-overlay) {
+  --g-well: rgba(0, 0, 0, .045);
+  --g-bar: color-mix(in srgb, var(--workspace-panel) 46%, transparent);
+  --g-raised: color-mix(in srgb, var(--workspace-panel) 68%, transparent);
+  --g-float: color-mix(in srgb, var(--workspace-panel) 88%, transparent);
+  --g-edge: rgba(255, 255, 255, .55);
+}
+html[data-wallpaper-active] :is(.blk-frame, .git-side, .git-log) { background: transparent; }
+html[data-wallpaper-active] :is(.blk-frame-head, .blk-toolbar, .git-diff-head, .git-commit-card) {
+  background: var(--g-bar);
+  box-shadow: inset 0 1px 0 var(--g-edge);
+}
+html[data-wallpaper-active] .git-commit { background: var(--g-raised); box-shadow: inset 0 1px 0 var(--g-edge); }
+html[data-wallpaper-active] .blk-hunk { background: color-mix(in srgb, var(--workspace-panel) 12%, transparent); }
+html[data-wallpaper-active] .git-block .blk-hunk { background: color-mix(in srgb, var(--workspace-bg) 88%, transparent); }
+html[data-wallpaper-active] .blk-hunk-head { background: var(--g-bar); }
+html[data-wallpaper-active] .blk-diff-filehead {
+  background: var(--g-float);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+}
+html[data-wallpaper-active] :is(.blk-mode-float, .blk-mode-max, .blk-menu, .blk-dialog) {
+  background: var(--g-float);
+  box-shadow: var(--b-shadow), inset 0 1px 0 var(--g-edge);
+  -webkit-backdrop-filter: blur(var(--anymux-float-blur, 26px)) saturate(var(--anymux-wp-saturate, 1.25));
+  backdrop-filter: blur(var(--anymux-float-blur, 26px)) saturate(var(--anymux-wp-saturate, 1.25));
+}

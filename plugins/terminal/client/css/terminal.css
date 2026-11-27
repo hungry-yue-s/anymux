@@ -488,6 +488,11 @@ html[data-native-transparency] .terminal-container, html[data-native-transparenc
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }
+html[data-wallpaper-active] .terminal-container, html[data-wallpaper-active] .terminal-container .xterm-viewport {
+  background: transparent !important;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
 
 .pane-box {
   transition: background .16s ease, border-color .16s ease, box-shadow .16s ease,

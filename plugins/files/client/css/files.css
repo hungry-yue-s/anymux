@@ -834,6 +834,11 @@ html[data-native-transparency] .fp-dock .fp-modal, html[data-native-transparency
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }
+html[data-wallpaper-active] .fp-dock .fp-modal, html[data-wallpaper-active] .fp-dock .fp-dock-tabs, html[data-wallpaper-active] .fp-dock .fp-header, html[data-wallpaper-active] .fp-dock .fp-body, html[data-wallpaper-active] .fp-dock .fp-dir-crumb, html[data-wallpaper-active] .fp-dock .fp-code-wrap {
+  background: transparent !important;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
 
 .fp-menu {
   border-color: var(--ui-border);

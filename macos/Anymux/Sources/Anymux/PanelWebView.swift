@@ -13,8 +13,13 @@ struct PanelWebView: NSViewRepresentable {
 
     func makeNSView(context: Context) -> PanelBackgroundView {
         let configuration = WKWebViewConfiguration()
-        let transparencyCapability = PanelWKWebView.supportsBackgroundTransparency
-            ? "; window.__anymuxTransparency = true; window.__tmuxPanelTransparency = true" : ""
+        var transparencyCapability = ""
+        if PanelWKWebView.supportsBackgroundTransparency {
+            transparencyCapability = "; window.__anymuxTransparency = true; window.__tmuxPanelTransparency = true; window.__anymuxGlassEngine = 'material'"
+            if PanelBackgroundView.supportsLiquidGlass {
+                transparencyCapability += "; window.__anymuxLiquidGlass = true"
+            }
+        }
         configuration.userContentController.addUserScript(WKUserScript(
             source: "document.documentElement.classList.add('tmux-native-shell'); document.documentElement.classList.add('tmux-native-titlebar')" + transparencyCapability,
             injectionTime: .atDocumentStart,
@@ -74,7 +79,7 @@ struct PanelWebView: NSViewRepresentable {
         private weak var primaryWebView: WKWebView?
         private let endpoint: PanelEndpoint
         private var childWindows: [ObjectIdentifier: NSWindowController] = [:]
-        private var glassIntensity = 100.0
+        private var appearanceConfig = NativeAppearanceConfig.default
         private var downloadDestinations: [ObjectIdentifier: (temporary: URL, final: URL)] = [:]
 
         init(model: AppModel, endpoint: PanelEndpoint) {
@@ -146,14 +151,12 @@ struct PanelWebView: NSViewRepresentable {
                 return
             }
             if name == Self.appearanceHandlerName,
-               let body = message.body as? [String: Any],
-               let value = body["glassIntensity"] as? Double,
-               value.isFinite {
-                glassIntensity = max(0, min(100, value))
-                (primaryWebView as? PanelWKWebView)?.setGlassIntensity(glassIntensity)
+               let body = message.body as? [String: Any] {
+                appearanceConfig = NativeAppearanceConfig(messageBody: body, fallback: appearanceConfig)
+                (primaryWebView as? PanelWKWebView)?.applyAppearance(appearanceConfig)
                 for controller in childWindows.values {
                     let child = controller.window?.contentView?.subviews.compactMap({ $0 as? PanelWKWebView }).first
-                    child?.setGlassIntensity(glassIntensity)
+                    child?.applyAppearance(appearanceConfig)
                 }
                 return
             }
@@ -372,7 +375,7 @@ struct PanelWebView: NSViewRepresentable {
             )
             window.title = title
             window.contentView = child.makeGlassContainer()
-            child.setGlassIntensity(glassIntensity)
+            child.applyAppearance(appearanceConfig)
             window.delegate = self
             window.center()
             let controller = NSWindowController(window: window)
@@ -432,15 +435,22 @@ final class PanelWKWebView: WKWebView {
     private weak var titlebarDragArea: PanelTitlebarDragView?
     private var titlebarDragHeight: NSLayoutConstraint?
 
+    func applyAppearance(_ config: NativeAppearanceConfig) {
+        (superview as? PanelBackgroundView)?.applyAppearance(config)
+    }
+
     func setGlassIntensity(_ percent: Double) {
-        guard let background = (superview as? PanelBackgroundView)?.materialView else { return }
-        // maskImage affects only the material, leaving WebKit and text opaque.
-        let mask = NSImage(size: NSSize(width: 1, height: 1))
-        mask.lockFocus()
-        NSColor(white: 1, alpha: max(0, min(100, percent)) / 100).setFill()
-        NSRect(x: 0, y: 0, width: 1, height: 1).fill()
-        mask.unlockFocus()
-        background.maskImage = percent >= 100 ? nil : mask
+        applyAppearance(NativeAppearanceConfig(
+            glassIntensity: max(0, min(100, percent)),
+            mode: "desktop",
+            engine: .system,
+            blurRadius: (percent / 100.0) * 30.0,
+            saturation: 1.35,
+            brightness: 0.0,
+            tintHex: nil,
+            tintAlpha: 0.22,
+            isLight: false
+        ))
     }
 
     func makeGlassContainer(integratedTitlebar: Bool = false) -> PanelBackgroundView {

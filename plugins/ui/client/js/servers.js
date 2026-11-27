@@ -383,12 +383,239 @@
     },
 
     _settingsAppearance: function () {
-      return '<div class="intro"><h2>外观</h2><p>主题会立即应用到面板与终端。</p></div>'
-        + '<div class="section"><div class="section-head"><h3>主题</h3>'
-        + '<span>当前：' + esc(global.Theme ? global.Theme.getName() : '—') + '</span></div>'
-        + this._themeGrid() + '</div>'
+      var T = global.Theme || {};
+      var currentThemeId = typeof T.getCurrent === 'function' ? T.getCurrent() : '';
+      var currentName = typeof T.getName === 'function' ? T.getName() : '—';
+      var themeMode = typeof T.getThemeMode === 'function' ? T.getThemeMode() : 'manual';
+      var lightThemeId = typeof T.getLightThemeId === 'function' ? T.getLightThemeId() : 'oyster';
+      var darkThemeId = typeof T.getDarkThemeId === 'function' ? T.getDarkThemeId() : 'tokyo-night';
+      var accentOverride = typeof T.getAccentOverride === 'function' ? T.getAccentOverride() : null;
+      var accentSwatches = typeof T.getAccentSwatches === 'function' ? T.getAccentSwatches() : [];
+      var allThemes = typeof T.getThemeList === 'function' ? T.getThemeList() : [];
+
+      var modeSwitch = typeof T.setThemeMode === 'function'
+        ? '<div class="appearance-toolbar">'
+          + '<div class="appearance-segmented" role="group" aria-label="配色模式">'
+          + '<button type="button" class="appearance-seg-btn' + (themeMode === 'manual' ? ' active' : '') + '" data-action="set-theme-mode" data-mode="manual">手动选择</button>'
+          + '<button type="button" class="appearance-seg-btn' + (themeMode === 'system' ? ' active' : '') + '" data-action="set-theme-mode" data-mode="system">跟随系统浅/深</button>'
+          + '</div>'
+          + '<div class="appearance-accent-actions">'
+          + '<button type="button" class="ms-btn" data-action="toggle-import-theme">导入主题 JSON</button> '
+          + '<button type="button" class="ms-btn" data-action="export-theme-json">导出当前主题</button>'
+          + '</div></div>'
+        : '';
+
+      var systemPair = '';
+      if (themeMode === 'system' && allThemes.length) {
+        var lightOpts = allThemes.filter(function (t) { return t.colorScheme === 'light'; });
+        var darkOpts = allThemes.filter(function (t) { return t.colorScheme !== 'light'; });
+        systemPair = '<div class="appearance-system-pair">'
+          + '<label class="appearance-field"><span>浅色首选主题</span>'
+          + '<select class="appearance-select" data-appearance-select="lightThemeId">'
+          + (lightOpts.length ? lightOpts : allThemes).map(function (t) {
+            return '<option value="' + esc(t.id) + '"' + (t.id === lightThemeId ? ' selected' : '') + '>' + esc(t.name) + '</option>';
+          }).join('') + '</select></label>'
+          + '<label class="appearance-field"><span>深色首选主题</span>'
+          + '<select class="appearance-select" data-appearance-select="darkThemeId">'
+          + (darkOpts.length ? darkOpts : allThemes).map(function (t) {
+            return '<option value="' + esc(t.id) + '"' + (t.id === darkThemeId ? ' selected' : '') + '>' + esc(t.name) + '</option>';
+          }).join('') + '</select></label></div>';
+      }
+
+      var accentBar = accentSwatches.length
+        ? '<div class="appearance-accent-row">'
+          + '<span class="appearance-accent-label">自定义强调色</span>'
+          + '<div class="accent-swatch-list">'
+          + accentSwatches.map(function (hexVal) {
+            var active = accentOverride && accentOverride.toLowerCase() === hexVal.toLowerCase();
+            return '<button type="button" class="accent-swatch' + (active ? ' active' : '') + '"'
+              + ' data-action="set-accent" data-accent="' + esc(hexVal) + '"'
+              + ' style="background:' + esc(hexVal) + '" aria-label="强调色 ' + esc(hexVal) + '"></button>';
+          }).join('')
+          + '<input id="appearance-accent-picker" class="accent-color-input" type="color" value="' + esc(accentOverride || '#7aa2f7') + '" aria-label="自定义取色">'
+          + (accentOverride ? '<button type="button" class="ms-btn" data-action="reset-accent">恢复主题默认</button>' : '')
+          + '</div></div>'
+        : '';
+
+      var importPanel = '<div id="theme-import-panel" class="theme-import-panel"' + (this._showImportPanel ? '' : ' hidden') + '>'
+        + '<label class="appearance-field"><span>粘贴完整主题 JSON 或终端配色 JSON（自动进行 WCAG 对比度校正）</span>'
+        + '<textarea id="theme-import-textarea" class="theme-import-textarea" placeholder=\'{"name":"My Theme","terminal":{"background":"#181a24","foreground":"#e6ebf5","blue":"#7aa2f7"}}\'></textarea></label>'
+        + '<div><button type="button" class="ms-btn primary" data-action="submit-import-theme">验证并导入</button> '
+        + '<button type="button" class="ms-btn" data-action="toggle-import-theme">取消</button></div></div>';
+
+      return '<div class="intro"><h2>外观</h2><p>主题、壁纸、毛玻璃质感与终端排版会实时同步到工作台与终端。</p></div>'
+        + '<div class="section"><div class="section-head"><h3>主题配色</h3>'
+        + '<span>当前：' + esc(currentName) + (themeMode === 'system' ? '（自动跟随系统）' : '') + '</span></div>'
+        + modeSwitch + systemPair + this._themeGrid() + accentBar + importPanel + '</div>'
+        + this._wallpaperSettings(currentThemeId)
+        + this._glassSettings()
         + this._transparencySettings()
+        + this._typographySettings()
         + this._monitorPageSettings();
+    },
+
+    _wallpaperSettings: function (currentThemeId) {
+      var T = global.Theme;
+      if (!T || typeof T.getWallpaper !== 'function') return '';
+      var wp = T.getWallpaper();
+      var supportsNative = Boolean(T.supportsTransparency && T.supportsTransparency());
+      var builtin = typeof T.getBuiltInWallpapers === 'function' ? T.getBuiltInWallpapers() : [];
+      var custom = typeof T.getCustomWallpapers === 'function' ? T.getCustomWallpapers() : [];
+      var allThemes = typeof T.getThemeList === 'function' ? T.getThemeList() : [];
+      var currentTheme = allThemes.filter(function (t) { return t.id === currentThemeId; })[0];
+      var recommendedId = currentTheme ? currentTheme.defaultWallpaper : '';
+      var activeResolvedId = typeof T.getResolvedWallpaperId === 'function' ? T.getResolvedWallpaperId(currentThemeId) : wp.id;
+
+      var cards = [];
+      cards.push(
+        '<button type="button" class="wallpaper-card' + (wp.mode === 'none' ? ' active' : '') + '" data-action="set-wallpaper" data-wp-mode="none">'
+        + '<span class="wallpaper-thumb" style="background:var(--workspace-bg, var(--bg-primary))"></span>'
+        + '<span class="wallpaper-meta"><strong>纯色背景</strong><small>简洁高对比无图案</small></span></button>'
+      );
+      cards.push(
+        '<button type="button" class="wallpaper-card' + (wp.mode === 'desktop' ? ' active' : '') + '"'
+        + ' data-action="set-wallpaper" data-wp-mode="desktop"' + (supportsNative ? '' : ' disabled') + '>'
+        + '<span class="wallpaper-thumb wallpaper-thumb-desktop">' + (supportsNative ? 'Desktop' : 'macOS 客户端') + '</span>'
+        + '<span class="wallpaper-meta"><strong>透传桌面</strong><small>' + (supportsNative ? '实时透视桌面壁纸与窗口' : '仅桌面端原生客户端支持') + '</small></span></button>'
+      );
+
+      builtin.forEach(function (item) {
+        var isActive = wp.mode === 'builtin' && activeResolvedId === item.id;
+        var isRec = recommendedId === item.id;
+        cards.push(
+          '<button type="button" class="wallpaper-card' + (isActive ? ' active' : '') + '"'
+          + ' data-action="set-wallpaper" data-wp-mode="builtin" data-wp-id="' + esc(item.id) + '">'
+          + '<span class="wallpaper-thumb" style="background-image:url(\'' + esc(item.url) + '\'),' + esc(item.previewBg) + '">'
+          + (isRec ? '<span class="wallpaper-badge">推荐</span>' : '') + '</span>'
+          + '<span class="wallpaper-meta"><strong>' + esc(item.name) + '</strong><small>' + esc(item.description) + '</small></span></button>'
+        );
+      });
+
+      custom.forEach(function (item) {
+        var isActive = wp.mode === 'custom' && wp.id === item.id;
+        cards.push(
+          '<div class="theme-card-wrap">'
+          + '<button type="button" class="wallpaper-card' + (isActive ? ' active' : '') + '"'
+          + ' data-action="set-wallpaper" data-wp-mode="custom" data-wp-id="' + esc(item.id) + '">'
+          + '<span class="wallpaper-thumb" style="background-image:url(\'' + esc(item.url) + '\')">'
+          + '<span class="wallpaper-badge">自定义</span></span>'
+          + '<span class="wallpaper-meta"><strong>' + esc(item.name) + '</strong><small>已同步到 Hub</small></span></button>'
+          + '<button type="button" class="wallpaper-delete-btn" data-action="delete-wallpaper" data-wp-id="' + esc(item.id) + '" aria-label="删除壁纸">×</button>'
+          + '</div>'
+        );
+      });
+
+      var webActive = wp.mode === 'builtin' || wp.mode === 'custom';
+      var fitControls = webActive
+        ? '<div class="appearance-slider-grid" style="margin-top:14px">'
+          + '<div class="appearance-slider-item"><div class="appearance-slider-head"><label>填充方式</label></div>'
+          + '<div class="appearance-segmented">'
+          + [['cover', '铺满'], ['contain', '完整'], ['fill', '拉伸']].map(function (entry) {
+            return '<button type="button" class="appearance-seg-btn' + (wp.fit === entry[0] ? ' active' : '') + '" data-action="set-wallpaper-fit" data-fit="' + entry[0] + '">' + entry[1] + '</button>';
+          }).join('') + '</div></div>'
+          + '<div class="appearance-slider-item"><div class="appearance-slider-head"><label for="wp-brightness">壁纸亮度</label>'
+          + '<output id="wp-brightness-value">' + wp.brightness + '%</output></div>'
+          + '<input id="wp-brightness" type="range" min="40" max="130" step="1" value="' + wp.brightness + '" data-appearance-slider="wallpaper.brightness"></div>'
+          + '</div>'
+        : '';
+
+      return '<div class="section"><div class="section-head"><h3>背景与壁纸</h3>'
+        + '<span>纯色 / 内置主题壁纸 / 自定义上传 / 透传桌面</span></div>'
+        + '<div class="appearance-section-card">'
+        + '<div class="wallpaper-mode-row">'
+        + '<label class="wallpaper-toggle-inline"><input type="checkbox" data-action="toggle-follow-theme-wallpaper"' + (wp.followTheme ? ' checked' : '') + '>'
+        + '<span>切换主题时自动匹配推荐壁纸</span></label>'
+        + '<div><input id="wallpaper-upload-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/avif" hidden>'
+        + '<button type="button" class="ms-btn" data-action="trigger-upload-wallpaper">上传自定义壁纸</button></div>'
+        + '</div>'
+        + '<div class="wallpaper-grid">' + cards.join('') + '</div>'
+        + fitControls
+        + '</div></div>';
+    },
+
+    _glassSettings: function () {
+      var T = global.Theme;
+      if (!T || typeof T.getGlass !== 'function') return '';
+      var glass = T.getGlass();
+      var wp = T.getWallpaper();
+      var presets = typeof T.getGlassPresets === 'function' ? T.getGlassPresets() : [];
+      var supportsLiquid = Boolean(T.supportsLiquidGlass && T.supportsLiquidGlass());
+      var supportsMaterial = Boolean(T.supportsMaterialEngine && T.supportsMaterialEngine());
+      var backdropActive = Boolean(T.isBackdropActive && T.isBackdropActive());
+
+      var presetChips = presets.filter(function (p) {
+        return p.id !== 'clear-glass' || supportsLiquid || wp.mode === 'builtin' || wp.mode === 'custom';
+      }).map(function (p) {
+        return '<button type="button" class="glass-preset-chip' + (glass.preset === p.id ? ' active' : '') + '"'
+          + ' data-action="set-glass-preset" data-preset="' + esc(p.id) + '">'
+          + '<strong>' + esc(p.name) + '</strong><small>' + esc(p.description) + '</small></button>';
+      }).join('');
+
+      var engineRow = '';
+      if (supportsMaterial && wp.mode === 'desktop') {
+        var engines = [
+          ['material', 'MaterialView 精细磨砂'],
+        ];
+        if (supportsLiquid) {
+          engines.push(['liquid-regular', 'Liquid Glass · Regular']);
+          engines.push(['liquid-clear', 'Liquid Glass · Clear']);
+        }
+        engines.push(['system', '系统材质']);
+        engineRow = '<div class="appearance-toolbar" style="margin-bottom:12px">'
+          + '<span class="appearance-accent-label">macOS 原生渲染引擎</span>'
+          + '<div class="appearance-segmented">'
+          + engines.map(function (e) {
+            return '<button type="button" class="appearance-seg-btn' + (glass.nativeEngine === e[0] ? ' active' : '') + '"'
+              + ' data-action="set-native-glass-engine" data-engine="' + esc(e[0]) + '">' + esc(e[1]) + '</button>';
+          }).join('') + '</div></div>';
+      }
+
+      var sliders = [
+        ['blurRadius', '模糊半径', 0, 48, 1, 'px'],
+        ['terminalTint', '终端遮罩浓度', 20, 95, 1, '%'],
+        ['sidebarTint', '侧栏玻璃浓度', 0, 85, 1, '%'],
+        ['saturation', '色彩饱和度', 60, 200, 1, '%'],
+        ['noiseOpacity', '磨砂噪点质感', 0, 18, 1, '%'],
+        ['inactivePaneDim', '非活跃窗格压暗', 0, 45, 1, '%'],
+      ].map(function (spec) {
+        var key = spec[0];
+        var val = glass[key];
+        return '<div class="appearance-slider-item"><div class="appearance-slider-head">'
+          + '<label for="glass-' + key + '">' + esc(spec[1]) + '</label>'
+          + '<output id="glass-' + key + '-value">' + val + spec[5] + '</output></div>'
+          + '<input id="glass-' + key + '" type="range" min="' + spec[2] + '" max="' + spec[3] + '" step="' + spec[4] + '" value="' + val + '"'
+          + ' data-appearance-slider="glass.' + key + '" data-unit="' + spec[5] + '"></div>';
+      }).join('');
+
+      return '<div class="section"><div class="section-head"><h3>毛玻璃与材质</h3>'
+        + '<span>' + (backdropActive ? '实时渲染中' : '选择壁纸或开启透传桌面后可预览效果') + '</span></div>'
+        + '<div class="appearance-section-card">'
+        + '<div class="glass-preset-grid">' + presetChips + '</div>'
+        + engineRow
+        + '<div class="appearance-slider-grid">' + sliders + '</div>'
+        + '</div></div>';
+    },
+
+    _typographySettings: function () {
+      var T = global.Theme;
+      if (!T || typeof T.getTerminalTypography !== 'function') return '';
+      var typo = T.getTerminalTypography();
+      return '<div class="section"><div class="section-head"><h3>终端排版与光标</h3>'
+        + '<button type="button" class="ms-btn" data-action="reset-appearance">恢复默认外观</button></div>'
+        + '<div class="appearance-section-card"><div class="typography-grid">'
+        + '<div class="appearance-slider-item"><div class="appearance-slider-head"><label for="typo-fontSize">字体大小</label><output id="typo-fontSize-value">' + typo.fontSize + 'px</output></div>'
+        + '<input id="typo-fontSize" type="range" min="10" max="22" step="1" value="' + typo.fontSize + '" data-appearance-slider="typography.fontSize" data-unit="px"></div>'
+        + '<div class="appearance-slider-item"><div class="appearance-slider-head"><label for="typo-lineHeight">行高倍数</label><output id="typo-lineHeight-value">' + Number(typo.lineHeight).toFixed(2) + '</output></div>'
+        + '<input id="typo-lineHeight" type="range" min="1.0" max="1.8" step="0.05" value="' + typo.lineHeight + '" data-appearance-slider="typography.lineHeight" data-unit=""></div>'
+        + '<div class="appearance-slider-item"><div class="appearance-slider-head"><label for="typo-panePadding">窗格内边距</label><output id="typo-panePadding-value">' + typo.panePadding + 'px</output></div>'
+        + '<input id="typo-panePadding" type="range" min="0" max="16" step="1" value="' + typo.panePadding + '" data-appearance-slider="typography.panePadding" data-unit="px"></div>'
+        + '<div class="appearance-slider-item"><div class="appearance-slider-head"><label>光标样式</label></div>'
+        + '<div class="appearance-segmented">'
+        + [['block', '方块'], ['bar', '竖线'], ['underline', '下划线']].map(function (c) {
+          return '<button type="button" class="appearance-seg-btn' + (typo.cursorStyle === c[0] ? ' active' : '') + '" data-action="set-cursor-style" data-cursor="' + c[0] + '">' + c[1] + '</button>';
+        }).join('') + '</div>'
+        + '<label class="wallpaper-toggle-inline" style="margin-top:8px"><input type="checkbox" data-action="toggle-cursor-blink"' + (typo.cursorBlink ? ' checked' : '') + '><span>光标闪烁</span></label>'
+        + '</div></div></div></div>';
     },
 
     _transparencySettings: function () {
@@ -445,7 +672,7 @@
         var text = colors['--workspace-text'] || colors['--text-primary'];
         var accent = colors['--workspace-accent'] || colors['--accent-blue'];
         var terminal = theme.terminal || {};
-        return '<button class="theme-card' + (isActive ? ' active' : '') + '"'
+        var card = '<button class="theme-card' + (isActive ? ' active' : '') + '"'
           + ' data-action="set-theme" data-theme="' + esc(theme.id) + '"'
           + (isActive ? ' aria-current="true"' : '')
           + ' style="background:' + esc(bg) + ';border-color:' + esc(isActive ? accent : bgCard) + '">'
@@ -467,6 +694,12 @@
           + (theme.description ? '<span class="theme-card-description" style="color:'
             + esc(colors['--workspace-muted'] || text) + '">' + esc(theme.description) + '</span>' : '')
           + '</button>';
+        if (theme.isCustom) {
+          return '<div class="theme-card-wrap">' + card
+            + '<button type="button" class="theme-card-delete" data-action="delete-custom-theme" data-theme="' + esc(theme.id) + '" aria-label="删除自定义主题">×</button>'
+            + '</div>';
+        }
+        return card;
       }).join('') + '</div>';
     },
 

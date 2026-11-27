@@ -118,8 +118,27 @@
   function themePreview(theme) {
     var t = theme.terminal || {};
     var box = el('div', 'theme-preview');
-    box.style.background = t.background;
+    var wpUrl = typeof Theme.getResolvedWallpaperUrl === 'function' ? Theme.getResolvedWallpaperUrl(theme.id) : null;
+    var wpState = typeof Theme.getWallpaper === 'function' ? Theme.getWallpaper() : { mode: 'none' };
+    var glassState = typeof Theme.getGlass === 'function' ? Theme.getGlass() : { terminalTint: 66 };
+    if (wpUrl && (wpState.mode === 'builtin' || wpState.mode === 'custom')) {
+      box.classList.add('theme-preview-wp');
+      box.style.backgroundImage = 'url("' + wpUrl + '")';
+      box.style.backgroundColor = t.background;
+    } else {
+      box.style.background = t.background;
+    }
     box.style.color = t.foreground;
+    var container = box;
+    if (wpUrl && (wpState.mode === 'builtin' || wpState.mode === 'custom')) {
+      var scrim = el('div', 'theme-preview-wp-scrim');
+      var alpha = Math.max(0.3, Math.min(0.95, (glassState.terminalTint || 66) / 100));
+      var bg = t.background || '#1a1b26';
+      var r = parseInt(bg.slice(1, 3), 16), g = parseInt(bg.slice(3, 5), 16), b = parseInt(bg.slice(5, 7), 16);
+      scrim.style.background = 'rgba(' + r + ',' + g + ',' + b + ',' + alpha.toFixed(2) + ')';
+      box.appendChild(scrim);
+      container = scrim;
+    }
     function line(parts) {
       var row = el('div', 'theme-preview-line');
       parts.forEach(function (part) {
@@ -128,7 +147,7 @@
         if (part[2]) span.style.fontWeight = '600';
         row.appendChild(span);
       });
-      box.appendChild(row);
+      container.appendChild(row);
     }
     line([['➜ ', 'green', true], ['~/work/stencil ', 'cyan', true], ['main ', 'magenta'], ['●3 ↑1', 'yellow']]);
     line([['$ ', 'brightBlack'], ['git status --short']]);
@@ -142,7 +161,7 @@
     last.appendChild(el('span', '', '$ '));
     last.firstChild.style.color = t.brightBlack;
     last.appendChild(cursor);
-    box.appendChild(last);
+    container.appendChild(last);
     var palette = el('div', 'theme-preview-palette');
     ['black', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white'].forEach(function (name) {
       var dot = el('i');
@@ -150,20 +169,28 @@
       dot.title = name;
       palette.appendChild(dot);
     });
-    box.appendChild(palette);
+    container.appendChild(palette);
     return box;
   }
 
   function openThemePicker() {
     if (typeof Theme === 'undefined') return;
+    var snapshot = typeof Theme.getSnapshot === 'function' ? Theme.getSnapshot() : null;
     var original = Theme.getCurrent();
     var themes = Theme.getThemeList();
     var committed = false;
     var previewing = original;
     var picker = openPicker({
-      title: '主题', icon: 'theme', filter: '筛选主题…', className: 'theme-picker',
+      title: '主题与外观', icon: 'theme', filter: '筛选主题…', className: 'theme-picker',
       hints: [['Up+Down', '预览'], ['Enter', '使用'], ['Escape', '恢复']],
-      onClose: function () { if (!committed && previewing !== original) Theme.apply(original); },
+      onClose: function () {
+        if (committed) return;
+        if (snapshot && typeof Theme.restoreSnapshot === 'function') {
+          Theme.restoreSnapshot(snapshot);
+        } else if (previewing !== original) {
+          Theme.apply(original);
+        }
+      },
       onKey: function (e) { nav.key(e); },
     });
     var layoutBox = el('div', 'theme-layout');
@@ -173,6 +200,74 @@
     layoutBox.append(list, previewHost);
     picker.body.appendChild(layoutBox);
 
+    var quickBar = el('div', 'theme-picker-quick');
+    function renderPreview(themeId) {
+      var theme = themes.find(function (t) { return t.id === (themeId || previewing); });
+      if (theme) previewHost.replaceChildren(themePreview(theme));
+    }
+    function renderQuickBar() {
+      quickBar.replaceChildren();
+      var wp = typeof Theme.getWallpaper === 'function' ? Theme.getWallpaper() : { mode: 'none' };
+      var glass = typeof Theme.getGlass === 'function' ? Theme.getGlass() : { preset: 'frosted' };
+      var mode = typeof Theme.getThemeMode === 'function' ? Theme.getThemeMode() : 'manual';
+
+      var wpRow = el('div', 'theme-picker-quick-row');
+      wpRow.appendChild(el('span', 'theme-picker-quick-label', '背景'));
+      var wpOptions = [['none', '纯色'], ['builtin', '主题壁纸']];
+      if (Theme.supportsTransparency && Theme.supportsTransparency()) wpOptions.push(['desktop', '透传桌面']);
+      wpOptions.forEach(function (entry) {
+        var b = el('button', 'theme-picker-chip' + (wp.mode === entry[0] ? ' active' : ''), entry[1]);
+        b.type = 'button';
+        b.addEventListener('click', function () {
+          if (typeof Theme.setWallpaper === 'function') Theme.setWallpaper({ mode: entry[0] });
+          renderPreview();
+          renderQuickBar();
+        });
+        wpRow.appendChild(b);
+      });
+      var sysBtn = el('button', 'theme-picker-chip' + (mode === 'system' ? ' active' : ''), '跟随系统');
+      sysBtn.type = 'button';
+      sysBtn.addEventListener('click', function () {
+        if (typeof Theme.setThemeMode === 'function') {
+          Theme.setThemeMode(mode === 'system' ? 'manual' : 'system');
+          previewing = Theme.getCurrent();
+          renderPreview(previewing);
+          renderQuickBar();
+        }
+      });
+      wpRow.appendChild(sysBtn);
+      quickBar.appendChild(wpRow);
+
+      var glassRow = el('div', 'theme-picker-quick-row');
+      glassRow.appendChild(el('span', 'theme-picker-quick-label', '材质'));
+      [['solid', '实色'], ['mist', '柔雾'], ['frosted', '深邃'], ['liquid', '液态']].forEach(function (entry) {
+        var b = el('button', 'theme-picker-chip' + (glass.preset === entry[0] ? ' active' : ''), entry[1]);
+        b.type = 'button';
+        b.addEventListener('click', function () {
+          if (typeof Theme.applyGlassPreset === 'function') Theme.applyGlassPreset(entry[0]);
+          renderPreview();
+          renderQuickBar();
+        });
+        glassRow.appendChild(b);
+      });
+      var moreBtn = el('button', 'theme-picker-chip', '外观设置 →');
+      moreBtn.type = 'button';
+      moreBtn.style.marginLeft = 'auto';
+      moreBtn.addEventListener('click', function () {
+        committed = true;
+        picker.close('commit');
+        if (typeof Router !== 'undefined' && Router.go) {
+          Router.go({ name: 'settings', params: {} });
+        } else {
+          window.location.hash = '#settings';
+        }
+      });
+      glassRow.appendChild(moreBtn);
+      quickBar.appendChild(glassRow);
+    }
+    picker.body.appendChild(quickBar);
+    renderQuickBar();
+
     var nav = listNavigation(picker, function (node) {
       committed = true;
       Theme.apply(node.dataset.theme);
@@ -181,10 +276,9 @@
     }, function (node) {
       if (node.dataset.theme !== previewing) {
         previewing = node.dataset.theme;
-        Theme.apply(previewing);
+        Theme.apply(previewing, { keepMode: false, announceAppearance: false });
       }
-      var theme = themes.find(function (t) { return t.id === node.dataset.theme; });
-      previewHost.replaceChildren(themePreview(theme));
+      renderPreview(node.dataset.theme);
     });
 
     function draw() {

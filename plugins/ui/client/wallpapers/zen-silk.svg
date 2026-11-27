@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1080" preserveAspectRatio="xMidYMid slice">
+  <defs>
+    <linearGradient id="zs-bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f7f5f0"/>
+      <stop offset="50%" stop-color="#efeae0"/>
+      <stop offset="100%" stop-color="#e9e2d6"/>
+    </linearGradient>
+    <radialGradient id="zs-warm" cx="76%" cy="20%" r="60%">
+      <stop offset="0%" stop-color="#d9b99b" stop-opacity="0.28"/>
+      <stop offset="100%" stop-color="#d9b99b" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="zs-wave-1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.72"/>
+      <stop offset="100%" stop-color="#e5dccd" stop-opacity="0.28"/>
+    </linearGradient>
+    <linearGradient id="zs-wave-2" x1="100%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#c9b8a3" stop-opacity="0.18"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0.5"/>
+    </linearGradient>
+  </defs>
+  <rect width="1920" height="1080" fill="url(#zs-bg)"/>
+  <rect width="1920" height="1080" fill="url(#zs-warm)"/>
+  <path d="M0 700 C 420 520, 820 820, 1280 620 C 1580 490, 1780 560, 1920 480 L 1920 1080 L 0 1080 Z" fill="url(#zs-wave-1)"/>
+  <path d="M0 840 C 380 710, 740 940, 1180 770 C 1520 640, 1740 720, 1920 650 L 1920 1080 L 0 1080 Z" fill="url(#zs-wave-2)"/>
+  <path d="M0 440 C 360 360, 720 560, 1140 420 C 1480 310, 1740 380, 1920 310" fill="none" stroke="#b5a592" stroke-opacity="0.24" stroke-width="1.5"/>
+  <path d="M0 485 C 380 405, 740 605, 1160 465 C 1500 355, 1760 425, 1920 355" fill="none" stroke="#ffffff" stroke-opacity="0.65" stroke-width="1.5"/>
+</svg>

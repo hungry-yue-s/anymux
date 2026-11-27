@@ -90,7 +90,9 @@ export default class HttpService extends Service {
         threshold: 1024,
         brotli: { params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 5 } },
         // Raw files are streamed with byte ranges (video) and uploads stream in.
-        filter: (req, res) => !req.path.startsWith('/api/files/raw') && !req.path.startsWith('/api/upload')
+        filter: (req, res) => !req.path.startsWith('/api/files/raw')
+          && !req.path.startsWith('/api/upload')
+          && !req.path.startsWith('/api/appearance/wallpapers/')
           && compression.filter(req, res),
       }));
     }
