@@ -319,6 +319,7 @@ var BlockHost = (function () {
       busy: false,
       unread: !!options.unread,
       arrivalId: options.arrivalId || null,
+      sheetOpened: false,
       z: ++zTop,
     };
     buildFrame(instance);
@@ -654,6 +655,13 @@ var BlockHost = (function () {
     // First: a frame leaving the sidebar must be released before it is placed.
     syncSidebar();
 
+    var compact = isCompact();
+    var activeSheet = compact
+      ? (instances.find(function (i) { return isHere(i) && i.sheetOpened && i.id === focusedId; })
+        || instances.filter(function (i) { return isHere(i) && i.sheetOpened; }).pop()
+        || null)
+      : null;
+
     instances.forEach(function (instance) {
       var frame = instance.frame;
       if (!isHere(instance)) {
@@ -661,9 +669,13 @@ var BlockHost = (function () {
         instance.shown = false;
         return;
       }
-      // Automatic arrivals wait for desktop docking rather than covering the
-      // phone's terminal with a sheet. An explicit open can still show one.
-      if (instance.unread && isCompact() && !instance.shown) { frame.remove(); return; }
+      if (compact && instance !== activeSheet) {
+        frame.hidden = true;
+        if (frame.parentNode === document.body) frame.remove();
+        instance.shown = false;
+        return;
+      }
+      if (!compact) instance.sheetOpened = false;
       var mode = effectiveMode(instance);
       frame.classList.toggle('blk-mode-dock', mode === 'dock');
       frame.classList.toggle('blk-mode-float', mode === 'float');
@@ -783,6 +795,7 @@ var BlockHost = (function () {
       existing.unread = false;
       if (options.mode && options.mode !== existing.mode) existing.mode = options.mode;
       existing.mode = placeableMode(existing.mode);
+      if (isCompact()) existing.sheetOpened = true;
       if (existing.impl && typeof existing.impl.update === 'function') existing.impl.update(params || {});
       activate(existing.id);
       if (!options.skipServerSync) syncBlockUpsert(existing);
@@ -791,6 +804,7 @@ var BlockHost = (function () {
     var mode = placeableMode(options.mode || kinds[kind].defaultMode || 'dock');
     var instance = create(kind, params || {}, { mode: mode, serverId: sid, windowKey: kinds[kind].perWindow ? currentWindow() : null });
     if (!instance) return null;
+    if (isCompact()) instance.sheetOpened = true;
     activate(instance.id);
     if (!options.skipServerSync) syncBlockUpsert(instance);
     // A freshly built frame may have nothing focusable until its first load.
@@ -808,6 +822,10 @@ var BlockHost = (function () {
   function activate(id) {
     var instance = instances.find(function (i) { return i.id === id; });
     if (!instance) return;
+    if (isCompact()) {
+      instances.forEach(function (i) { i.sheetOpened = (i === instance); });
+      focusedId = id;
+    }
     if (instance.mode === 'dock') {
       dockState[scopeOf(instance)] = dockState[scopeOf(instance)] || {};
       dockState[scopeOf(instance)].active = id;

@@ -143,6 +143,13 @@ export function createWorkbench(global, options = {}) {
     const target = mobile() ? doc.querySelector('.mobile-header') : doc.getElementById('ms-top-actions');
     owner.actions.classList.toggle('wb-actions-mobile', mobile());
     const dest = target || owner.toolbar;
+    if (!mobile() && dest && dest.id === 'ms-top-actions') {
+      Array.from(dest.children).forEach((child) => {
+        if (child !== owner.actions && child.matches('.terminal-header-actions, .workspace-pane-picker, .ms-hoisted-pills')) {
+          child.remove();
+        }
+      });
+    }
     if (owner.actions.parentElement !== dest) dest.append(owner.actions);
     owner.toolbar.hidden = !!target;
     owner.root.classList.toggle('wb-mobile', mobile()); owner.tools.hidden = !mobile();

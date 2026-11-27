@@ -4057,6 +4057,7 @@ textarea:focus-visible {
   border-top: 1px solid var(--border-subtle);
   scrollbar-width: none;
 }
+.ms-mobile-workspace-tools:empty { display: none; }
 
 .ms-mobile-workspace-tools::-webkit-scrollbar { display: none; }
 .ms-mobile-workspace-tools .terminal-header-actions,
@@ -4245,8 +4246,8 @@ textarea:focus-visible {
 /* The Swift window shares one header with the web workspace. Reserve the
    system traffic lights; keep browser and older native layouts unchanged. */
 html.tmux-native-titlebar .brand {
-  height: 44px;
-  min-height: 44px;
+  height: 36px;
+  min-height: 0;
   padding: 0 12px 0 80px;
 }
 
@@ -4267,16 +4268,17 @@ html.tmux-native-titlebar .ms-app.sidebar-collapsed .brand {
 }
 
 html.tmux-native-titlebar .ms-topbar {
-  min-height: 56px;
-  padding-inline: 20px;
+  min-height: 0;
+  height: 100%;
+  padding-inline: 12px;
 }
 
 html.tmux-native-titlebar .ms-topbar.terminal-layout {
-  min-height: 44px;
+  min-height: 0;
+  height: 100%;
   margin: 0;
-  padding: 8px 16px;
+  padding: 0 12px;
   border: 0;
-  border-bottom: 1px solid var(--border-subtle);
   border-radius: 0;
   background: transparent;
   box-shadow: none;

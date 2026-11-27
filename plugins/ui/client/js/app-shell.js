@@ -1243,6 +1243,11 @@
     syncTitlebar();
   }
 
+  global.document.addEventListener('anymux-native-fullscreen', function (event) {
+    var active = Boolean(event && event.detail && event.detail.active);
+    global.document.documentElement.classList.toggle('tmux-native-fullscreen', active);
+  });
+
   global.document.addEventListener('click', function (event) {
     var wtBtn = event.target && event.target.closest && event.target.closest('[data-action="toggle-worktree-grouping"]');
     if (!wtBtn) return;
