@@ -292,7 +292,7 @@ describe('native workbench UI', () => {
 
     const quickBtns = [...f.host.querySelectorAll('.mobile-terminal-quick-keys button')].map((b) => b.dataset.wbKey);
     expect(quickBtns).toEqual([
-      'esc', 'tab', 'shift-tab', 'ctrl-mod', 'ctrl', 'ctrl-d', 'ctrl-l',
+      'esc', 'tab', 'shift-tab', 'ctrl-mod', 'alt-mod', 'shift-mod', 'ctrl', 'ctrl-d', 'ctrl-l',
       'enter', 'up', 'down', 'left', 'right', 'backspace', 'paste',
     ]);
 

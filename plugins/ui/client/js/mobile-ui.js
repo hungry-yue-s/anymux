@@ -20,8 +20,9 @@
         expandedHeight = global.innerHeight;
       }
       expandedHeight = Math.max(expandedHeight, global.innerHeight);
+      var notPinchZoomed = !viewport || (viewport.scale ?? 1) === 1;
       root.classList.toggle('mobile-layout', mobile);
-      root.classList.toggle('mobile-keyboard-open', !!(mobile && viewport && editing && expandedHeight - viewport.height > 120));
+      root.classList.toggle('mobile-keyboard-open', !!(mobile && viewport && notPinchZoomed && editing && expandedHeight - viewport.height > 120));
       root.style.setProperty('--mobile-viewport-height', (viewport ? viewport.height : global.innerHeight) + 'px');
       root.style.setProperty('--mobile-viewport-top', (viewport ? viewport.offsetTop : 0) + 'px');
     },

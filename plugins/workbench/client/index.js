@@ -3,6 +3,12 @@ import { SeamWindowSession } from './seam-window-session.js';
 import { TileRegistry } from './tile-registry.js';
 import { openHistory } from './history.js';
 import { registerWorkbenchShell } from './shell.js';
+import {
+  STICKY_MODIFIER_DOUBLE_TAP_MS,
+  encodeTerminalKeyForModes,
+  resolveAgentSmartKeys,
+  sendSmartKeySequence,
+} from './mobile/sticky-and-smart-keys.js';
 export { registerWorkbenchShell, TileRegistry };
 
 export const name = 'workbench';
@@ -140,7 +146,8 @@ export function createWorkbench(global, options = {}) {
     if (owner.actions.parentElement !== dest) dest.append(owner.actions);
     owner.toolbar.hidden = !!target;
     owner.root.classList.toggle('wb-mobile', mobile()); owner.tools.hidden = !mobile();
-    if (!mobile()) owner.closeDrawer();
+    if (!mobile()) { owner.closeDrawer(); if (owner.smartKeysBar) owner.smartKeysBar.hidden = true; }
+    else owner.refreshSmartKeys?.();
   }
   function installTools(owner) {
     const tools = element('div', 'mobile-terminal-controls wb-mobile-tools');
@@ -236,13 +243,81 @@ export function createWorkbench(global, options = {}) {
       return key;
     };
     const repeatCleanups = [];
-    let ctrlBtn = null;
-    owner.syncStickyModifiers = (state = {}) => {
-      if (!ctrlBtn) return;
-      const armed = Boolean(state.ctrl);
-      ctrlBtn.classList.toggle('is-active', armed);
-      ctrlBtn.setAttribute('aria-pressed', String(armed));
+    const smartKeysBar = element('div', 'wb-smart-keys');
+    smartKeysBar.hidden = true;
+    const modButtons = { ctrl: null, alt: null, shift: null };
+    const modStates = { ctrl: 'off', alt: 'off', shift: 'off' };
+    const lastModTap = { ctrl: 0, alt: 0, shift: 0 };
+
+    const applyModVisual = (name, mode) => {
+      const btn = modButtons[name];
+      if (!btn) return;
+      modStates[name] = mode;
+      const active = mode !== 'off';
+      const locked = mode === 'locked';
+      btn.classList.toggle('is-active', active);
+      btn.classList.toggle('is-locked', locked);
+      btn.setAttribute('aria-pressed', String(active));
     };
+
+    owner.syncStickyModifiers = (state = {}) => {
+      if (state.modes) {
+        for (const k of ['ctrl', 'alt', 'shift']) applyModVisual(k, state.modes[k] || 'off');
+        return;
+      }
+      if ('ctrl' in state) applyModVisual('ctrl', state.ctrl === 'locked' ? 'locked' : (state.ctrl ? 'once' : 'off'));
+      if ('alt' in state) applyModVisual('alt', state.alt === 'locked' ? 'locked' : (state.alt ? 'once' : 'off'));
+      if ('shift' in state) applyModVisual('shift', state.shift === 'locked' ? 'locked' : (state.shift ? 'once' : 'off'));
+    };
+
+    const toggleStickyMod = (name) => {
+      const now = Date.now();
+      const isDoubleTap = now - lastModTap[name] <= STICKY_MODIFIER_DOUBLE_TAP_MS;
+      lastModTap[name] = isDoubleTap ? 0 : now;
+      if (isDoubleTap) {
+        owner.session?.setStickyModifier?.(name, 'locked');
+        applyModVisual(name, 'locked');
+        return;
+      }
+      const nextBool = modStates[name] === 'off';
+      owner.session?.setStickyModifier?.(name, nextBool);
+      applyModVisual(name, nextBool ? 'once' : 'off');
+    };
+
+    const refreshSmartKeys = () => {
+      if (mounted !== owner || !mobile()) {
+        smartKeysBar.hidden = true;
+        smartKeysBar.replaceChildren();
+        return;
+      }
+      const ctx = context();
+      const paneInfo = ctx.serverId && ctx.paneId ? global.AgentStatus?.getPane?.(ctx.serverId, ctx.paneId) : null;
+      const resolved = resolveAgentSmartKeys(paneInfo);
+      if (!resolved) {
+        smartKeysBar.hidden = true;
+        smartKeysBar.replaceChildren();
+        return;
+      }
+      const nodes = resolved.keys.map((item) => {
+        const btn = element('button', 'wb-smart-key' + (item.primary ? ' is-primary' : ''));
+        btn.type = 'button';
+        btn.dataset.smartKey = item.id;
+        btn.setAttribute('aria-label', `${item.label} (${item.combo})`);
+        const title = element('span', 'wb-smart-key-label', item.label);
+        const combo = element('kbd', 'wb-smart-key-combo', item.combo);
+        btn.append(title, combo);
+        btn.addEventListener('mousedown', (event) => event.preventDefault());
+        btn.addEventListener('click', () => {
+          const modes = owner.session?.getActivePaneModes?.();
+          sendSmartKeySequence(item.writes, (seq) => send(encodeTerminalKeyForModes(seq, modes)), global);
+        });
+        return btn;
+      });
+      smartKeysBar.replaceChildren(...nodes);
+      smartKeysBar.hidden = false;
+    };
+    owner.refreshSmartKeys = refreshSmartKeys;
+
     for (const item of [
       { id: 'esc', label: 'Esc', seq: '\x1b' },
       { id: 'tab', label: 'Tab', seq: '\t' },
@@ -250,24 +325,29 @@ export function createWorkbench(global, options = {}) {
     ]) {
       quick(item.id, item.label, () => send(item.seq), { ariaLabel: item.ariaLabel });
     }
-    ctrlBtn = quick('ctrl-mod', 'Ctrl', () => {
-      const next = !owner.session?.stickyCtrl;
-      owner.session?.setStickyModifier?.('ctrl', next);
-      owner.syncStickyModifiers({ ctrl: next });
-    }, { ariaLabel: 'Ctrl 修饰键' });
-    ctrlBtn.setAttribute('aria-pressed', 'false');
+    modButtons.ctrl = quick('ctrl-mod', 'Ctrl', () => toggleStickyMod('ctrl'), { ariaLabel: 'Ctrl 修饰键（双击锁定）' });
+    modButtons.ctrl.setAttribute('aria-pressed', 'false');
+    modButtons.alt = quick('alt-mod', 'Alt', () => toggleStickyMod('alt'), { ariaLabel: 'Alt 修饰键（双击锁定）' });
+    modButtons.alt.setAttribute('aria-pressed', 'false');
+    modButtons.shift = quick('shift-mod', 'Shift', () => toggleStickyMod('shift'), { ariaLabel: 'Shift 修饰键（双击锁定）' });
+    modButtons.shift.setAttribute('aria-pressed', 'false');
     for (const item of [
       { id: 'ctrl', label: 'Ctrl+C', seq: '\x03' },
       { id: 'ctrl-d', label: 'Ctrl+D', seq: '\x04' },
       { id: 'ctrl-l', label: 'Ctrl+L', seq: '\x0c' },
-      { id: 'enter', label: '↵', ariaLabel: 'Enter', seq: '\r' },
-      { id: 'up', label: '↑', ariaLabel: '向上方向键', seq: '\x1b[A', repeatable: true },
-      { id: 'down', label: '↓', ariaLabel: '向下方向键', seq: '\x1b[B', repeatable: true },
-      { id: 'left', label: '←', ariaLabel: '向左方向键', seq: '\x1b[D', repeatable: true },
-      { id: 'right', label: '→', ariaLabel: '向右方向键', seq: '\x1b[C', repeatable: true },
+      { id: 'enter', label: '↵', ariaLabel: 'Enter', seq: '\r', modeAware: true },
+      { id: 'up', label: '↑', ariaLabel: '向上方向键', seq: '\x1b[A', repeatable: true, modeAware: true },
+      { id: 'down', label: '↓', ariaLabel: '向下方向键', seq: '\x1b[B', repeatable: true, modeAware: true },
+      { id: 'left', label: '←', ariaLabel: '向左方向键', seq: '\x1b[D', repeatable: true, modeAware: true },
+      { id: 'right', label: '→', ariaLabel: '向右方向键', seq: '\x1b[C', repeatable: true, modeAware: true },
       { id: 'backspace', label: '⌫', ariaLabel: '退格', seq: '\x7f', repeatable: true },
     ]) {
-      quick(item.id, item.label, () => send(item.seq), { repeatable: item.repeatable, ariaLabel: item.ariaLabel });
+      quick(item.id, item.label, () => {
+        const seq = item.modeAware
+          ? encodeTerminalKeyForModes(item.seq, owner.session?.getActivePaneModes?.())
+          : item.seq;
+        send(seq);
+      }, { repeatable: item.repeatable, ariaLabel: item.ariaLabel });
     }
     quick('paste', '粘贴', async () => {
       if (!global.navigator.clipboard?.readText) throw new Error('当前浏览器不支持读取剪贴板');
@@ -277,9 +357,11 @@ export function createWorkbench(global, options = {}) {
     });
     const keyboard = element('button', 'mobile-terminal-keyboard', '输入'); keyboard.type = 'button'; keyboard.setAttribute('aria-label', '打开键盘输入'); keyboard.addEventListener('click', focusKeyboard);
     tools.append(...(hasPlugin('keypad', owner.serverId) ? [trigger] : []), keys, keyboard);
-    owner.root.append(tools, upload, drawer);
+    owner.root.append(smartKeysBar, tools, upload, drawer);
     const sentinel = (event) => { if (drawerOpen && event.target.classList?.contains('xterm-helper-textarea')) toggleDrawer(false); };
     doc.addEventListener('focusin', sentinel);
+    const onAgentStatusChanged = () => refreshSmartKeys();
+    global.addEventListener?.('agent-status-changed', onAgentStatusChanged);
     upload.addEventListener('change', async () => {
       const source = context().source;
       if (!upload.files?.[0] || !source || !hasPlugin('upload', source.serverId)) return;
@@ -292,9 +374,10 @@ export function createWorkbench(global, options = {}) {
         if (path) { global._copyToClipboard?.(path); notify('路径已复制：' + path); }
       } catch (error) { notify(error); }
     });
-    owner.tools = tools; owner.closeDrawer = () => toggleDrawer(false);
+    owner.tools = tools; owner.smartKeysBar = smartKeysBar; owner.closeDrawer = () => toggleDrawer(false);
     owner.toolsCleanup = () => {
       for (const stop of repeatCleanups) stop();
+      global.removeEventListener?.('agent-status-changed', onAgentStatusChanged);
       toggleDrawer(false); doc.removeEventListener('focusin', sentinel); drawerApi?.destroy();
     };
   }
@@ -314,6 +397,7 @@ export function createWorkbench(global, options = {}) {
         }
       },
       onStickyModifierChange: (state) => { owner.syncStickyModifiers?.(state); },
+      onStickyStateChange: (state) => { owner.syncStickyModifiers?.(state); },
       onContext: (confirmed) => {
         if (mounted !== owner || !store.get(view.id)) return;
         const saved = store.get(view.id);
@@ -322,6 +406,7 @@ export function createWorkbench(global, options = {}) {
           pendingFocusPane = null;
         }
         announceFocus();
+        owner.refreshSmartKeys?.();
       },
       onAction: (action, detail = {}) => {
         if (mounted !== owner) return;
