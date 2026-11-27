@@ -296,4 +296,31 @@ describe('preview source routing', () => {
       paneId: '%1', paneSource: 'env', tmuxServerPid: '18130', callerPid: 500, cwd: '/w',
     })).resolves.toEqual({ paneId: '%1', windowId: '@1', instanceId: '18130:1700000000' });
   });
+
+  it('does not access undeclared properties on a Cordis-like ctx proxy', async () => {
+    const tree = {
+      instanceId: '18130:1700000000',
+      complete: true,
+      sessions: [{ id: '$1', name: 'main', windows: [{ id: '@1', index: 1, name: 'w', panes: [{ id: '%1', index: 1, command: 'fish', cwd: '/w' }] }] }],
+    };
+    const rawCtx = {
+      workspace: { getWorkspace: async () => tree },
+      tmux: {
+        getServerInstance: vi.fn(async () => '18130:1700000000'),
+        listPaneCommands: vi.fn(async () => [{ paneId: '%1', command: 'fish', path: '/w', pid: 0 }]),
+      },
+    };
+    const cordisProxy = new Proxy(rawCtx, {
+      get(target, prop) {
+        if (prop === 'workspace' || prop === 'tmux') return target[prop];
+        throw new Error(`cannot get property "${String(prop)}" without inject`);
+      },
+    });
+
+    await expect(resolvePreviewSource(cordisProxy, {
+      paneId: '%999',
+      paneSource: 'arg',
+      cwd: '/w',
+    })).rejects.toMatchObject({ status: 409, message: expect.stringContaining('preview_source_invalid_pane') });
+  });
 });
