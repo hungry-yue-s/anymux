@@ -75,12 +75,40 @@ export function apply(ctx) {
     paneRepoTracker.dispose();
   }, 'git.paneRepoTracker');
 
+  let dockStore = null;
+  ctx.inject(['dock'], (innerCtx) => {
+    dockStore = innerCtx.dock;
+    innerCtx.effect(() => () => {
+      if (dockStore === innerCtx.dock) dockStore = null;
+    }, 'git.dock');
+  });
+
+  const recordGitArrival = async (arrival) => {
+    if (!dockStore || !arrival?.windowId || !arrival?.instanceId) return null;
+    let windowMeta = {};
+    const ws = await ctx.workspace.getWorkspace().catch(() => null);
+    for (const session of ws?.sessions || []) {
+      const win = (session.windows || []).find((w) => w.id === arrival.windowId);
+      if (win) {
+        windowMeta = {
+          sessionId: session.id || '',
+          sessionName: session.name || '',
+          windowIndex: win.index ?? null,
+          windowName: win.name || '',
+        };
+        break;
+      }
+    }
+    return dockStore.recordGitArrival({ ...windowMeta, ...arrival });
+  };
+
   const router = createGitRouter({
     pathGuard: ctx.fileAccess.pathGuard,
     tmux: ctx.tmux,
     paneRepoTracker,
     roots: ctx.fileAccess.roots,
     resolveSource: (source) => resolvePreviewSource(ctx, source),
+    recordGitArrival,
     broadcast: (event) => ctx.emit('status/event', event),
   });
   invalidateGitSummary = router.invalidateSummary;

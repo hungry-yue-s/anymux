@@ -2188,6 +2188,9 @@
   function openCommitFromPane(event) {
     var sequence = ++commitArrivalSequence;
     var serverId = event.serverId || ui.currentContext().serverId;
+    if (event.serverPersisted && window.DockSync && typeof window.DockSync.noteServerRevision === 'function') {
+      window.DockSync.noteServerRevision(serverId, event.dockRevision);
+    }
     var workspace = window.AppShell && AppShell.workspace ? AppShell.workspace(serverId) : null;
     var paneIds = event.paneId ? [event.paneId] : [];
     var target = ui.windowTarget(serverId, paneIds, workspace, event);
@@ -2199,7 +2202,7 @@
       // Automatic deliveries only update the merged notice. Creating/updating a
       // block here would replace the commit being read and fetch its diff.
       var result = event.activate === false ? 'background'
-        : target ? BlockHost.openInWindow('git', openParams, target) : 'unavailable';
+        : target ? BlockHost.openInWindow('git', openParams, target, { skipServerSync: !!event.serverPersisted }) : 'unavailable';
       var short = String(event.commit || '').slice(0, 8);
       var message = isWorktree
         ? '工作区有 ' + (event.dirtyCount ? event.dirtyCount + ' 处' : '') + '待审阅变更'
@@ -2215,7 +2218,8 @@
         deliveredCommitArrivals.set(arrivalKey, sequence);
       }
       var notice = Object.assign({}, event, { serverId: serverId, target: target, type: 'git', message: message,
-        id: 'git-' + encodeURIComponent([serverId, target && target.instanceId, target && target.windowId, event.path, event.commit].join('\u0000')),
+        id: event.noticeId || ('git-' + encodeURIComponent([serverId, target && target.instanceId, target && target.windowId, event.path, event.commit].join('\u0000'))),
+        skipServerSync: !!event.serverPersisted,
         session: target && target.session, windowIndex: target && target.windowIndex, windowName: target && target.windowName });
       var open = function () { return openCommitNotice(notice); };
       if (window.NotificationPanel && NotificationPanel.addPreview) NotificationPanel.addPreview(notice, open);

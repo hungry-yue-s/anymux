@@ -29,6 +29,8 @@ export async function apply(ctx) {
     projectDir: REPO_ROOT,
     baseConfig: ctx.managedResources,
     userConfigPath: join(tmuxUserHome(), '.tmux.conf'),
+    getServerInstance: () => ctx.tmux.getServerInstance(),
+    onRestored: (payload) => ctx.emit('session-protection/restored', payload),
   });
   await protection.load();
   ctx.effect(() => {

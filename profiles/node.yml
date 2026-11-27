@@ -35,6 +35,8 @@ plugins:
     use: keypad
   - id: pins
     use: pins
+  - id: dock
+    use: dock
   - id: notifications
     use: notifications
   - id: agent-events

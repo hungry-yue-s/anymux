@@ -18,6 +18,10 @@ export function apply(ctx) {
     onChange: (revision, meta) => {
       ctx.emit('status/workspace-changed', revision);
       if (meta?.paneLabelChanged) ctx.emit('workspace/pane-label-changed');
+      if (meta?.closedWindowId) ctx.emit('workspace/window-closed', { windowId: meta.closedWindowId });
+      if (meta?.closedSessionId) {
+        ctx.emit('workspace/session-closed', { sessionId: meta.closedSessionId, windowIds: meta.closedWindowIds || [] });
+      }
     },
   });
   ctx.http.mount('/api/workspace', createWorkspaceRouter({ workspaceService: service }));

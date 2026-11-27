@@ -83,6 +83,9 @@ var FilePreview = (function () {
   var _sideSetWidth = null;
   var BLOCK_SIDE_WIDTH = 560;
   var BLOCK_WIDTH_KEY = 'anymux_block_side_width';
+  var PREFS_KEY = 'anymux_dock_prefs_v1';
+  var MAX_PREFS_ENTRIES = 64;
+  var _applyingRemote = false;
   var _workspaceRevisions = {};
   // Arrivals not rendered yet. Keep them when a modal or another window owns
   // the preview, and merge them into that window's ordinary persisted dock.
@@ -122,6 +125,91 @@ var FilePreview = (function () {
 
   function _currentDockStateKey() {
     return _dockStateStorageKey(_dockContextKey);
+  }
+
+  function _loadPrefs(contextKey) {
+    if (!contextKey) return null;
+    if (window.DockSync && typeof window.DockSync.getLocalPrefs === 'function') {
+      return window.DockSync.getLocalPrefs(contextKey);
+    }
+    try {
+      var raw = window.localStorage.getItem(PREFS_KEY);
+      if (!raw) return null;
+      var parsed = JSON.parse(raw);
+      return parsed && typeof parsed === 'object' && parsed[contextKey] ? parsed[contextKey] : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function _savePrefs(contextKey, patch) {
+    if (!contextKey || !patch) return;
+    if (window.DockSync && typeof window.DockSync.setLocalPrefs === 'function') {
+      window.DockSync.setLocalPrefs(contextKey, patch);
+      return;
+    }
+    try {
+      var raw = window.localStorage.getItem(PREFS_KEY);
+      var map = raw ? JSON.parse(raw) : {};
+      if (!map || typeof map !== 'object' || Array.isArray(map)) map = {};
+      var current = map[contextKey] && typeof map[contextKey] === 'object' ? map[contextKey] : {};
+      map[contextKey] = Object.assign({}, current, patch, { updatedAt: Date.now() });
+      var entries = Object.entries(map);
+      if (entries.length > MAX_PREFS_ENTRIES) {
+        entries.sort(function (a, b) {
+          return Number((b[1] && b[1].updatedAt) || 0) - Number((a[1] && a[1].updatedAt) || 0);
+        });
+        var trimmed = {};
+        entries.slice(0, MAX_PREFS_ENTRIES).forEach(function (pair) { trimmed[pair[0]] = pair[1]; });
+        map = trimmed;
+      }
+      window.localStorage.setItem(PREFS_KEY, JSON.stringify(map));
+    } catch (_) {}
+  }
+
+  function _clearPrefs(contextKey) {
+    if (!contextKey) return;
+    if (window.DockSync && typeof window.DockSync.clearLocalPrefs === 'function') {
+      window.DockSync.clearLocalPrefs(contextKey);
+      return;
+    }
+    try {
+      var raw = window.localStorage.getItem(PREFS_KEY);
+      if (!raw) return;
+      var map = JSON.parse(raw);
+      if (!map || typeof map !== 'object' || !(contextKey in map)) return;
+      delete map[contextKey];
+      window.localStorage.setItem(PREFS_KEY, JSON.stringify(map));
+    } catch (_) {}
+  }
+
+  function _syncWindowOp(op, contextKeyOverride) {
+    if (_applyingRemote || _persistenceSuspended || _restoringDock || _switchingDockContext) return;
+    if (!window.DockSync || typeof window.DockSync.sendWindowOp !== 'function') return;
+    if (window.DockSync.isApplyingRemote && window.DockSync.isApplyingRemote()) return;
+    var ctx = contextKeyOverride || _dockContextKey;
+    if (!ctx) return;
+    var parts = ctx.split('\u0000');
+    if (parts.length !== 3 || !parts[0] || !parts[1] || parts[1] === 'local-view' || !parts[2]) return;
+    window.DockSync.sendWindowOp(parts[0], parts[1], parts[2], op);
+  }
+
+  function _clearPrefsForServer(serverId) {
+    if (!serverId) return;
+    try {
+      var raw = window.localStorage.getItem(PREFS_KEY);
+      if (!raw) return;
+      var map = JSON.parse(raw);
+      if (!map || typeof map !== 'object') return;
+      var changed = false;
+      Object.keys(map).forEach(function (ctx) {
+        if (ctx.split('\u0000')[0] === serverId) {
+          delete map[ctx];
+          changed = true;
+        }
+      });
+      if (changed) window.localStorage.setItem(PREFS_KEY, JSON.stringify(map));
+    } catch (_) {}
   }
 
   function _clearPersistedDock(contextKey) {
@@ -185,6 +273,7 @@ var FilePreview = (function () {
     if (_persistenceSuspended || !key) return;
     if (_dockTabs.length === 0 && !(_queuedDockDocuments[_dockContextKey] || []).length) {
       _clearPersistedDock();
+      _clearPrefs(_dockContextKey);
       return;
     }
     var active = _activeDockTab();
@@ -215,8 +304,18 @@ var FilePreview = (function () {
     _mergeDocumentArrivals(state, _queuedDockDocuments[_dockContextKey] || []);
     if (state.tabs.length === 0) {
       _clearPersistedDock();
+      _savePrefs(_dockContextKey, {
+        hidden: _dockHidden,
+        width: state.width,
+        order: state.order,
+        activeBlock: state.activeBlock || null,
+      });
       return;
     }
+    _savePrefs(_dockContextKey, {
+      hidden: _dockHidden,
+      width: state.width,
+    });
     try { window.localStorage.setItem(key, JSON.stringify(state)); } catch (_) {}
   }
 
@@ -500,6 +599,7 @@ var FilePreview = (function () {
       && !_dockHidden
       && _previewReady
       && !!(_overlay && _overlay.isConnected)
+      && !(_overlay.querySelector('[data-fp-hold-refresh]'))
       && !!(_currentFile && _currentFile.absPath);
   }
 
@@ -740,6 +840,7 @@ var FilePreview = (function () {
     _dockTabs.splice(after ? to + 1 : to, 0, moved);
     _renderDockTabs();
     _persistDockState();
+    _syncWindowOp({ type: 'reorder', order: _dockTabs.map(_tabOrderKey).slice(0, MAX_PERSISTED_TAB_ORDER) });
     // Blocks keep their own order too, for when they come back without a file tab.
     if (_blockOrderListener) {
       _blockOrderListener(_dockTabs.filter(function (tab) { return tab.block; }).map(function (tab) { return tab.block.key; }));
@@ -1084,8 +1185,14 @@ var FilePreview = (function () {
     _renderDockTabs();
     _syncAutoRefresh();
     _persistDockState();
+    if (!tab.block && !_restoringDock && !_quietOpen && !_dockHidden) {
+      _syncWindowOp({ type: 'activate', key: 'file:' + tab.path });
+    }
     if (_blockListener) _blockListener(tab.block ? tab.block.key : null);
     _acknowledgeFilePreview();
+    if (tab.deferred && !_dockHidden && !_restoringDock && !_restoringHidden) {
+      _hydrateDeferredTab(tab);
+    }
   }
 
   function _previewNotices(path) {
@@ -1190,6 +1297,9 @@ var FilePreview = (function () {
     }
     removed.modal.remove();
     _dockTabs.splice(index, 1);
+    if (!removed.block) {
+      _syncWindowOp({ type: 'remove-file', path: removed.path });
+    }
     if (_dockTabs.length === 0) {
       var opener = _dockReturnFocus;
       _destroyDock(false, modalOpen);
@@ -1279,6 +1389,16 @@ var FilePreview = (function () {
     _activeDockTabId = tab.id;
     _showDock(true);
     _persistDockState();
+    if (!_restoringDock && !_quietOpen) {
+      _syncWindowOp({
+        type: 'upsert-file',
+        path: path,
+        paneId: tab.paneId || null,
+        unread: false,
+        automatic: false,
+        activate: true,
+      });
+    }
     return true;
   }
 
@@ -1359,6 +1479,19 @@ var FilePreview = (function () {
     _mergeDocumentArrivals(saved, [arrival]);
     saved.version = DOCK_STATE_VERSION;
     try { if (key) window.localStorage.setItem(key, JSON.stringify(saved)); } catch (_) { /* kept in memory */ }
+    if (!opts.skipServerSync && !(_applyingRemote || (window.DockSync && window.DockSync.isApplyingRemote && window.DockSync.isApplyingRemote()))) {
+      _syncWindowOp({
+        type: 'upsert-file',
+        path: filePath,
+        paneId: paneId || null,
+        replaces: opts.replaces || null,
+        fragment: opts.fragment || null,
+        automatic: true,
+        unread: true,
+        activate: opts.activate !== false,
+        keepUnread: true,
+      }, context);
+    }
     return _drainDocumentArrivals().then(function (result) { return result || 'queued'; });
   }
 
@@ -1493,6 +1626,7 @@ var FilePreview = (function () {
     if (existing) {
       var source = opts.source || _sourceForPane(paneId);
       var sourcePaneId = source.paneId || paneId;
+      var dirty = false;
       if (sourcePaneId) {
         existing.paneId = sourcePaneId;
         existing.source = { serverId: source.serverId, paneId: sourcePaneId };
@@ -1501,19 +1635,65 @@ var FilePreview = (function () {
           _currentSource = existing.source;
         }
         _decorate(existing.modal.querySelector('.fp-body'), existing.currentFile, existing.source);
-        _persistDockState();
+        dirty = true;
       }
-      if (opts.fragment) existing.fragment = opts.fragment;
+      if (opts.fragment && existing.fragment !== opts.fragment) {
+        existing.fragment = opts.fragment;
+        dirty = true;
+      }
       if (replaced && replaced !== existing) _removeDockTab(_dockTabs.indexOf(replaced));
-      if (!activate) return Promise.resolve('exists');
+      if (!activate) {
+        if (dirty) _persistDockState();
+        if (!opts.skipServerSync && dirty) {
+          _syncWindowOp({
+            type: 'upsert-file',
+            path: filePath,
+            paneId: existing.paneId || null,
+            replaces: opts.replaces || null,
+            fragment: existing.fragment || null,
+            automatic: opts.automatic === true,
+            unread: !!existing.unread,
+            activate: false,
+            keepUnread: true,
+          });
+        }
+        return Promise.resolve('exists');
+      }
       if (_dockHidden) {
         existing.unread = true;
         _syncRestoreButton();
+        _persistDockState();
+        if (!opts.skipServerSync) {
+          _syncWindowOp({
+            type: 'upsert-file',
+            path: filePath,
+            paneId: existing.paneId || null,
+            replaces: opts.replaces || null,
+            fragment: existing.fragment || null,
+            automatic: opts.automatic === true,
+            unread: true,
+            activate: true,
+            keepUnread: true,
+          });
+        }
         return Promise.resolve('hidden');
       }
+      if (dirty) _persistDockState();
       _activateDockTab(existing.id);
       if (opts.automatic) { existing.automatic = true; _highlightDocumentTab(existing); _renderDockTabs(); }
       _scrollToFragment(existing, opts.fragment);
+      if (!opts.skipServerSync) {
+        _syncWindowOp({
+          type: 'upsert-file',
+          path: filePath,
+          paneId: existing.paneId || null,
+          replaces: opts.replaces || null,
+          fragment: existing.fragment || null,
+          automatic: opts.automatic === true,
+          unread: false,
+          activate: true,
+        });
+      }
       return Promise.resolve('activated');
     }
     // A log that changes all the time is not worth making room for.
@@ -1559,6 +1739,19 @@ var FilePreview = (function () {
         tab.automatic = opts.automatic === true;
         tab.fragment = opts.fragment || null;
         _replaceTab(tab, replaced && _dockTabs.indexOf(replaced) >= 0 ? replaced : null);
+        if (!opts.skipServerSync) {
+          _syncWindowOp({
+            type: 'upsert-file',
+            path: path,
+            paneId: tab.paneId || null,
+            replaces: opts.replaces || null,
+            fragment: tab.fragment || null,
+            automatic: tab.automatic,
+            unread: true,
+            activate: activate,
+            keepUnread: true,
+          });
+        }
         _restoreFocus(focus);
         return 'hidden';
       }
@@ -1574,6 +1767,20 @@ var FilePreview = (function () {
       }
       _replaceTab(tab, replaced && _dockTabs.indexOf(replaced) >= 0 ? replaced : null);
       _renderDockTabs();
+      _persistDockState();
+      if (!opts.skipServerSync) {
+        _syncWindowOp({
+          type: 'upsert-file',
+          path: path,
+          paneId: tab.paneId || null,
+          replaces: opts.replaces || null,
+          fragment: tab.fragment || null,
+          automatic: !!tab.automatic,
+          unread: !!tab.unread,
+          activate: activate,
+          keepUnread: !!tab.unread,
+        });
+      }
       _restoreFocus(focus);
       return activate ? 'activated' : 'added';
     });
@@ -1609,9 +1816,20 @@ var FilePreview = (function () {
     // A file modal owns the preview globals; close() mounts once it is gone.
     if (_overlay && _placement !== 'side') return;
     if (!_canDockRight()) return;
+    var blockPrefs = _fileTabs().length === 0 ? _loadPrefs(_dockContextKey) : null;
+    if (blockPrefs) {
+      if (!_savedTabOrder && Array.isArray(blockPrefs.order)) _savedTabOrder = blockPrefs.order;
+      if (!_pendingBlockKey && typeof blockPrefs.activeBlock === 'string') _pendingBlockKey = blockPrefs.activeBlock;
+    }
+    var restoreHiddenBlocks = !!(blockPrefs && blockPrefs.hidden === true && (!_dockOverlay || !_dockOverlay.isConnected) && !_dockHidden);
     _blockTabs.forEach(function (block) {
       if (_findBlockTab(block.key)) return;
       _ensureDockOverlay();
+      if (blockPrefs && blockPrefs.width > 0 && !_dockOverlay.style.width) {
+        var clamped = _clampSideWidth(blockPrefs.width);
+        _dockOverlay.style.flexBasis = clamped + 'px';
+        _dockOverlay.style.width = clamped + 'px';
+      }
       var id = _nextDockTabId++;
       block.element.id = 'fp-panel-' + id;
       block.element.setAttribute('role', 'tabpanel');
@@ -1636,6 +1854,11 @@ var FilePreview = (function () {
         _pendingBlockKey = null;
         pendingTab = _findBlockTab(pending.key);
       }
+    }
+    if (restoreHiddenBlocks) {
+      if (pendingTab) _activeDockTabId = pendingTab.id;
+      _hideDock(false);
+      return;
     }
     if (_dockHidden) {
       if (pendingTab) _activeDockTabId = pendingTab.id;
@@ -1742,6 +1965,134 @@ var FilePreview = (function () {
     return switchDockContext(serverId, viewId, 'local-view');
   }
 
+  function _createDeferredFileTab(savedTab, contextKey) {
+    _ensureDockOverlay();
+    var id = _nextDockTabId++;
+    var modal = document.createElement('div');
+    modal.className = 'fp-modal fp-deferred-panel';
+    modal.id = 'fp-panel-' + id;
+    modal.setAttribute('role', 'tabpanel');
+    modal.setAttribute('aria-labelledby', 'fp-tab-' + id);
+    var body = document.createElement('div');
+    body.className = 'fp-body';
+    var loading = document.createElement('div');
+    loading.className = 'fp-loading';
+    loading.textContent = '加载中…';
+    body.appendChild(loading);
+    modal.appendChild(body);
+    return {
+      id: id,
+      path: savedTab.path,
+      modal: modal,
+      currentFile: null,
+      paneId: savedTab.paneId || null,
+      source: savedTab.source || { serverId: contextKey.split('\u0000')[0], paneId: savedTab.paneId || null },
+      dirContext: null,
+      placementButton: null,
+      maximizeButton: null,
+      refreshButton: null,
+      previewReady: false,
+      maximized: false,
+      unread: savedTab.unread === true,
+      automatic: savedTab.automatic === true,
+      fragment: savedTab.fragment || null,
+      deferred: true,
+      hydrating: false,
+      hydratePromise: null,
+    };
+  }
+
+  function _hydrateDeferredTab(tab) {
+    if (!tab || tab.block || !tab.deferred) return Promise.resolve(false);
+    if (tab.hydrating && tab.hydratePromise) return tab.hydratePromise;
+    if (_overlay && _overlay !== _dockOverlay) return Promise.resolve(false);
+    var contextKey = _dockContextKey;
+    var generation = _dockContextGeneration;
+    tab.hydrating = true;
+    var quietOverlay = null;
+    var opened;
+    _quietOpen = true;
+    try {
+      opened = openFile(tab.path, tab.paneId, {
+        restoring: true,
+        markdownFragment: tab.fragment,
+        source: tab.source || { serverId: contextKey.split('\u0000')[0], paneId: tab.paneId },
+      });
+      quietOverlay = _overlay;
+    } finally {
+      _quietOpen = false;
+    }
+    var p = Promise.resolve(opened).then(function (ok) {
+      var ours = !!quietOverlay && _overlay === quietOverlay;
+      if (!_isDockContextCurrent(contextKey, generation) || _dockTabs.indexOf(tab) < 0) {
+        if (ours) {
+          _disposePreview(quietOverlay);
+          quietOverlay.remove();
+          _overlay = _dockOverlay;
+          _placement = _dockOverlay && _dockOverlay.isConnected ? 'side' : 'modal';
+        }
+        return false;
+      }
+      if (ok !== true) {
+        if (ours) {
+          _disposePreview(quietOverlay);
+          quietOverlay.remove();
+          _overlay = _dockOverlay;
+          _placement = _dockOverlay && _dockOverlay.isConnected ? 'side' : 'modal';
+        }
+        if (ok === false && ours) {
+          var idx = _dockTabs.indexOf(tab);
+          if (idx >= 0) _removeDockTab(idx);
+        }
+        return false;
+      }
+      if (!ours) return false;
+      var modal = quietOverlay.querySelector('.fp-modal');
+      if (!modal) return false;
+      modal.remove();
+      quietOverlay.remove();
+      if (tab.modal && tab.modal.parentNode) tab.modal.remove();
+      modal.id = 'fp-panel-' + tab.id;
+      modal.setAttribute('role', 'tabpanel');
+      modal.setAttribute('aria-labelledby', 'fp-tab-' + tab.id);
+      modal.removeAttribute('aria-modal');
+      tab.modal = modal;
+      tab.currentFile = _currentFile;
+      tab.paneId = _currentPaneId;
+      tab.source = _currentSource;
+      tab.dirContext = _dirContext;
+      tab.placementButton = _placementButton;
+      tab.maximizeButton = _maximizeButton;
+      tab.refreshButton = _refreshButton;
+      tab.previewReady = _previewReady;
+      tab.deferred = false;
+      if (_currentFile && _currentFile.absPath) tab.path = _currentFile.absPath;
+      if (_activeDockTabId === tab.id && !_dockHidden) {
+        _placement = 'modal';
+        _activateDockTab(tab.id);
+      } else {
+        _overlay = _dockOverlay;
+        _placement = _dockOverlay && _dockOverlay.isConnected ? 'side' : 'modal';
+        _renderDockTabs();
+        _persistDockState();
+      }
+      return true;
+    }).catch(function () {
+      if (quietOverlay && _overlay === quietOverlay) {
+        _disposePreview(quietOverlay);
+        quietOverlay.remove();
+        _overlay = _dockOverlay;
+        _placement = _dockOverlay && _dockOverlay.isConnected ? 'side' : 'modal';
+      }
+      return false;
+    }).finally(function () {
+      tab.hydrating = false;
+      tab.hydratePromise = null;
+    });
+    tab.hydratePromise = p;
+    return p;
+  }
+
   function restoreDocked(expectedGeneration) {
     var contextKey = _dockContextKey;
     var generation = expectedGeneration == null ? _dockContextGeneration : expectedGeneration;
@@ -1764,40 +2115,67 @@ var FilePreview = (function () {
       return Promise.resolve(false);
     }
 
+    var localPrefs = _loadPrefs(contextKey);
+    if (localPrefs) {
+      if (typeof localPrefs.hidden === 'boolean') saved.hidden = localPrefs.hidden;
+      if (Number(localPrefs.width) > 0) saved.width = Number(localPrefs.width);
+    }
+
     _restoringDock = true;
     _persistenceSuspended = true;
     _restoringHidden = saved.hidden;
-    _savedTabOrder = saved.order || null;
+    _savedTabOrder = saved.order || saved.tabs.map(function (t) { return 'file:' + t.path; });
     // The terminal measures itself next, and its tabs take a while to load. Holding
     // the space now means it attaches at the final size, not once more when they arrive.
     if (!saved.hidden) _reserveDockSpace(saved.width);
+
+    var eagerLoaded = false;
+    var primaryIndex = 0;
+    if (!saved.activeBlock && saved.tabs.length > 0) {
+      var foundIdx = saved.tabs.findIndex(function (t) { return t.path === saved.activePath; });
+      if (foundIdx >= 0) primaryIndex = foundIdx;
+    }
+    var candidates = saved.activeBlock
+      ? []
+      : [saved.tabs[primaryIndex]].concat(saved.tabs.filter(function (_t, i) { return i !== primaryIndex; }));
+    var missingPaths = {};
     var chain = Promise.resolve();
-    saved.tabs.forEach(function (tab) {
+    candidates.forEach(function (tab) {
       chain = chain.then(function () {
-        if (!_isDockContextCurrent(contextKey, generation)) return false;
+        if (eagerLoaded || !_isDockContextCurrent(contextKey, generation)) return false;
         return openFile(tab.path, tab.paneId, { restoring: true,
           markdownFragment: tab.fragment,
-          source: tab.source || { serverId: contextKey.split('\u0000')[0], paneId: tab.paneId } });
-      }).then(function (opened) {
-        if (!_isDockContextCurrent(contextKey, generation)) return;
-        if (opened === true) {
-          _dockCurrentPreview();
-          var restored = _activeDockTab();
-          restored.unread = tab.unread;
-          restored.automatic = tab.automatic;
-          restored.fragment = tab.fragment;
-          _queuedDockDocuments[contextKey] = (_queuedDockDocuments[contextKey] || []).filter(function (item) {
-            return item.path !== tab.path || restoringArrivals.indexOf(item) < 0;
+          source: tab.source || { serverId: contextKey.split('\u0000')[0], paneId: tab.paneId } })
+          .then(function (opened) {
+            if (!_isDockContextCurrent(contextKey, generation)) return;
+            if (opened === true) {
+              eagerLoaded = true;
+              _dockCurrentPreview();
+              var restored = _activeDockTab();
+              restored.unread = tab.unread;
+              restored.automatic = tab.automatic;
+              restored.fragment = tab.fragment;
+              _queuedDockDocuments[contextKey] = (_queuedDockDocuments[contextKey] || []).filter(function (item) {
+                return item.path !== tab.path || restoringArrivals.indexOf(item) < 0;
+              });
+              return;
+            }
+            missingPaths[tab.path] = true;
+            if (_placement !== 'side' && _overlay) close();
           });
-          return;
-        }
-        if (_placement !== 'side' && _overlay) close();
       });
     });
 
     _restoreContextKey = contextKey;
     _restorePromise = chain.then(function () {
       if (!_isDockContextCurrent(contextKey, generation)) return false;
+      saved.tabs.forEach(function (tab) {
+        if (missingPaths[tab.path] || _findFileTab(tab.path)) return;
+        _dockTabs.push(_createDeferredFileTab(tab, contextKey));
+        _queuedDockDocuments[contextKey] = (_queuedDockDocuments[contextKey] || []).filter(function (item) {
+          return item.path !== tab.path || restoringArrivals.indexOf(item) < 0;
+        });
+      });
       if (_dockTabs.length === 0) {
         _destroyDock();
         return false;
@@ -1825,6 +2203,10 @@ var FilePreview = (function () {
       _restoreContextKey = null;
       _pendingBlockKey = _pendingBlockKey || saved.activeBlock || null;
       _mountBlockTabs();
+      var currentActive = _activeDockTab();
+      if (currentActive && currentActive.deferred && !_dockHidden) {
+        _hydrateDeferredTab(currentActive);
+      }
       _acknowledgeFilePreview();
       _persistDockState();
       _drainDocumentArrivals();
@@ -2397,6 +2779,33 @@ var FilePreview = (function () {
       // translucency and gradients keep their own appearance.
       shape.setAttribute('data-fp-surface', group.classList.contains('cluster') ? 'group' : 'node');
     });
+
+    // Enforce readable contrast on custom-styled flowchart nodes/clusters even in light mode.
+    if (svg.getAttribute('aria-roledescription') && String(svg.getAttribute('aria-roledescription')).indexOf('flowchart') === 0) {
+      svg.querySelectorAll('.node, .cluster').forEach(function (node) {
+        var shape = node.classList.contains('cluster')
+          ? node.querySelector('rect')
+          : node.querySelector('.label-container:not(g), .label-container :not(g)');
+        if (!shape) return;
+        var st = window.getComputedStyle(shape);
+        var bg = solidColor(st.fill || shape.getAttribute('fill'));
+        if (!bg || (st.fillOpacity && Number(st.fillOpacity) < 1) || (st.opacity && Number(st.opacity) < 1)) return;
+        var best = _mermaidContrast(preferred, bg) >= _mermaidContrast(panel, bg)
+          ? { color: preferred, ratio: _mermaidContrast(preferred, bg) }
+          : { color: panel, ratio: _mermaidContrast(panel, bg) };
+        node.querySelectorAll('text, tspan, .nodeLabel, .nodeLabel *').forEach(function (el) {
+          if (el.closest('.node, .cluster') !== node) return;
+          var isSvg = el.localName === 'text' || el.localName === 'tspan';
+          var lst = window.getComputedStyle(el);
+          if (!isSvg && solidColor(lst.backgroundColor) !== null) return;
+          var cur = solidColor(isSvg ? lst.fill : lst.color);
+          var ratio = cur ? _mermaidContrast(cur, bg) : 0;
+          if (ratio < 4.5 && best.ratio > ratio) {
+            el.style.setProperty(isSvg ? 'fill' : 'color', best.color, 'important');
+          }
+        });
+      });
+    }
   }
 
   // Turn Mermaid's responsive SVG into a readable, scrollable embed. Mermaid
@@ -2808,6 +3217,9 @@ var FilePreview = (function () {
     root.querySelectorAll('.fp-embedded').forEach(function (box) { box.__fpRender = null; });
     root.querySelectorAll('.fp-md-wrap').forEach(function (wrap) { wrap.__fpMarkdownLive = false; });
     root.querySelectorAll('.fp-code-wrap').forEach(function (wrap) { wrap.__fpCodeLive = false; });
+    root.querySelectorAll('.fp-image-wrap').forEach(function (wrap) {
+      if (typeof wrap.__fpImageDispose === 'function') wrap.__fpImageDispose();
+    });
     root.querySelectorAll('iframe[data-fp-blob-url]').forEach(function (frame) {
       window.URL.revokeObjectURL(frame.getAttribute('data-fp-blob-url'));
       frame.removeAttribute('data-fp-blob-url');
@@ -3687,20 +4099,178 @@ var FilePreview = (function () {
     body.appendChild(wrap);
   }
 
-  function _renderImage(body, url) {
+  function _renderImage(body, url, filename) {
     body.innerHTML = '';
     var wrap = document.createElement('div');
     wrap.className = 'fp-image-wrap';
+
+    var bar = document.createElement('div');
+    bar.className = 'fp-panzoom-bar';
+    var mkBtn = function (label, title) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'fp-panzoom-btn';
+      b.textContent = label;
+      if (title) b.title = title;
+      return b;
+    };
+    var zoomOutBtn = mkBtn('−', '缩小');
+    var zoomPct = document.createElement('span');
+    zoomPct.className = 'fp-panzoom-pct';
+    zoomPct.textContent = 'Fit';
+    var zoomInBtn = mkBtn('+', '放大');
+    var actualBtn = mkBtn('1:1', '实际尺寸');
+    var fitBtn = mkBtn('适合', '适应窗口');
+    var checkerBtn = mkBtn('棋盘格', '切换透明背景棋盘格');
+    var dimsSpan = document.createElement('span');
+    dimsSpan.className = 'fp-panzoom-meta';
+
+    bar.append(zoomOutBtn, zoomPct, zoomInBtn, actualBtn, fitBtn, checkerBtn);
+    var isSvg = /\.svg(?:$|\?)/i.test(String(filename || url || ''));
+    var svgSourceBtn = null;
+    if (isSvg) {
+      svgSourceBtn = mkBtn('源码', '查看 SVG 文本源码');
+      bar.appendChild(svgSourceBtn);
+    }
+    bar.appendChild(dimsSpan);
+
+    var stage = document.createElement('div');
+    stage.className = 'fp-panzoom-stage';
     var img = document.createElement('img');
     img.src = url;
-    img.alt = 'Preview';
+    img.alt = filename || 'Preview';
+    stage.appendChild(img);
+
+    var sourceBox = document.createElement('div');
+    sourceBox.className = 'fp-svg-source';
+    sourceBox.hidden = true;
+
     var scale = 1;
-    img.addEventListener('wheel', function (e) {
-      e.preventDefault();
-      scale = Math.max(0.1, Math.min(10, scale + (e.deltaY > 0 ? -0.1 : 0.1)));
-      img.style.transform = 'scale(' + scale + ')';
+    var tx = 0;
+    var ty = 0;
+    var fitted = true;
+    var checker = false;
+    var dragging = false;
+    var startX = 0;
+    var startY = 0;
+
+    function fitScale() {
+      var nw = img.naturalWidth || 0;
+      var nh = img.naturalHeight || 0;
+      var sw = (stage.clientWidth || 320) - 24;
+      var sh = (stage.clientHeight || 240) - 24;
+      if (!nw || !nh || sw <= 0 || sh <= 0) return 1;
+      return Math.min(1, sw / nw, sh / nh);
+    }
+
+    function applyTransform() {
+      var s = fitted ? fitScale() : scale;
+      zoomPct.textContent = fitted ? 'Fit' : Math.round(s * 100) + '%';
+      img.style.transform = 'translate3d(' + tx.toFixed(1) + 'px, ' + ty.toFixed(1) + 'px, 0) scale(' + s.toFixed(4) + ')';
+    }
+
+    img.addEventListener('load', function () {
+      if (img.naturalWidth && img.naturalHeight) {
+        dimsSpan.textContent = img.naturalWidth + ' × ' + img.naturalHeight;
+      }
+      applyTransform();
     });
-    wrap.appendChild(img);
+
+    zoomOutBtn.addEventListener('click', function () {
+      fitted = false;
+      scale = Math.max(0.1, (fitted ? fitScale() : scale) / 1.25);
+      applyTransform();
+    });
+    zoomInBtn.addEventListener('click', function () {
+      var base = fitted ? fitScale() : scale;
+      fitted = false;
+      scale = Math.min(8, base * 1.25);
+      applyTransform();
+    });
+    actualBtn.addEventListener('click', function () {
+      fitted = false;
+      scale = 1;
+      tx = 0;
+      ty = 0;
+      applyTransform();
+    });
+    fitBtn.addEventListener('click', function () {
+      fitted = true;
+      tx = 0;
+      ty = 0;
+      applyTransform();
+    });
+    checkerBtn.addEventListener('click', function () {
+      checker = !checker;
+      checkerBtn.classList.toggle('is-active', checker);
+      stage.classList.toggle('is-checkerboard', checker);
+    });
+
+    stage.addEventListener('wheel', function (e) {
+      e.preventDefault();
+      var base = fitted ? fitScale() : scale;
+      fitted = false;
+      scale = Math.max(0.1, Math.min(8, base * (e.deltaY > 0 ? 0.9 : 1.1)));
+      applyTransform();
+    });
+    stage.addEventListener('mousedown', function (e) {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      dragging = true;
+      startX = e.clientX - tx;
+      startY = e.clientY - ty;
+      stage.classList.add('is-dragging');
+    });
+    var onMove = function (e) {
+      if (!dragging) return;
+      tx = e.clientX - startX;
+      ty = e.clientY - startY;
+      applyTransform();
+    };
+    var onUp = function () {
+      if (!dragging) return;
+      dragging = false;
+      stage.classList.remove('is-dragging');
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    wrap.__fpImageDispose = function () {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    stage.addEventListener('dblclick', function () {
+      if (fitted) {
+        fitted = false;
+        scale = 1;
+      } else {
+        fitted = true;
+        tx = 0;
+        ty = 0;
+      }
+      applyTransform();
+    });
+
+    if (svgSourceBtn) {
+      var showingSource = false;
+      var loadedSource = false;
+      svgSourceBtn.addEventListener('click', function () {
+        showingSource = !showingSource;
+        svgSourceBtn.classList.toggle('is-active', showingSource);
+        stage.hidden = showingSource;
+        sourceBox.hidden = !showingSource;
+        if (showingSource && !loadedSource) {
+          loadedSource = true;
+          sourceBox.innerHTML = '<div class="fp-loading">读取 SVG 源码…</div>';
+          var hdrs = (window.Auth && Auth.headers) ? Auth.headers() : {};
+          fetch(url, { headers: hdrs, cache: 'no-store' })
+            .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); })
+            .then(function (text) { _renderCode(sourceBox, text, 'xml'); })
+            .catch(function (err) { sourceBox.textContent = '读取 SVG 源码失败：' + (err && err.message ? err.message : err); });
+        }
+      });
+    }
+
+    wrap.append(bar, stage, sourceBox);
     body.appendChild(wrap);
   }
 
@@ -4875,7 +5445,13 @@ var FilePreview = (function () {
           fpTaskLines: fmExtract.body.split(/\r?\n/),
           fpTaskLineOffset: fmExtract.lineOffset,
         };
-        var html = md.renderer.render(md.parse(fmExtract.body, env), md.options, env);
+        var tokens = md.parse(fmExtract.body, env);
+        tokens.forEach(function (token) {
+          if (token.level === 0 && Array.isArray(token.map) && /_open$/.test(token.type)) {
+            token.attrSet('data-fp-source-line', String(token.map[0] + 1 + fmExtract.lineOffset));
+          }
+        });
+        var html = md.renderer.render(tokens, md.options, env);
 
         body.innerHTML = '';
         var wrap = document.createElement('div');
@@ -4883,6 +5459,67 @@ var FilePreview = (function () {
         wrap.__fpMarkdownLive = true;
         wrap.innerHTML = fmHtml + html;
         _prepareMarkdownMedia(wrap, filePath);
+        if (window.ReviewNotes && !readOnly) {
+          var mdScopeKey = 'md:' + String(filePath || '');
+          wrap.querySelectorAll('[data-fp-source-line]').forEach(function (block) {
+            block.classList.add('fp-md-block-row');
+            var lineNo = Math.max(1, Number(block.getAttribute('data-fp-source-line') || 1));
+            var btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'fp-md-note-btn';
+            btn.textContent = '+ 批注';
+            btn.setAttribute('aria-label', '针对第 ' + lineNo + ' 行段落添加批注');
+            btn.addEventListener('click', function (ev) {
+              ev.stopPropagation();
+              var old = wrap.querySelector('.fp-md-note-editor');
+              if (old) old.remove();
+              var editor = document.createElement('form');
+              editor.className = 'fp-md-note-editor';
+              editor.setAttribute('data-fp-hold-refresh', '1');
+              var ta = document.createElement('textarea');
+              ta.rows = 2;
+              ta.placeholder = '输入对第 ' + lineNo + ' 行段落的批注…';
+              var actions = document.createElement('div');
+              actions.className = 'fp-md-note-actions';
+              var injectBtn = document.createElement('button');
+              injectBtn.type = 'submit';
+              injectBtn.className = 'fp-panzoom-btn';
+              injectBtn.textContent = '添加并注入终端 (不回车)';
+              var cancelBtn = document.createElement('button');
+              cancelBtn.type = 'button';
+              cancelBtn.className = 'fp-panzoom-btn';
+              cancelBtn.textContent = '取消';
+              cancelBtn.addEventListener('click', function () {
+                editor.remove();
+                _syncAutoRefresh();
+              });
+              actions.append(cancelBtn, injectBtn);
+              editor.append(ta, actions);
+              editor.addEventListener('submit', function (subEv) {
+                subEv.preventDefault();
+                var text = ta.value.trim();
+                if (!text) return;
+                var snippet = String(block.textContent || '').replace(/\+\s*批注/, '').trim();
+                var note = window.ReviewNotes.addNote({
+                  scopeKey: mdScopeKey,
+                  path: filePath,
+                  startLine: lineNo,
+                  endLine: lineNo,
+                  excerpt: snippet,
+                  comment: text,
+                });
+                if (note) {
+                  window.ReviewNotes.injectToTerminal([note], { paneId: paneId }).catch(function () {});
+                }
+                editor.remove();
+                _syncAutoRefresh();
+              });
+              block.after(editor);
+              ta.focus();
+            });
+            block.appendChild(btn);
+          });
+        }
         body.appendChild(wrap);
 
         _replaceTaskMarkers(wrap);
@@ -6284,7 +6921,7 @@ var FilePreview = (function () {
     var filename = name.split('/').pop();
     var isCurrent = options.isCurrent || function () { return true; };
     if (info.isImage) {
-      _renderImage(body, source.rawUrl);
+      _renderImage(body, source.rawUrl, filename);
       return Promise.resolve();
     }
     if (info.isVideo) {
@@ -7057,6 +7694,135 @@ var FilePreview = (function () {
     });
   }
 
+  function applyServerWindow(serverId, instanceId, windowId, winState) {
+    var targetContext = _makeDockContextKey(serverId, windowId, instanceId);
+    if (!targetContext || targetContext !== _dockContextKey) return;
+    if (_restorePromise && _restoreContextKey === targetContext) {
+      _restorePromise.then(function () { applyServerWindow(serverId, instanceId, windowId, winState); });
+      return;
+    }
+    var prevRemote = _applyingRemote;
+    _applyingRemote = true;
+    try {
+      var fileItems = winState && Array.isArray(winState.items)
+        ? winState.items.filter(function (item) { return item && item.type === 'file'; })
+        : [];
+      var wantedByPath = {};
+      fileItems.forEach(function (item) { wantedByPath[item.path] = item; });
+
+      for (var i = _dockTabs.length - 1; i >= 0; i--) {
+        if (!_dockTabs[i].block && !wantedByPath[_dockTabs[i].path]) {
+          _removeDockTab(i);
+        }
+      }
+
+      fileItems.forEach(function (item) {
+        var existing = _findFileTab(item.path);
+        if (existing) {
+          if (item.paneId && existing.paneId !== item.paneId) {
+            existing.paneId = item.paneId;
+            existing.source = { serverId: serverId, paneId: item.paneId };
+            if (existing.id === _activeDockTabId) {
+              _currentPaneId = item.paneId;
+              _currentSource = existing.source;
+            }
+            if (!existing.deferred && existing.currentFile) {
+              _decorate(existing.modal.querySelector('.fp-body'), existing.currentFile, existing.source);
+            }
+          }
+          if (item.fragment) existing.fragment = item.fragment;
+          existing.unread = item.unread === true;
+          existing.automatic = item.automatic === true;
+        } else if (_canDockRight()) {
+          _dockTabs.push(_createDeferredFileTab({
+            path: item.path,
+            paneId: item.paneId || null,
+            source: { serverId: serverId, paneId: item.paneId || null },
+            unread: item.unread === true,
+            automatic: item.automatic === true,
+            fragment: item.fragment || null,
+          }, targetContext));
+        }
+      });
+
+      _savedTabOrder = winState && Array.isArray(winState.order) ? winState.order.slice() : null;
+      _applySavedTabOrder();
+
+      if (_dockTabs.length === 0) {
+        _destroyDock(true);
+        return;
+      }
+
+      var activeKey = winState && typeof winState.activeKey === 'string' ? winState.activeKey : null;
+      if (activeKey && activeKey.indexOf('file:') === 0) {
+        var targetTab = _findFileTab(activeKey.slice(5));
+        if (targetTab) {
+          if (_dockHidden) {
+            _activeDockTabId = targetTab.id;
+            _syncRestoreButton();
+          } else {
+            if (!_dockOverlay.isConnected) _showDock(true);
+            _activateDockTab(targetTab.id);
+          }
+        }
+      } else if (activeKey && activeKey.indexOf('block:') === 0) {
+        _pendingBlockKey = activeKey.slice(6);
+      }
+
+      if (_dockOverlay && _dockOverlay.isConnected) _renderDockTabs();
+      else if (!_dockHidden && _canDockRight()) _showDock(true);
+      _syncRestoreButton();
+      _persistDockState();
+    } finally {
+      _applyingRemote = prevRemote;
+    }
+  }
+
+  function reloadLocalDock() {
+    if (!_dockContextKey) return;
+    var parts = _dockContextKey.split('\u0000');
+    var saved = _loadDockState(_dockContextKey);
+    applyServerWindow(parts[0], parts[1], parts[2], saved ? {
+      order: saved.order || [],
+      activeKey: saved.activeBlock ? 'block:' + saved.activeBlock : (saved.activePath ? 'file:' + saved.activePath : null),
+      items: saved.tabs.map(function (t) {
+        return { type: 'file', path: t.path, paneId: t.paneId, unread: t.unread, automatic: t.automatic, fragment: t.fragment };
+      }),
+    } : null);
+  }
+
+  function forgetServer(serverId) {
+    if (!serverId) return;
+    Object.keys(_queuedDockDocuments).forEach(function (ctx) {
+      if (ctx.split('\u0000')[0] === serverId) delete _queuedDockDocuments[ctx];
+    });
+    if (_dockContextKey && _dockContextKey.split('\u0000')[0] === serverId) {
+      var prevSuspended = _persistenceSuspended;
+      _persistenceSuspended = true;
+      try {
+        switchDockContext(null, null);
+      } finally {
+        _persistenceSuspended = prevSuspended;
+      }
+    }
+    _clearPrefsForServer(serverId);
+    try {
+      var storage = window.localStorage;
+      for (var i = storage.length - 1; i >= 0; i--) {
+        var key = storage.key(i);
+        if (!key) continue;
+        var prefix = key.indexOf(DOCK_STATE_PREFIX) === 0 ? DOCK_STATE_PREFIX
+          : key.indexOf(VIEW_DOCK_STATE_PREFIX) === 0 ? VIEW_DOCK_STATE_PREFIX : null;
+        if (!prefix) continue;
+        try {
+          if (decodeURIComponent(key.slice(prefix.length)).split('\u0000')[0] === serverId) {
+            storage.removeItem(key);
+          }
+        } catch (_) {}
+      }
+    } catch (_) {}
+  }
+
   return {
     registerLinkProvider: registerLinkProvider, openFile: openFile, openDocked: openDocked, queueDocked: queueDocked,
     registerDecorator: registerDecorator,
@@ -7066,6 +7832,9 @@ var FilePreview = (function () {
     switchViewContext: switchViewContext,
     reconcileWorkspace: reconcileWorkspace,
     forgetWindow: forgetWindow,
+    forgetServer: forgetServer,
+    applyServerWindow: applyServerWindow,
+    reloadLocalDock: reloadLocalDock,
     activateHit: _activateLink,
     // Lets BlockHost put tool blocks in this dock's tab strip.
     blockDock: {
@@ -7121,6 +7890,9 @@ var FilePreview = (function () {
       prepareMarkdownMedia: _prepareMarkdownMedia,
       obsidianMarkdown: _obsidianMarkdown,
       installMarkdownImages: _installMarkdownImages,
+      renderImage: _renderImage,
+      adaptMermaidPalette: _adaptMermaidPalette,
+      canAutoRefresh: _canAutoRefresh,
       buildStandaloneDoc: _buildStandaloneDoc,
       buildArchiveTree: _buildArchiveTree,
       renderArchiveTree: _renderArchiveTree,

@@ -133,9 +133,10 @@
       : result === 'hidden' ? '新文档已加入收起的侧栏：' + name : '新文档：' + name;
     var open = function () { return revealDocument(event, target); };
     if (window.NotificationPanel && NotificationPanel.addDocument) NotificationPanel.addDocument({
-      id: 'doc-' + encodeURIComponent(key), type: 'document', path: event.path, paneId: paneId,
+      id: event.noticeId || ('doc-' + encodeURIComponent(key)), type: 'document', path: event.path, paneId: paneId,
       serverId: event.serverId, target: target, message: message, timestamp: now,
       read: result === 'activated' && document.visibilityState === 'visible',
+      skipServerSync: !!event.serverPersisted,
       session: target && target.session, windowIndex: target && target.windowIndex, windowName: target && target.windowName,
     }, open);
   }
@@ -144,6 +145,9 @@
     var sequence = ++_documentSequence;
     var serverId = event.serverId || (window.Api && Api.activeServerId ? Api.activeServerId() : 'local');
     event = Object.assign({}, event, { serverId: serverId });
+    if (event.serverPersisted && window.DockSync && typeof window.DockSync.noteServerRevision === 'function') {
+      window.DockSync.noteServerRevision(serverId, event.dockRevision);
+    }
     // Validated CLI events already carry a stable scope. Reserve it before an
     // asynchronous workspace lookup can let an older request through.
     if (event.origin !== 'agent-doc' && event.instanceId && event.windowId
@@ -159,6 +163,7 @@
       if (!window.FilePreview || !target) { noticeDocument(event, target, undefined, sequence); return; }
       var opts = Object.assign({}, target, { activate: event.activate !== false, automatic: true,
         replaces: event.replaces || null, fragment: event.fragment || null,
+        skipServerSync: !!event.serverPersisted,
         source: { serverId: serverId, paneId: target.paneId } });
       // Persist before fetching the preview: changing windows or receiving a
       // second document during the fetch must not lose either arrival.

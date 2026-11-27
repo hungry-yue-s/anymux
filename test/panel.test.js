@@ -93,7 +93,7 @@ describe.skipIf(!haveTmux)('the panel profile', () => {
       servers: 'active', 'node-installer': 'active', 'basic-mode': 'active', 'mosh-hub': 'active', mosh: 'active',
       // Files and what acts on them.
       files: 'active', upload: 'active', git: 'active', sqlite: 'active', notebook: 'active', open: 'active',
-      notifications: 'active', 'agent-events': 'active', status: 'active', keypad: 'active',
+      notifications: 'active', dock: 'active', 'agent-events': 'active', status: 'active', keypad: 'active',
       'managed-resources': 'active', 'session-protection': 'active',
     });
     expect(Object.entries(states).filter(([, state]) => !['active', 'off'].includes(state))).toEqual([]);

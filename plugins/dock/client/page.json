@@ -1,0 +1,6 @@
+{
+  "serve": ["."],
+  "body": [
+    { "order": 155, "script": "/js/dock-sync.js" }
+  ]
+}

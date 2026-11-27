@@ -31,6 +31,7 @@ var BlockHost = (function () {
   var dockState = {}; // scope -> { active }
   var restoredScopes = {};
   var focusedId = null;
+  var applyingRemote = false;
 
   // --- small DOM helpers (shared look with blocks.js) ---------------------
 
@@ -158,6 +159,39 @@ var BlockHost = (function () {
       if (own.length) window.localStorage.setItem(key, JSON.stringify(data));
       else window.localStorage.removeItem(key);
     } catch (_) { /* private mode */ }
+  }
+
+  function syncServerOp(scope, op) {
+    if (applyingRemote || !window.DockSync) return;
+    if (window.DockSync.isApplyingRemote && window.DockSync.isApplyingRemote()) return;
+    if (scope.indexOf('\u0000') < 0) {
+      if (typeof window.DockSync.sendServerBlockOp === 'function') {
+        window.DockSync.sendServerBlockOp(scope, op);
+      }
+      return;
+    }
+    var parts = scope.split('\u0000');
+    if (parts.length === 3 && parts[1] && parts[1] !== 'local-view' && typeof window.DockSync.sendWindowOp === 'function') {
+      window.DockSync.sendWindowOp(parts[0], parts[1], parts[2], op);
+    }
+  }
+
+  function syncBlockUpsert(instance, activate) {
+    if (!instance || !kinds[instance.kind] || kinds[instance.kind].persist === false) return;
+    var scope = scopeOf(instance);
+    var state = dockState[scope] || {};
+    var isActive = typeof activate === 'boolean' ? activate : (state.active === instance.id);
+    syncServerOp(scope, {
+      type: 'upsert-block',
+      kind: instance.kind,
+      persistKey: instance.key || instance.kind,
+      params: instance.params || {},
+      mode: instance.mode || 'dock',
+      unread: !!instance.unread,
+      arrivalId: instance.arrivalId || null,
+      activate: isActive,
+      keepUnread: !!instance.unread,
+    });
   }
 
   function restore(scope, serverId, windowKey) {
@@ -316,7 +350,12 @@ var BlockHost = (function () {
         if (instance.head) instance.head.title = next;
         syncSidebar();
       },
-      setParams: function (next) { instance.params = Object.assign({}, instance.params, next || {}); instance.key = keyOf(kind, instance.params); persist(scopeOf(instance)); },
+      setParams: function (next) {
+        instance.params = Object.assign({}, instance.params, next || {});
+        instance.key = keyOf(kind, instance.params);
+        persist(scopeOf(instance));
+        syncBlockUpsert(instance);
+      },
       /** If a block here already is what `next` would make this one, that one stays and this one goes. */
       yieldToTwin: function (next) {
         var key = keyOf(kind, next);
@@ -570,13 +609,22 @@ var BlockHost = (function () {
     var scopes = {};
     docked.forEach(function (i) { scopes[scopeOf(i)] = true; });
     Object.keys(scopes).forEach(persist);
+    var serverOrder = docked.filter(function (i) { return !i.windowKey; }).map(function (i) { return 'block:' + (i.key || i.kind); });
+    if (serverOrder.length > 1) {
+      syncServerOp(currentServer(), { type: 'reorder', order: serverOrder });
+    }
   }
 
   /** A tab in the sidebar came to the front (null: a file preview did). */
   function onSidebarChange(id) {
     var instance = instances.find(function (i) { return i.id === id; });
     var front = instance ? scopeOf(instance) : null;
-    if (instance && instance.unread && document.visibilityState !== 'hidden') { instance.unread = false; persist(scopeOf(instance)); }
+    var clearedUnread = false;
+    if (instance && instance.unread && document.visibilityState !== 'hidden') {
+      instance.unread = false;
+      clearedUnread = true;
+      persist(scopeOf(instance));
+    }
     [currentServer(), currentWindow()].forEach(function (scope) {
       if (!scope) return;
       var state = dockState[scope] = dockState[scope] || { active: null };
@@ -585,6 +633,9 @@ var BlockHost = (function () {
       state.active = next;
       persist(scope);
     });
+    if (instance && (clearedUnread || front)) {
+      syncServerOp(front, { type: 'activate', key: 'block:' + (instance.key || instance.kind) });
+    }
     if (instance && instance.impl && typeof instance.impl.onShow === 'function') {
       try { instance.impl.onShow(); } catch (_) { /* a block's own refresh failing must not break the tabs */ }
     }
@@ -669,7 +720,8 @@ var BlockHost = (function () {
   // --- public operations -------------------------------------------------------
 
   /** Save an agent arrival in its source window without navigation or focus. */
-  function openInWindow(kind, params, target) {
+  function openInWindow(kind, params, target, opts) {
+    opts = opts || {};
     if (!kinds[kind] || !kinds[kind].perWindow || !target || !target.serverId || !target.instanceId || !target.windowId) return 'unavailable';
     var scope = [target.serverId, target.instanceId, target.windowId].join('\u0000');
     var key = keyOf(kind, params);
@@ -684,6 +736,19 @@ var BlockHost = (function () {
         Object.assign(saved.blocks[index], { params: Object.assign({}, saved.blocks[index].params, params), mode: 'dock', unread: true, arrivalId: arrivalId });
         saved.active = index;
         window.localStorage.setItem(storage, JSON.stringify(saved));
+        if (!opts.skipServerSync) {
+          syncServerOp(scope, {
+            type: 'upsert-block',
+            kind: kind,
+            persistKey: key || kind,
+            params: saved.blocks[index].params,
+            mode: 'dock',
+            unread: true,
+            arrivalId: arrivalId,
+            activate: true,
+            keepUnread: true,
+          });
+        }
         return 'queued';
       } catch (_) { return 'unavailable'; }
     }
@@ -700,6 +765,7 @@ var BlockHost = (function () {
     }
     dockState[scope] = { active: instance.id };
     persist(scope);
+    if (!opts.skipServerSync) syncBlockUpsert(instance, true);
     render();
     return scope !== currentWindow() ? 'queued' : isVisible(instance) ? 'activated' : 'hidden';
   }
@@ -719,12 +785,14 @@ var BlockHost = (function () {
       existing.mode = placeableMode(existing.mode);
       if (existing.impl && typeof existing.impl.update === 'function') existing.impl.update(params || {});
       activate(existing.id);
+      if (!options.skipServerSync) syncBlockUpsert(existing);
       return existing.api;
     }
     var mode = placeableMode(options.mode || kinds[kind].defaultMode || 'dock');
     var instance = create(kind, params || {}, { mode: mode, serverId: sid, windowKey: kinds[kind].perWindow ? currentWindow() : null });
     if (!instance) return null;
     activate(instance.id);
+    if (!options.skipServerSync) syncBlockUpsert(instance);
     // A freshly built frame may have nothing focusable until its first load.
     setTimeout(function () { focusInstance(instance); }, 30);
     return instance.api;
@@ -748,6 +816,7 @@ var BlockHost = (function () {
     render();
     frontInSidebar(instance);
     persist(scopeOf(instance));
+    syncBlockUpsert(instance);
     focusInstance(instance);
   }
 
@@ -767,6 +836,7 @@ var BlockHost = (function () {
     render();
     frontInSidebar(instance);
     persist(scopeOf(instance));
+    syncBlockUpsert(instance);
     focusInstance(instance);
   }
 
@@ -785,9 +855,12 @@ var BlockHost = (function () {
   function close(id) {
     var instance = instances.find(function (i) { return i.id === id; });
     if (!instance) return;
+    var scope = scopeOf(instance);
+    var persistKey = instance.key || instance.kind;
     discard(instance);
     render();
-    persist(scopeOf(instance));
+    persist(scope);
+    syncServerOp(scope, { type: 'remove-block', persistKey: persistKey });
     // Typing returns to the terminal on desktop; phones would pop the keyboard.
     if (!isCompact()) {
       var terminal = document.querySelector('.terminal-view .xterm-helper-textarea');
@@ -894,6 +967,130 @@ var BlockHost = (function () {
     };
   }
 
+  function applyServerScope(serverId, windowKey, state) {
+    var scope = windowKey || serverId;
+    if (!scope) return;
+    var prevRemote = applyingRemote;
+    applyingRemote = true;
+    try {
+      restoredScopes[scope] = true;
+      var items = state && Array.isArray(state.items) ? state.items : [];
+      var activeKey = state && typeof state.activeKey === 'string' ? state.activeKey : null;
+      var inScope = instances.filter(function (i) {
+        return i.serverId === serverId && (windowKey ? i.windowKey === windowKey : !i.windowKey);
+      });
+      var wanted = {};
+      items.forEach(function (item) {
+        if (item && item.persistKey) wanted[item.persistKey] = item;
+      });
+      inScope.forEach(function (instance) {
+        var pk = instance.key || instance.kind;
+        if (!wanted[pk]) discard(instance);
+      });
+      var activeInstance = null;
+      items.forEach(function (item) {
+        if (!item || !kinds[item.kind]) return;
+        var pk = item.persistKey || item.kind;
+        var existing = instances.find(function (i) {
+          return i.serverId === serverId
+            && (windowKey ? i.windowKey === windowKey : !i.windowKey)
+            && (i.key || i.kind) === pk;
+        });
+        if (existing) {
+          existing.mode = item.mode === 'float' || item.mode === 'max' ? item.mode : 'dock';
+          existing.unread = !!item.unread;
+          existing.arrivalId = item.arrivalId || null;
+          if (JSON.stringify(existing.params || {}) !== JSON.stringify(item.params || {})) {
+            existing.params = Object.assign({}, item.params || {});
+            existing.key = keyOf(existing.kind, existing.params);
+            if (existing.impl && typeof existing.impl.update === 'function') existing.impl.update(existing.params);
+          }
+        } else {
+          existing = create(item.kind, item.params || {}, {
+            mode: item.mode === 'float' || item.mode === 'max' ? item.mode : 'dock',
+            serverId: serverId,
+            windowKey: windowKey || null,
+            quiet: true,
+            unread: !!item.unread,
+            arrivalId: item.arrivalId || null,
+          });
+        }
+        if (existing && activeKey === 'block:' + pk) activeInstance = existing;
+      });
+      dockState[scope] = { active: activeInstance ? activeInstance.id : null };
+      persist(scope);
+      render();
+    } finally {
+      applyingRemote = prevRemote;
+    }
+  }
+
+  function reloadLocalScope(serverId, windowKey) {
+    var scope = windowKey || serverId;
+    var key = storageKey(scope);
+    if (!key) return;
+    var raw = null;
+    try { raw = window.localStorage.getItem(key); } catch (_) { return; }
+    var data = null;
+    try { data = raw ? JSON.parse(raw) : null; } catch (_) { return; }
+    var items = data && Array.isArray(data.blocks) ? data.blocks.map(function (b) {
+      var pk = keyOf(b.kind, b.params || {}) || b.kind;
+      return {
+        type: 'block',
+        kind: b.kind,
+        persistKey: pk,
+        params: b.params || {},
+        mode: b.mode || 'dock',
+        unread: !!b.unread,
+        arrivalId: b.arrivalId || null,
+      };
+    }) : [];
+    var activeItem = data && Number.isInteger(data.active) ? items[data.active] : null;
+    applyServerScope(serverId, windowKey, {
+      items: items,
+      activeKey: activeItem ? 'block:' + activeItem.persistKey : null,
+    });
+  }
+
+  function forgetServer(serverId) {
+    if (!serverId) return;
+    var prevRemote = applyingRemote;
+    applyingRemote = true;
+    try {
+      instances.slice().forEach(function (instance) {
+        if (instance.serverId === serverId) discard(instance);
+      });
+      Object.keys(restoredScopes).forEach(function (scope) {
+        if (scope === serverId || scope.indexOf(serverId + '\u0000') === 0) delete restoredScopes[scope];
+      });
+      Object.keys(dockState).forEach(function (scope) {
+        if (scope === serverId || scope.indexOf(serverId + '\u0000') === 0) delete dockState[scope];
+      });
+      try {
+        var storage = window.localStorage;
+        for (var i = storage.length - 1; i >= 0; i--) {
+          var key = storage.key(i);
+          if (!key) continue;
+          if (key === STORAGE_PREFIX + encodeURIComponent(serverId)) {
+            storage.removeItem(key);
+            continue;
+          }
+          var prefix = key.indexOf(WINDOW_STORAGE_PREFIX) === 0 ? WINDOW_STORAGE_PREFIX
+            : key.indexOf(VIEW_STORAGE_PREFIX) === 0 ? VIEW_STORAGE_PREFIX : null;
+          if (!prefix) continue;
+          try {
+            if (decodeURIComponent(key.slice(prefix.length)).split('\u0000')[0] === serverId) {
+              storage.removeItem(key);
+            }
+          } catch (_) {}
+        }
+      } catch (_) {}
+      render();
+    } finally {
+      applyingRemote = prevRemote;
+    }
+  }
+
   return {
     register: register,
     open: open,
@@ -907,6 +1104,9 @@ var BlockHost = (function () {
     closeFocused: closeFocused,
     toggleFloatFocused: toggleFloatFocused,
     toggleMaxFocused: toggleMaxFocused,
+    applyServerScope: applyServerScope,
+    reloadLocalScope: reloadLocalScope,
+    forgetServer: forgetServer,
     _test: { clampGeom: clampGeom, keyOf: keyOf, instances: function () { return instances; } },
   };
 })();

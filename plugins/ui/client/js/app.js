@@ -381,6 +381,9 @@ class StatusSocket {
       if (typeof NotificationPanel !== 'undefined' && NotificationPanel.refresh) {
         NotificationPanel.refresh();
       }
+      if (typeof DockSync !== 'undefined' && DockSync.syncServer) {
+        DockSync.syncServer(serverId);
+      }
       if (typeof AgentStatus !== 'undefined' && AgentStatus.fetch) {
         AgentStatus.fetch(serverId);
       }
@@ -389,6 +392,12 @@ class StatusSocket {
     this._ws.onmessage = function (event) {
       try {
         var data = JSON.parse(event.data);
+        if (data && data.type === 'dock-changed') {
+          if (typeof DockSync !== 'undefined' && DockSync.handleServerEvent) {
+            DockSync.handleServerEvent(Object.assign({}, data, { serverId: serverId }));
+          }
+          return;
+        }
         if (data && data.type === 'agent-status') {
           if (typeof AgentStatus !== 'undefined' && AgentStatus.setSnapshot) {
             AgentStatus.setSnapshot(serverId, data.data);

@@ -137,6 +137,9 @@
         if (global.FilePreview && typeof global.FilePreview.reconcileWorkspace === 'function') {
           global.FilePreview.reconcileWorkspace(serverId, workspace);
         }
+        if (global.DockSync && typeof global.DockSync.onWorkspace === 'function') {
+          global.DockSync.onWorkspace(serverId, workspace);
+        }
         for (const entry of global.PanelSlots?.terminalViews?.list() || []) entry.reconcileWorkspace?.(serverId, workspace);
         this._workspaceReadAt[serverId] = Date.now();
         global.Store.setWorkspace(serverId, workspace);
@@ -1752,6 +1755,9 @@
       })) return;
       await global.Api.del(global.Api.serverPath(serverId));
       global.Store.removeServer(serverId);
+      if (global.FilePreview && typeof global.FilePreview.forgetServer === 'function') global.FilePreview.forgetServer(serverId);
+      if (global.BlockHost && typeof global.BlockHost.forgetServer === 'function') global.BlockHost.forgetServer(serverId);
+      if (global.DockSync && typeof global.DockSync.forgetServer === 'function') global.DockSync.forgetServer(serverId);
       await this.refreshServers();
       global.Router.go({ name: 'servers', params: {} });
     },
