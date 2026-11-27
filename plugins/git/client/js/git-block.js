@@ -187,37 +187,26 @@
     var historyAnchor = pendingCommit;
     var root = el('div', 'git-block');
 
-    // --- context bar (repo / worktree identity & path) ---
-    var ctxBar = el('div', 'git-context-bar');
-    ctxBar.hidden = true;
-    var ctxLeft = el('div', 'git-ctx-left');
+    // --- top bar (repo / worktree context + branch + view & sync controls) ---
+    var bar = el('div', 'blk-toolbar git-bar');
+    var ctxTrigger = el('button', 'blk-btn blk-btn-ghost git-ctx-trigger');
+    ctxTrigger.type = 'button';
+    ctxTrigger.hidden = true;
+    ctxTrigger.setAttribute('aria-haspopup', 'dialog');
+    ctxTrigger.setAttribute('aria-expanded', 'false');
     var ctxBadge = el('span', 'git-ctx-badge');
     ctxBadge.hidden = true;
     var ctxName = el('strong', 'git-ctx-name');
     var ctxPath = el('span', 'git-ctx-path');
-    ctxLeft.append(ctxBadge, ctxName, ctxPath);
-    var ctxRight = el('div', 'git-ctx-right');
-    var wtBtn = button('切换 Worktree', function () { toggleWorktreeMenu(); }, { icon: 'branch', className: 'blk-btn-ghost blk-btn-small git-ctx-wt-btn' });
-    wtBtn.appendChild(el('span', 'git-branch-caret')).innerHTML = icon('chevronDown');
-    wtBtn.setAttribute('aria-haspopup', 'listbox');
-    wtBtn.setAttribute('aria-expanded', 'false');
-    wtBtn.hidden = true;
-    var copyPathBtn = iconButton('copy', '复制仓库路径', function () {
-      if (!status || !status.root) return;
-      if (window._copyToClipboard) window._copyToClipboard(status.root);
-      else if (navigator.clipboard) navigator.clipboard.writeText(status.root).catch(function () {});
-      toast('已复制路径：' + status.root);
-    });
-    var openDirBtn = iconButton('folder', '浏览仓库目录', function () {
-      if (status && status.root && window.FilePreview && FilePreview.openFile) {
-        FilePreview.openFile(status.root, null);
-      }
-    });
-    ctxRight.append(wtBtn, copyPathBtn, openDirBtn);
-    ctxBar.append(ctxLeft, ctxRight);
+    var ctxCaret = el('span', 'git-branch-caret');
+    ctxCaret.innerHTML = icon('chevronDown');
+    ctxTrigger.append(ctxBadge, ctxName, ctxPath, ctxCaret);
+    ctxTrigger.addEventListener('click', function () { toggleWorktreeMenu(); });
 
-    // --- top bar ---
-    var bar = el('div', 'blk-toolbar git-bar');
+    var ctxSep = el('span', 'git-bar-sep');
+    ctxSep.setAttribute('aria-hidden', 'true');
+    ctxSep.hidden = true;
+
     var branchBtn = button('…', function () { toggleBranchMenu(); }, { icon: 'branch', className: 'git-branch-btn blk-btn-ghost' });
     branchBtn.setAttribute('aria-haspopup', 'listbox');
     branchBtn.appendChild(el('span', 'git-branch-caret')).innerHTML = icon('chevronDown');
@@ -226,7 +215,7 @@
     var refreshFailed = button('刷新失败', function () { load(true); }, { icon: 'refresh', className: 'blk-btn-ghost blk-btn-small git-refresh-failed' });
     refreshFailed.hidden = true;
     var left = el('div', 'blk-row git-bar-left');
-    left.append(branchBtn, trackBox, refreshFailed);
+    left.append(ctxTrigger, ctxSep, branchBtn, trackBox, refreshFailed);
     var segmented = el('div', 'blk-segmented');
     var changesTab = button('更改', function () { show('changes'); }, { icon: 'changes', className: 'is-active' });
     var historyTab = button('历史', function () { show('history'); }, { icon: 'history' });
@@ -249,7 +238,7 @@
     var historyView = el('div', 'git-history');
     historyView.hidden = true;
     var stateBox = el('div', 'git-state');
-    root.append(ctxBar, bar, stateBox, changesView, historyView);
+    root.append(bar, stateBox, changesView, historyView);
     stateBox.appendChild(ui.spinnerLine('读取仓库'));
     changesView.hidden = true;
 
@@ -595,8 +584,13 @@
     }
 
     function renderContextBar() {
-      if (!status || !status.root) { ctxBar.hidden = true; return; }
-      ctxBar.hidden = false;
+      if (!status || !status.root) {
+        ctxTrigger.hidden = true;
+        ctxSep.hidden = true;
+        return;
+      }
+      ctxTrigger.hidden = false;
+      ctxSep.hidden = false;
       var repoName = status.repoName || status.root.split('/').filter(Boolean).pop() || 'Git';
       if (status.isWorktree) {
         ctxBadge.textContent = 'Worktree';
@@ -609,12 +603,16 @@
       } else {
         ctxBadge.hidden = true;
       }
-      ctxName.textContent = status.isWorktree && status.worktreeName && status.worktreeName !== repoName
+      var label = status.isWorktree && status.worktreeName && status.worktreeName !== repoName
         ? repoName + ' · ' + status.worktreeName
         : repoName;
+      ctxName.textContent = label;
       ctxPath.textContent = status.displayPath || shortenHomePath(status.root);
       ctxPath.title = status.root;
-      wtBtn.hidden = !(status.isWorktree || status.hasWorktrees);
+      var prefix = status.isWorktree ? '[Worktree] ' : status.hasWorktrees ? '[主仓库] ' : '';
+      var hint = (status.isWorktree || status.hasWorktrees) ? '点击查看路径或切换 Worktree' : '点击查看路径、复制或浏览目录';
+      ctxTrigger.title = prefix + label + '\n' + status.root + '\n' + hint;
+      ctxTrigger.setAttribute('aria-label', '仓库 ' + label + '，' + status.root);
     }
 
     var wtMenu = null;
@@ -622,23 +620,77 @@
       if (!wtMenu) return;
       wtMenu.remove();
       wtMenu = null;
-      wtBtn.setAttribute('aria-expanded', 'false');
+      ctxTrigger.setAttribute('aria-expanded', 'false');
       document.removeEventListener('mousedown', onWtOutside, true);
+      document.removeEventListener('keydown', onWtKeydown, true);
     }
     function onWtOutside(e) {
-      if (wtMenu && !wtMenu.contains(e.target) && !wtBtn.contains(e.target)) closeWorktreeMenu();
+      if (wtMenu && !wtMenu.contains(e.target) && !ctxTrigger.contains(e.target)) closeWorktreeMenu();
+    }
+    function onWtKeydown(e) {
+      if (!wtMenu) return;
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        closeWorktreeMenu();
+        if (ctxTrigger.focus) ctxTrigger.focus();
+      }
     }
     function toggleWorktreeMenu() {
       if (wtMenu) { closeWorktreeMenu(); return; }
       if (!status || !status.root) return;
+      closeBranchMenu();
       wtMenu = el('div', 'blk-menu git-wt-menu');
-      wtBtn.setAttribute('aria-expanded', 'true');
+      wtMenu.setAttribute('role', 'dialog');
+      wtMenu.setAttribute('aria-label', '仓库与 Worktree 信息');
+      ctxTrigger.setAttribute('aria-expanded', 'true');
+
+      var head = el('div', 'git-wt-menu-head');
+      var ident = el('div', 'git-wt-menu-ident');
+      if (status.isWorktree || status.hasWorktrees) {
+        ident.appendChild(el('span', 'git-ctx-badge ' + (status.isWorktree ? 'is-wt' : 'is-main'), status.isWorktree ? 'Worktree' : '主仓库'));
+      }
+      ident.appendChild(el('strong', '', ctxName.textContent || 'Git'));
+      var fullPath = el('div', 'git-wt-menu-fullpath', status.root);
+      fullPath.title = status.root;
+      head.append(ident, fullPath);
+      if (status.isWorktree && status.mainRoot) {
+        var mainRef = el('div', 'git-wt-menu-mainref', '主仓库：' + shortenHomePath(status.mainRoot));
+        mainRef.title = status.mainRoot;
+        head.appendChild(mainRef);
+      }
+
+      var actions = el('div', 'git-wt-menu-actions');
+      var copyBtn = button('复制路径', function () {
+        if (!status || !status.root) return;
+        if (window._copyToClipboard) window._copyToClipboard(status.root);
+        else if (navigator.clipboard) navigator.clipboard.writeText(status.root).catch(function () {});
+        toast('已复制路径：' + status.root);
+        closeWorktreeMenu();
+      }, { icon: 'copy', className: 'blk-btn-ghost blk-btn-small' });
+      copyBtn.setAttribute('aria-label', '复制仓库路径');
+      var openBtn = button('浏览目录', function () {
+        if (status && status.root && window.FilePreview && FilePreview.openFile) {
+          FilePreview.openFile(status.root, null);
+        }
+        closeWorktreeMenu();
+      }, { icon: 'folder', className: 'blk-btn-ghost blk-btn-small' });
+      openBtn.setAttribute('aria-label', '浏览仓库目录');
+      actions.append(copyBtn, openBtn);
+      head.appendChild(actions);
+      wtMenu.appendChild(head);
+
+      root.appendChild(wtMenu);
+      document.addEventListener('mousedown', onWtOutside, true);
+      document.addEventListener('keydown', onWtKeydown, true);
+
+      if (!(status.isWorktree || status.hasWorktrees)) return;
+
+      wtMenu.appendChild(el('div', 'blk-menu-section', '切换 Worktree'));
       var results = el('div', 'blk-menu-list');
       results.setAttribute('role', 'listbox');
       results.appendChild(ui.spinnerLine('读取 Worktrees'));
       wtMenu.appendChild(results);
-      ctxBar.appendChild(wtMenu);
-      document.addEventListener('mousedown', onWtOutside, true);
       c.get('/api/worktrees', { path: status.root }).then(function (data) {
         if (!wtMenu) return;
         results.replaceChildren();
@@ -1002,6 +1054,7 @@
     function toggleBranchMenu() {
       if (branchMenu) { closeBranchMenu(); return; }
       if (!status) return;
+      closeWorktreeMenu();
       branchMenu = el('div', 'blk-menu git-branch-menu');
       branchBtn.setAttribute('aria-expanded', 'true');
       var input = el('input', 'blk-input');
@@ -1011,6 +1064,8 @@
       results.setAttribute('role', 'listbox');
       branchMenu.append(input, results);
       results.appendChild(ui.spinnerLine('读取分支'));
+      var menuLeft = Math.max(8, Math.min(branchBtn.offsetLeft || 8, Math.max(8, (root.clientWidth || 400) - 388)));
+      branchMenu.style.left = menuLeft + 'px';
       root.appendChild(branchMenu);
       document.addEventListener('mousedown', onOutside, true);
       input.focus();

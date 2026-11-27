@@ -247,28 +247,51 @@ describe('per-pane Git rail & worktree-aware Git preview', () => {
     expect(wtTab.title).toContain(wtRoot);
     expect(wtTab.title).toContain(mainRoot);
 
-    // Check context bar inside the worktree Git block
+    // Check merged single-row header inside the worktree Git block
     wtTab.click();
     await flush();
     const activeFrame = [...doc.querySelectorAll('.blk-frame')].find((f) => !f.hidden);
-    expect(activeFrame.querySelector('.git-ctx-badge').textContent).toBe('Worktree');
-    expect(activeFrame.querySelector('.git-ctx-name').textContent).toBe('app-main · feat-ui');
-    expect(activeFrame.querySelector('.git-ctx-path').title).toBe(wtRoot);
+    expect(activeFrame.querySelector('.git-context-bar')).toBeNull();
+    const ctxTrigger = activeFrame.querySelector('.git-bar .git-ctx-trigger');
+    expect(ctxTrigger).not.toBeNull();
+    expect(ctxTrigger.hidden).toBe(false);
+    expect(ctxTrigger.querySelector('.git-ctx-badge').textContent).toBe('Worktree');
+    expect(ctxTrigger.querySelector('.git-ctx-name').textContent).toBe('app-main · feat-ui');
+    expect(ctxTrigger.querySelector('.git-ctx-path').title).toBe(wtRoot);
 
-    // Copy path button copies exact root
-    activeFrame.querySelector('[aria-label="复制仓库路径"]').click();
-    expect(win._copyToClipboard).toHaveBeenCalledWith(wtRoot);
-
-    // Worktree switcher lists main and feat-ui and opens main when clicked
-    const wtBtn = activeFrame.querySelector('.git-ctx-wt-btn');
-    expect(wtBtn.hidden).toBe(false);
-    wtBtn.click();
+    // Click repo context trigger to open unified popover with full path, copy/open actions, and worktree switcher
+    ctxTrigger.click();
     await flush();
-    const wtRows = activeFrame.querySelectorAll('.git-wt-menu-item');
+    let menu = activeFrame.querySelector('.git-wt-menu');
+    expect(menu).not.toBeNull();
+    expect(menu.querySelector('.git-wt-menu-fullpath').textContent).toBe(wtRoot);
+    menu.querySelector('[aria-label="复制仓库路径"]').click();
+    expect(win._copyToClipboard).toHaveBeenCalledWith(wtRoot);
+    expect(activeFrame.querySelector('.git-wt-menu')).toBeNull();
+
+    // Re-open menu and switch to main worktree
+    ctxTrigger.click();
+    await flush();
+    menu = activeFrame.querySelector('.git-wt-menu');
+    const wtRows = menu.querySelectorAll('.git-wt-menu-item');
     expect(wtRows).toHaveLength(2);
     const openSpy = vi.spyOn(win.BlockHost, 'open');
     wtRows[0].click();
     expect(openSpy).toHaveBeenCalledWith('git', { path: mainRoot });
+
+    // Plain repo without worktrees still opens the popover with full path & actions, and no worktree list
+    const plainTab = tabs.find((t) => t.querySelector('.fp-dock-tab-label').textContent === 'service · a');
+    plainTab.click();
+    await flush();
+    const plainFrame = [...doc.querySelectorAll('.blk-frame')].find((f) => !f.hidden);
+    plainFrame.querySelector('.git-bar .git-ctx-trigger').click();
+    await flush();
+    const plainMenu = plainFrame.querySelector('.git-wt-menu');
+    expect(plainMenu).not.toBeNull();
+    expect(plainMenu.querySelector('.git-wt-menu-fullpath').textContent).toBe(dupA);
+    expect(plainMenu.querySelector('[aria-label="复制仓库路径"]')).not.toBeNull();
+    expect(plainMenu.querySelector('[aria-label="浏览仓库目录"]')).not.toBeNull();
+    expect(plainMenu.querySelectorAll('.git-wt-menu-item')).toHaveLength(0);
   });
 
   it('filters long multi-repo popovers by keyword, closes on Escape, and falls back to /api/git/status on 404', async () => {
