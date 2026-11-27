@@ -1989,16 +1989,24 @@ describe('SeamWindowSession multi-pane workbench session', () => {
     expect(pane1.classList.contains('is-chromeless')).toBe(false);
     expect(session._effectiveRailPx()).toBe(26);
 
-    // Clear label -> back to chromeless, then show gitSlot -> exits chromeless
+    // Clear label -> back to chromeless; gitSlot mirrors into chromeless hover capsule without exiting chromeless
     sendLayout(socket, {
       windowCols: 100, windowRows: 20, activePaneId: '%1',
       panes: [{ id: '%1', index: 0, active: true, width: 100, height: 20, command: 'fish' }],
       tree: { type: 'pane', paneId: '%1', width: 100, height: 20 },
     });
     expect(pane1.classList.contains('is-chromeless')).toBe(true);
+    const chip = f.win.document.createElement('button');
+    chip.className = 'pane-rail-git-chip';
+    chip.innerHTML = '<span class="prg-branch">master</span><span class="prg-dirty">●2</span>';
+    session.panes.get('%1').gitSlot.appendChild(chip);
     session.panes.get('%1').gitSlot.hidden = false;
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(pane1.classList.contains('is-chromeless')).toBe(false);
+    expect(pane1.classList.contains('is-chromeless')).toBe(true);
+    expect(session._effectiveRailPx()).toBe(0);
+    const capGit = pane1.querySelector('.seam-chromeless-bar .chromeless-git-btn');
+    expect(capGit.hidden).toBe(false);
+    expect(capGit.textContent).toContain('master');
 
     // Multi-pane selectPane flashes .is-locate-flash on newly focused pane
     session.panes.get('%1').gitSlot.hidden = true;

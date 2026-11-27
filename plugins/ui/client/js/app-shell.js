@@ -825,10 +825,10 @@
       sheet.innerHTML = '<div class="ms-mobile-workspace-head">'
         + '<div><strong>会话与窗口</strong><small>选择窗口，继续工作</small></div>'
         + '<button class="icon-btn" data-action="mobile-workspace-close" aria-label="关闭菜单">×</button>'
-        + '</div><div class="ms-mobile-workspace-search">'
-        + '<input type="search" id="ms-mobile-workspace-filter" class="ms-mobile-workspace-filter" placeholder="筛选会话或窗口…" aria-label="筛选会话或窗口">'
         + '</div><div id="ms-mobile-workspace-tree" class="ms-mobile-workspace-tree"></div>'
-        + '<div id="ms-mobile-workspace-tools" class="ms-mobile-workspace-tools"></div>'
+        + '<div class="ms-mobile-workspace-search">'
+        + '<input type="search" id="ms-mobile-workspace-filter" class="ms-mobile-workspace-filter" placeholder="筛选会话或窗口…" aria-label="筛选会话或窗口">'
+        + '</div><div id="ms-mobile-workspace-tools" class="ms-mobile-workspace-tools"></div>'
         + '<button class="ms-btn mobile-menu-server" data-action="mobile-server">切换服务器 · '
         + esc((this.server(this.activeServerId()) || {}).name || this.activeServerId()) + '</button>';
 
@@ -1216,15 +1216,18 @@
       pendingTitlebar = true;
       global.requestAnimationFrame(function () {
         pendingTitlebar = false;
+        if (!global.document || !chrome.isConnected) return;
         var rect = chrome.getBoundingClientRect();
         var controls = Array.from(chrome.querySelectorAll('button,a,input,select,textarea,summary,[role="button"],[contenteditable="true"]'));
+        var dockControls = Array.from(global.document.querySelectorAll('.fp-dock:not(.fp-side-maximized) .fp-dock-tabs button, .fp-dock:not(.fp-side-maximized) .fp-dock-tabs [role="tab"], .fp-dock:not(.fp-side-maximized) .fp-side-resizer'));
+        if (dockControls.length) controls = controls.concat(dockControls);
         var covered = global.document.querySelector('.fp-overlay:not(.fp-side),.fp-side-maximized,.fp-mermaid-dialog,.fp-share-overlay,.cmd-palette-overlay,.modal-overlay,.ms-modal-backdrop:not([hidden]),.notification-panel,#ms-server-popover:not([hidden]),dialog[open]');
         var height = covered ? 0 : rect.height;
         var payload = {
           action: 'titlebarDragRegions', height: height, viewportWidth: global.innerWidth,
           exclusions: height ? controls.map(function (control) {
             var r = control.getBoundingClientRect();
-            return { x: r.left, y: r.top - rect.top, width: r.width, height: r.height };
+            return { x: r.left, y: Math.max(0, r.top - rect.top), width: r.width, height: Math.min(height, r.height) };
           }) : [],
         };
         var serialized = JSON.stringify(payload);
@@ -1240,6 +1243,7 @@
     });
     if (global.ResizeObserver) new global.ResizeObserver(syncTitlebar).observe(chrome);
     global.addEventListener('resize', syncTitlebar);
+    global.addEventListener('anymux-dock-layout', syncTitlebar);
     syncTitlebar();
   }
 

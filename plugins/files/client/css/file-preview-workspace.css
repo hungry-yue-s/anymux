@@ -57,11 +57,12 @@
 body.fp-side-resizing .fp-side-resizer::after { width: 3px; background: var(--fp-accent); }
 .fp-side-resizer:focus-visible { outline: 2px solid var(--fp-accent); }
 .fp-dock-tabs {
-  min-height: 36px;
-  height: 36px;
+  min-height: var(--workspace-chrome-height, 36px);
+  height: var(--workspace-chrome-height, 36px);
   gap: 1px;
   padding: 0 6px;
   background: color-mix(in srgb, var(--workspace-sidebar, var(--fp-panel)) 55%, var(--fp-bg));
+  border-bottom: 1px solid var(--fp-line);
   border-color: var(--fp-line);
   scrollbar-width: thin;
 }

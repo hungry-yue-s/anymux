@@ -87,6 +87,17 @@ var FilePreview = (function () {
   var MAX_PREFS_ENTRIES = 64;
   var _applyingRemote = false;
   var _workspaceRevisions = {};
+
+  function _syncDockOpenWidth(px) {
+    var root = document.documentElement;
+    if (root && root.style) {
+      if (px && px > 0) root.style.setProperty('--fp-dock-open-width', Math.round(px) + 'px');
+      else root.style.removeProperty('--fp-dock-open-width');
+    }
+    if (typeof window !== 'undefined' && typeof window.Event === 'function' && typeof window.dispatchEvent === 'function') {
+      window.dispatchEvent(new window.Event('anymux-dock-layout'));
+    }
+  }
   // Arrivals not rendered yet. Keep them when a modal or another window owns
   // the preview, and merge them into that window's ordinary persisted dock.
   var _queuedDockDocuments = {};
@@ -463,6 +474,9 @@ var FilePreview = (function () {
       var next = Math.round(_clampSideWidth(width));
       sideOverlay.style.flexBasis = next + 'px';
       sideOverlay.style.width = next + 'px';
+      if (sideOverlay === _dockOverlay && !sideOverlay.classList.contains('fp-side-maximized')) {
+        _syncDockOpenWidth(next);
+      }
       sideOverlay.style.setProperty('--fp-side-max-width', _sideWidthBounds().max + 'px');
       grip.setAttribute('aria-valuemin', '320');
       grip.setAttribute('aria-valuemax', String(_sideWidthBounds().max));
@@ -1081,7 +1095,10 @@ var FilePreview = (function () {
     _dockOverlay.style.flexBasis = dockWidth + 'px';
     _dockOverlay.style.width = dockWidth + 'px';
     _dockOverlay.classList.toggle('fp-restoring', _restoringDock);
-    if (!_restoringHidden) document.body.classList.add('fp-side-open');
+    if (!_restoringHidden) {
+      document.body.classList.add('fp-side-open');
+      if (!_dockOverlay.classList.contains('fp-side-maximized')) _syncDockOpenWidth(dockWidth);
+    }
     _activateDockTab(_activeDockTabId || _dockTabs[0].id, preserveRequest);
     _installSideResize();
     _persistDockState(dockWidth);
@@ -1098,6 +1115,7 @@ var FilePreview = (function () {
     _dockOverlay.classList.add('fp-restoring');
     layout.appendChild(_dockOverlay);
     document.body.classList.add('fp-side-open');
+    _syncDockOpenWidth(dockWidth);
   }
 
   function _hideDock(persistHidden) {
@@ -1115,6 +1133,7 @@ var FilePreview = (function () {
     _cleanupSideResize();
     _dockOverlay.remove();
     document.body.classList.remove('fp-side-open');
+    _syncDockOpenWidth(0);
     if (!modalOpen) {
       _placement = 'modal';
       _overlay = null;
@@ -1179,6 +1198,9 @@ var FilePreview = (function () {
     _dockOverlay.classList.toggle('fp-mode-dir', !!tab.modeDir);
     _dockOverlay.classList.toggle('fp-has-back', !!tab.hasBack);
     _dockOverlay.classList.toggle('fp-side-maximized', _maximized);
+    if (document.body.classList.contains('fp-side-open')) {
+      _syncDockOpenWidth(_maximized ? 0 : (parseFloat(_dockOverlay.style.width) || 0));
+    }
     _syncPlacementButton();
     _syncMaximizeButton();
     if (!tab.block) _setPreviewTitle(tab.path);
@@ -1216,6 +1238,9 @@ var FilePreview = (function () {
     _dockOverlay.classList.toggle('fp-side-maximized', _maximized && _placement === 'side');
     var active = _activeDockTab();
     if (active && active.modal) active.modal.classList.toggle('fp-maximized', _maximized);
+    if (document.body.classList.contains('fp-side-open')) {
+      _syncDockOpenWidth((_maximized && _placement === 'side') ? 0 : (parseFloat(_dockOverlay.style.width) || 0));
+    }
     _syncMaximizeButton();
   }
 
@@ -1353,6 +1378,7 @@ var FilePreview = (function () {
     _dockHidden = false;
     if (!preservePersisted) _clearPersistedDock();
     document.body.classList.remove('fp-side-open');
+    _syncDockOpenWidth(0);
     if (keepModal) return;
     _overlay = null;
     _placement = 'modal';
@@ -1829,6 +1855,9 @@ var FilePreview = (function () {
         var clamped = _clampSideWidth(blockPrefs.width);
         _dockOverlay.style.flexBasis = clamped + 'px';
         _dockOverlay.style.width = clamped + 'px';
+        if (document.body.classList.contains('fp-side-open') && !_dockOverlay.classList.contains('fp-side-maximized')) {
+          _syncDockOpenWidth(clamped);
+        }
       }
       var id = _nextDockTabId++;
       block.element.id = 'fp-panel-' + id;
@@ -4008,8 +4037,12 @@ var FilePreview = (function () {
     if (_dockOverlay && !_dockHidden && _dockTabs.length > 0) {
       _activateDockTab(_activeDockTabId || _dockTabs[0].id);
       document.body.classList.add('fp-side-open');
+      if (!_dockOverlay.classList.contains('fp-side-maximized')) {
+        _syncDockOpenWidth(parseFloat(_dockOverlay.style.width) || 0);
+      }
     } else if (!_dockOverlay) {
       document.body.classList.remove('fp-side-open');
+      _syncDockOpenWidth(0);
     }
     _mountBlockTabs();
     var returnFocus = _modalReturnFocus;
@@ -7823,11 +7856,23 @@ var FilePreview = (function () {
     } catch (_) {}
   }
 
+  function toggleDock() {
+    if (_dockOverlay && _dockOverlay.isConnected && !_dockHidden) {
+      _hideDock();
+      return false;
+    }
+    if (_dockTabs.length > 0 && _canDockRight()) {
+      _showDock();
+      return true;
+    }
+    return false;
+  }
+
   return {
     registerLinkProvider: registerLinkProvider, openFile: openFile, openDocked: openDocked, queueDocked: queueDocked,
     registerDecorator: registerDecorator,
     renderInto: renderInto, disposeRendered: _disposePreview,
-    openFromBuffer: openFromBuffer, close: close, closeModal: closeModal, closeDocked: closeDocked,
+    openFromBuffer: openFromBuffer, close: close, closeModal: closeModal, closeDocked: closeDocked, toggleDock: toggleDock,
     restoreDocked: restoreDocked, switchDockContext: switchDockContext, hitTest: hitTest,
     switchViewContext: switchViewContext,
     reconcileWorkspace: reconcileWorkspace,

@@ -1649,20 +1649,28 @@ export class SeamWindowSession {
     takeoverEl.className = 'seam-pane-takeover';
     takeoverEl.hidden = true;
 
+    const chromelessSplit = makeBtn('split-h', '左右分窗', PANE_ICONS.splitH, 'chromeless-pill-btn is-secondary');
+    chromelessSplit.insertAdjacentHTML('beforeend', '<span class="chromeless-btn-label">分屏</span>');
+    const chromelessGitBtn = doc.createElement('button');
+    chromelessGitBtn.type = 'button';
+    chromelessGitBtn.className = 'pane-btn chromeless-pill-btn chromeless-git-btn';
+    chromelessGitBtn.hidden = true;
+    const chromelessMenuBtn = makeBtn('menu', '窗格菜单', PANE_ICONS.more, 'chromeless-pill-btn');
+
     const chromelessBar = doc.createElement('div');
     chromelessBar.className = 'seam-chromeless-bar';
-    chromelessBar.append(
-      makeBtn('split-h', '左右分窗', PANE_ICONS.splitH, 'is-secondary'),
-      makeBtn('split-v', '上下分窗', PANE_ICONS.splitV, 'is-secondary'),
-      makeBtn('menu', '窗格菜单', PANE_ICONS.more, ''),
-    );
+    chromelessBar.append(chromelessSplit, chromelessGitBtn, chromelessMenuBtn);
     chromelessBar.addEventListener('mousedown', (event) => {
       if (event.target.closest('button')) event.preventDefault();
     });
     chromelessBar.addEventListener('click', (event) => {
-      const btn = event.target.closest('[data-pane-action]');
+      const btn = event.target.closest('button');
       if (!btn) return;
       event.stopPropagation();
+      if (btn === chromelessGitBtn) {
+        entry.gitSlot?.querySelector('.pane-rail-git-chip, .pane-rail-git-more')?.click();
+        return;
+      }
       const action = btn.dataset.paneAction;
       if (action === 'split-h') this.onAction('split', { paneId, direction: 'horizontal' });
       else if (action === 'split-v') this.onAction('split', { paneId, direction: 'vertical' });
@@ -1671,8 +1679,11 @@ export class SeamWindowSession {
 
     let gitSlotObserver = null;
     if (typeof this.global.MutationObserver === 'function') {
-      gitSlotObserver = new this.global.MutationObserver(() => this._syncChromelessState());
-      gitSlotObserver.observe(gitSlot, { attributes: true, attributeFilter: ['hidden'] });
+      gitSlotObserver = new this.global.MutationObserver(() => {
+        this._syncChromelessGit(entry);
+        this._syncChromelessState();
+      });
+      gitSlotObserver.observe(gitSlot, { attributes: true, attributeFilter: ['hidden'], childList: true, subtree: true });
     }
 
     el.append(rail, chromelessBar, body, historyPill, takeoverEl);
@@ -1684,6 +1695,7 @@ export class SeamWindowSession {
       el,
       rail,
       chromelessBar,
+      chromelessGitBtn,
       gitSlotObserver,
       _locateTimer: null,
       body,
@@ -2046,11 +2058,44 @@ export class SeamWindowSession {
     return { isRich: false, agentInfo, resolvedKind };
   }
 
+  _syncChromelessGit(entry) {
+    const btn = entry?.chromelessGitBtn;
+    if (!btn) return;
+    const slot = entry.gitSlot;
+    const primary = (!slot || slot.hidden) ? null : slot.querySelector('.pane-rail-git-chip');
+    if (!primary) {
+      btn.hidden = true;
+      btn.replaceChildren();
+      return;
+    }
+    const svg = primary.querySelector('svg');
+    const branch = primary.querySelector('.prg-branch')?.textContent || primary.querySelector('.prg-project')?.textContent || '';
+    const dirty = primary.querySelector('.prg-dirty')?.textContent || '';
+    const doc = btn.ownerDocument;
+    const nodes = [];
+    if (svg) nodes.push(svg.cloneNode(true));
+    if (branch) {
+      const span = doc.createElement('span');
+      span.className = 'prg-branch';
+      span.textContent = branch;
+      nodes.push(span);
+    }
+    if (dirty) {
+      const d = doc.createElement('span');
+      d.className = 'prg-dirty';
+      d.textContent = dirty;
+      nodes.push(d);
+    }
+    btn.replaceChildren(...nodes);
+    btn.title = primary.title || '';
+    btn.setAttribute('aria-label', primary.getAttribute('aria-label') || '打开 Git');
+    btn.hidden = nodes.length === 0;
+  }
+
   _isPaneChromeless(entry) {
     if (!entry || this._isMobile() || this.panes.size !== 1) return false;
     if (entry.isRich) return false;
     if (entry.meta?.label && String(entry.meta.label).trim()) return false;
-    if (entry.gitSlot && !entry.gitSlot.hidden) return false;
     if (entry.el?.classList?.contains('is-confirming') || entry.titleEl?.hidden) return false;
     return true;
   }
@@ -2067,6 +2112,7 @@ export class SeamWindowSession {
   _syncChromelessState() {
     let changed = false;
     for (const entry of this.panes.values()) {
+      this._syncChromelessGit(entry);
       const next = this._isPaneChromeless(entry);
       const prev = entry.el.classList.contains('is-chromeless');
       if (prev !== next) {

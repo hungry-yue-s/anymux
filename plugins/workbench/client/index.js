@@ -702,15 +702,26 @@ export function createWorkbench(global, options = {}) {
         });
         return node;
       };
-      const quickSplit = quickIconBtn('split-h', '左右分割', glyph('splitH') || '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M12 4v16"/></svg>', () => api.split('horizontal'));
-      const quickFiles = quickIconBtn('files', '浏览文件', '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 3h8a2 2 0 0 1 2 2v9H3Z"/></svg>', () => {
+      const quickSplit = quickIconBtn('split-h', '左右分割', (glyph('splitH') || '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M12 4v16"/></svg>') + '<span class="wb-quick-label">分屏</span>', () => api.split('horizontal'));
+      quickSplit.classList.add('has-label');
+      const quickFiles = quickIconBtn('files', '浏览文件', '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 3h8a2 2 0 0 1 2 2v9H3Z"/></svg><span class="wb-quick-label">文件</span>', () => {
         const cur = context();
         const paneId = cur.paneId || view?.paneId;
         if (!paneId || !global.FilePreview?.openFile) return;
         return global.FilePreview.openFile('.', paneId, { source: cur.source || { serverId, paneId } });
       });
+      quickFiles.classList.add('has-label');
       const quickGit = quickIconBtn('git', 'Git 变更', '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="6" r="2.2"/><circle cx="6" cy="18" r="2.2"/><circle cx="18" cy="8" r="2.2"/><path d="M6 8.2v7.6M18 10.2c0 3.6-4.8 3.2-9.8 5.6"/></svg>', () => api.openGitPreview({ mode: 'sidebar' }));
-      more.append(summary, menu); owner.menu = more; owner.actions.append(quickSplit, quickFiles, quickGit, more); owner.toolbar.append(owner.actions);
+      const dockToggleBtn = element('button', 'wb-icon-button wb-dock-toggle');
+      dockToggleBtn.type = 'button';
+      dockToggleBtn.title = '切换右侧分窗';
+      dockToggleBtn.setAttribute('aria-label', '切换右侧分窗');
+      dockToggleBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/></svg>';
+      dockToggleBtn.addEventListener('mousedown', (event) => event.preventDefault());
+      dockToggleBtn.addEventListener('click', () => {
+        if (!global.FilePreview?.toggleDock?.()) api.openGitPreview({ mode: 'sidebar' });
+      });
+      more.append(summary, menu); owner.menu = more; owner.actions.append(quickSplit, quickFiles, quickGit, dockToggleBtn, more); owner.toolbar.append(owner.actions);
       owner.dismissMenu = (event) => { if (!more.contains(event.target) || event.key === 'Escape') more.open = false; };
       owner.notice = element('p', 'wb-notice'); owner.notice.hidden = true; owner.notice.setAttribute('role', 'status');
       owner.terminal = element('div', 'wb-window-terminal');

@@ -27,7 +27,7 @@ html.tmux-native-titlebar body { --workspace-chrome-height:36px; }
 }
 .workspace-chrome:has(.wb-workbench-menu[open],.workspace-terminal-more[open],.workspace-pane-picker[open]) { z-index:95; }
 .workspace-chrome .brand {
-  height:100%; min-height:0; padding:0 8px 0 12px; gap:6px; border:0;
+  height:100%; min-height:0; padding:0 8px 0 12px; gap:6px; border:0; border-right:1px solid var(--workspace-line);
   background:color-mix(in srgb,var(--workspace-sidebar) 70%,var(--workspace-bg)); overflow:hidden;
 }
 .workspace-chrome .brand-mark { display:none; }
@@ -76,6 +76,19 @@ html.tmux-native-titlebar body { --workspace-chrome-height:36px; }
   width:26px; min-width:26px; height:26px; min-height:26px; padding:0;
   border:0; border-radius:6px; background:none; box-shadow:none; color:var(--workspace-muted);
 }
+.workspace-chrome .wb-icon-button.wb-quick-action.has-label {
+  flex:0 0 auto; width:auto; gap:5px; padding:0 7px; font-size:11.5px; font-weight:500; white-space:nowrap;
+}
+.workspace-chrome .wb-quick-action.has-label svg { width:14px; height:14px; flex:none; }
+@media (max-width:1180px) {
+  .workspace-chrome .wb-quick-label { display:none; }
+  .workspace-chrome .wb-icon-button.wb-quick-action.has-label { flex:0 0 26px; width:26px; padding:0; }
+}
+@media (max-width:1320px) {
+  body.fp-side-open .workspace-chrome .wb-quick-label { display:none; }
+  body.fp-side-open .workspace-chrome .wb-icon-button.wb-quick-action.has-label { flex:0 0 26px; width:26px; padding:0; }
+}
+body.fp-side-open .workspace-chrome .wb-dock-toggle { color:var(--workspace-accent); background:var(--workspace-hover); }
 .workspace-chrome .terminal-tool-btn:hover,.workspace-chrome .workspace-notification:hover,.workspace-chrome .wb-icon-button:hover {
   color:var(--workspace-text); background:var(--workspace-hover);
 }
@@ -130,6 +143,7 @@ html.tmux-native-titlebar body { --workspace-chrome-height:36px; }
 .ms-app .sidebar-footer .nav-item.active { background:var(--workspace-hover); color:var(--workspace-text); box-shadow:none; font-weight:550; }
 .ms-app .sidebar-footer .nav-item.active .ms-icon { color:var(--workspace-accent); }
 .ms-app .sidebar-footer .nav-item:last-child { margin-top:0; }
+.ms-app .sidebar-footer .nav-rail-search { display:none; }
 .ms-app .dot { width:5px; height:5px; box-shadow:none; }
 .ms-app .server-switcher,.ms-app.sidebar-collapsed .server-switcher {
   flex:0 0 32px; width:100%; min-height:32px; margin-top:6px; padding:6px 4px 2px;
@@ -169,6 +183,31 @@ html.tmux-native-titlebar body { --workspace-chrome-height:36px; }
 .ms-app .tree-item:hover { background:var(--workspace-hover); }
 .ms-app .tree-menu-button,.ms-app .tree-create-window { display:inline-flex; align-items:center; justify-content:center; flex:0 0 22px; width:22px; height:26px; border:0; border-radius:5px; color:var(--workspace-muted); background:none; font-size:16px; cursor:pointer; }
 .ms-app .tree-menu-button:hover,.ms-app .tree-menu-button:focus-visible { background:var(--workspace-hover); color:var(--workspace-text); }
+.ms-app.mode-terminal:not(.sidebar-collapsed) .ms-sidebar {
+  grid-template-columns:auto minmax(0,1fr);
+  grid-template-rows:minmax(0,1fr) 36px;
+}
+.ms-app.mode-terminal:not(.sidebar-collapsed) .ms-sidebar .server-context {
+  display:contents;
+}
+.ms-app.mode-terminal:not(.sidebar-collapsed) .ms-sidebar .subnav {
+  grid-row:1; grid-column:1/-1; padding:10px 10px 6px; min-width:0; min-height:0; overflow-y:auto; overflow-x:hidden;
+}
+.ms-app.mode-terminal:not(.sidebar-collapsed) .ms-sidebar .sidebar-footer {
+  grid-row:2; grid-column:1; height:36px; padding:0 4px 0 8px; gap:2px; border-top:1px solid var(--workspace-line);
+  background:color-mix(in srgb,var(--workspace-bg) 80%,var(--workspace-sidebar));
+}
+.ms-app.mode-terminal:not(.sidebar-collapsed) .sidebar-footer .nav-item {
+  flex:0 0 26px; width:26px; height:26px; min-height:26px; padding:0;
+}
+.ms-app.mode-terminal:not(.sidebar-collapsed) .sidebar-footer .nav-item span { display:none; }
+.ms-app.mode-terminal:not(.sidebar-collapsed) .ms-sidebar .server-switcher {
+  grid-row:2; grid-column:2; height:36px; min-height:36px; margin:0;
+  padding:0 10px 0 6px; width:100%; min-width:0;
+  display:inline-flex; align-items:center; justify-content:flex-end; gap:6px;
+  border-top:1px solid var(--workspace-line);
+  background:color-mix(in srgb,var(--workspace-bg) 80%,var(--workspace-sidebar));
+}
 .ms-app.mode-settings.sidebar-collapsed { --ms-sidebar-effective-width:var(--ms-sidebar-width); }
 .ms-app.mode-terminal.sidebar-collapsed { --ms-sidebar-effective-width:44px; }
 .ms-app.mode-terminal.sidebar-collapsed .workspace-chrome .brand { padding:0; justify-content:center; }
@@ -180,11 +219,17 @@ html.tmux-native-titlebar body { --workspace-chrome-height:36px; }
   grid-column:1; grid-row:1; flex-direction:column; align-items:center; justify-content:flex-start;
   gap:8px; padding:10px 4px 12px; border-top:0;
 }
+.ms-app.mode-terminal.sidebar-collapsed .sidebar-footer .nav-rail-search { display:inline-flex; }
 .ms-app.mode-terminal.sidebar-collapsed .sidebar-footer .nav-item {
   width:32px; height:32px; min-height:32px; flex:0 0 32px; padding:0; justify-content:center;
 }
 .ms-app.mode-terminal.sidebar-collapsed .sidebar-footer .nav-item span { display:none; }
 .ms-app.mode-terminal.sidebar-collapsed .sidebar-footer .nav-item:last-child { margin-top:auto; }
+.ms-app.mode-terminal.sidebar-collapsed .sidebar-footer .nav-item:last-child::after {
+  content:""; position:absolute; right:5px; bottom:5px; width:6px; height:6px;
+  border-radius:50%; background:var(--accent-green,#9ece6a);
+  box-shadow:0 0 0 1.5px var(--workspace-sidebar);
+}
 .ms-app.sidebar-collapsed .brand-copy { display:none; }
 /* No window or pane bars consume the work surface. All remaining height is terminal. */
 .ms-app:is(.mode-terminal,.mode-status,.mode-settings) .ms-main {
@@ -200,6 +245,15 @@ html.tmux-native-titlebar body { --workspace-chrome-height:36px; }
 .ms-app .terminal-stage .xterm { padding:0; }
 .ms-app .terminal-stage .xterm-viewport { background:var(--workspace-bg); }
 .ms-app.mode-terminal .fp-dock { grid-column:2; grid-row:1; min-height:0; height:100%; margin:0; border:0; border-left:1px solid var(--workspace-line); border-radius:0; box-shadow:none; }
+@media (min-width:768px) {
+  body.fp-side-open .ms-app.mode-terminal .workspace-chrome { margin-right:var(--fp-dock-open-width,0px); }
+  .ms-app.mode-terminal .ms-main { overflow:visible; }
+  .ms-app.mode-terminal .fp-dock:not(.fp-side-maximized) {
+    position:relative; z-index:36;
+    margin-top:calc(var(--workspace-chrome-height,36px) * -1);
+    height:calc(100% + var(--workspace-chrome-height,36px));
+  }
+}
 .ms-app .fp-dock-restore { position:absolute; grid-column:auto; grid-row:auto; top:50%; right:0; transform:translateY(-50%); width:auto; height:auto; margin:0; box-shadow:none; }
 /* Native disclosure controls preserve the live terminal listeners. */
 .workspace-terminal-more,.workspace-pane-picker { position:relative; flex-shrink:0; }
@@ -274,15 +328,19 @@ html.tmux-native-titlebar body { --workspace-chrome-height:36px; }
 /* Native window controls and the sidebar switch form one compact cluster.
    Keep left track aligned with expanded sidebar and at least 120px when collapsed. */
 html.tmux-native-titlebar .workspace-chrome { grid-template-columns:max(120px,var(--ms-sidebar-effective-width)) minmax(0,1fr); }
-html.tmux-native-titlebar .ms-app .workspace-chrome .brand,
-html.tmux-native-titlebar .ms-app.mode-terminal.sidebar-collapsed .workspace-chrome .brand {
-  height:100%; min-height:0; padding:0 8px 0 80px; gap:0; justify-content:flex-start; background:transparent;
+html.tmux-native-titlebar .ms-app .workspace-chrome .brand {
+  height:100%; min-height:0; padding:0 8px 0 80px; gap:6px; justify-content:space-between; background:transparent;
 }
+html.tmux-native-titlebar .ms-app:not(.sidebar-collapsed) .workspace-chrome .brand-copy { display:block; }
+html.tmux-native-titlebar .ms-app.sidebar-collapsed .workspace-chrome .brand,
+html.tmux-native-titlebar .ms-app.mode-terminal.sidebar-collapsed .workspace-chrome .brand {
+  height:100%; min-height:0; padding:0 8px 0 80px; gap:0; justify-content:flex-end; background:transparent;
+}
+html.tmux-native-titlebar .ms-app.sidebar-collapsed .workspace-chrome .brand-copy { display:none; }
 html.tmux-native-titlebar .ms-app .workspace-chrome .ms-topbar,
 html.tmux-native-titlebar .ms-app .workspace-chrome .ms-topbar.terminal-layout {
   height:100%; min-height:0; padding:0 12px; border:0;
 }
-html.tmux-native-titlebar .ms-app .workspace-chrome .brand-copy { display:none; }
 html.tmux-native-titlebar.tmux-native-fullscreen .workspace-chrome { grid-template-columns:var(--ms-sidebar-effective-width) minmax(0,1fr); }
 html.tmux-native-titlebar.tmux-native-fullscreen .ms-app .workspace-chrome .brand {
   padding:0 8px 0 12px; gap:6px; justify-content:space-between;
@@ -308,12 +366,14 @@ html[data-native-transparency] .workspace-chrome { background:transparent; backd
 html[data-native-transparency] .workspace-chrome .brand { background:transparent; }
 html[data-native-transparency] .ms-app .ms-sidebar { background:color-mix(in srgb,var(--workspace-sidebar) 12%,transparent)!important; backdrop-filter:none; -webkit-backdrop-filter:none; }
 html[data-native-transparency] .ms-app .ms-sidebar .sidebar-footer,html[data-native-transparency] .ms-app.sidebar-collapsed .ms-sidebar .sidebar-footer { background:transparent; }
+html[data-native-transparency] .ms-app.mode-terminal:not(.sidebar-collapsed) .ms-sidebar .server-switcher { background:transparent; }
 html[data-native-transparency] .ms-app .ms-main,html[data-native-transparency] .ms-app .ms-content.terminal-mode { background:transparent!important; }
 html[data-wallpaper-active] .ms-app { background:transparent!important; }
 html[data-wallpaper-active] .workspace-chrome { background:color-mix(in srgb,var(--workspace-bg) var(--anymux-sidebar-alpha,24%),transparent); backdrop-filter:blur(var(--anymux-sidebar-blur,14px)) saturate(var(--anymux-wp-saturate,135%)); -webkit-backdrop-filter:blur(var(--anymux-sidebar-blur,14px)) saturate(var(--anymux-wp-saturate,135%)); }
 html[data-wallpaper-active] .workspace-chrome .brand { background:transparent; }
 html[data-wallpaper-active] .ms-app .ms-sidebar { background:color-mix(in srgb,var(--workspace-sidebar) var(--anymux-sidebar-alpha,24%),transparent)!important; backdrop-filter:blur(var(--anymux-sidebar-blur,14px)) saturate(var(--anymux-wp-saturate,135%)); -webkit-backdrop-filter:blur(var(--anymux-sidebar-blur,14px)) saturate(var(--anymux-wp-saturate,135%)); box-shadow:inset -1px 0 0 color-mix(in srgb,var(--workspace-text) 8%,transparent); }
 html[data-wallpaper-active] .ms-app .ms-sidebar .sidebar-footer,html[data-wallpaper-active] .ms-app.sidebar-collapsed .ms-sidebar .sidebar-footer { background:transparent; }
+html[data-wallpaper-active] .ms-app.mode-terminal:not(.sidebar-collapsed) .ms-sidebar .server-switcher { background:transparent; }
 html[data-wallpaper-active] .ms-app .ms-main,html[data-wallpaper-active] .ms-app .ms-content.terminal-mode { background:transparent!important; }
 html[data-backdrop-active] :is(.ms-modal,.ms-popover,.ms-sidebar-context-menu,.cmd-palette-modal) { backdrop-filter:blur(var(--anymux-float-blur,22px)) saturate(var(--anymux-wp-saturate,135%)); -webkit-backdrop-filter:blur(var(--anymux-float-blur,22px)) saturate(var(--anymux-wp-saturate,135%)); }
 button { touch-action:manipulation; }

@@ -42,15 +42,33 @@
   }
   .mobile-workspace-mark svg { width:20px; height:20px; fill:none; stroke:currentColor; stroke-width:1.65; stroke-linecap:round; stroke-linejoin:round; }
   .mobile-workspace-trigger[aria-expanded="true"] .mobile-workspace-mark { background:var(--workspace-accent); color:var(--workspace-bg); }
+  .ms-app.mode-terminal .mobile-workspace-mark {
+    display:inline-flex; align-items:center; gap:4px; flex:0 0 auto; width:auto; height:30px;
+    padding:0 10px 0 7px; border-radius:999px; border:1px solid var(--workspace-line);
+    background:var(--workspace-panel); color:var(--workspace-text);
+  }
+  .ms-app.mode-terminal .mobile-workspace-mark svg { width:16px; height:16px; }
+  .ms-app.mode-terminal .mobile-workspace-mark::after { content:"会话"; font-size:12px; font-weight:500; line-height:1; }
+  .ms-app.mode-terminal .mobile-workspace-trigger[aria-expanded="true"] .mobile-workspace-mark {
+    background:var(--workspace-accent); border-color:var(--workspace-accent); color:var(--workspace-bg);
+  }
   .ms-app .mobile-workspace-trigger:active { background:var(--workspace-hover); }
   .ms-app .mobile-title { display:flex; flex-direction:column; gap:1px; min-width:0; flex:0 1 auto; }
   .ms-app .mobile-title strong { order:1; font-size:15px; font-weight:600; letter-spacing:-.02em; line-height:1.4; }
   .ms-app .mobile-title small { order:0; font-size:11px; line-height:1.4; color:var(--workspace-muted); }
+  .ms-app.mode-terminal .mobile-title { flex:1 1 auto; align-items:center; text-align:center; padding:0 4px; }
   .mobile-header-action {
     display:inline-flex; position:relative; align-items:center; justify-content:center;
     width:44px; height:44px; flex:0 0 44px; border:0; border-radius:50%;
     background:none; color:var(--workspace-text); cursor:pointer; order:2;
   }
+  .ms-app.mode-terminal .mobile-header-action,
+  .ms-app.mode-terminal .wb-actions-mobile .wb-icon-button {
+    width:34px; height:34px; min-width:34px; min-height:34px; flex:0 0 34px;
+    border:1px solid color-mix(in srgb,var(--workspace-line) 75%,transparent);
+    background:var(--workspace-panel); border-radius:999px;
+  }
+  .ms-app.mode-terminal .wb-actions-mobile { gap:4px; }
   .ms-app .mobile-tools { display:none!important; }
   .mobile-header-action svg { width:19px; height:19px; fill:none; stroke:currentColor; stroke-width:1.65; stroke-linecap:round; stroke-linejoin:round; }
   .ms-app .mobile-header>.terminal-refresh-btn { width:44px; height:44px; min-width:44px; padding:0; }
@@ -114,10 +132,10 @@
   .ms-mobile-workspace-head strong { font-size:20px; letter-spacing:-.03em; }
   .ms-mobile-workspace-head small { display:block; margin-top:2px; color:var(--workspace-muted); font-size:12px; }
   .ms-mobile-workspace-head .icon-btn { width:44px; height:44px; border-radius:50%; background:var(--workspace-hover); font-size:24px; }
-  .ms-mobile-workspace-search { padding:0 0 10px; }
+  .ms-mobile-workspace-search { padding:10px 0 2px; border-top:1px solid var(--workspace-line); flex:0 0 auto; }
   .ms-mobile-workspace-filter {
-    width:100%; min-height:42px; padding:8px 12px;
-    border:1px solid var(--workspace-line-strong); border-radius:12px;
+    width:100%; min-height:42px; padding:8px 14px;
+    border:1px solid var(--workspace-line-strong); border-radius:999px;
     background:var(--workspace-panel); color:var(--workspace-text); font:inherit; font-size:16px;
   }
   .ms-mobile-workspace-filter:focus { outline:none; border-color:var(--workspace-accent); }
