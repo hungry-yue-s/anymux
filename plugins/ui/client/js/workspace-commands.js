@@ -175,7 +175,6 @@
 
   function openThemePicker() {
     if (typeof Theme === 'undefined') return;
-    var snapshot = typeof Theme.getSnapshot === 'function' ? Theme.getSnapshot() : null;
     var original = Theme.getCurrent();
     var themes = Theme.getThemeList();
     var committed = false;
@@ -185,8 +184,8 @@
       hints: [['Up+Down', '预览'], ['Enter', '使用'], ['Escape', '恢复']],
       onClose: function () {
         if (committed) return;
-        if (snapshot && typeof Theme.restoreSnapshot === 'function') {
-          Theme.restoreSnapshot(snapshot);
+        if (typeof Theme.clearPreview === 'function') {
+          Theme.clearPreview();
         } else if (previewing !== original) {
           Theme.apply(original);
         }
@@ -207,23 +206,22 @@
     }
     function renderQuickBar() {
       quickBar.replaceChildren();
-      var wp = typeof Theme.getWallpaper === 'function' ? Theme.getWallpaper() : { mode: 'none' };
-      var glass = typeof Theme.getGlass === 'function' ? Theme.getGlass() : { preset: 'frosted' };
+      var surf = typeof Theme.getSurface === 'function' ? Theme.getSurface() : { mode: 'solid' };
       var mode = typeof Theme.getThemeMode === 'function' ? Theme.getThemeMode() : 'manual';
 
-      var wpRow = el('div', 'theme-picker-quick-row');
-      wpRow.appendChild(el('span', 'theme-picker-quick-label', '背景'));
-      var wpOptions = [['none', '纯色'], ['builtin', '主题壁纸']];
-      if (Theme.supportsTransparency && Theme.supportsTransparency()) wpOptions.push(['desktop', '透传桌面']);
-      wpOptions.forEach(function (entry) {
-        var b = el('button', 'theme-picker-chip' + (wp.mode === entry[0] ? ' active' : ''), entry[1]);
+      var row = el('div', 'theme-picker-quick-row');
+      row.appendChild(el('span', 'theme-picker-quick-label', '背景'));
+      var surfaceOptions = [['solid', '纯色'], ['wallpaper', '壁纸']];
+      if (Theme.supportsTransparency && Theme.supportsTransparency()) surfaceOptions.push(['desktop', '透传桌面']);
+      surfaceOptions.forEach(function (entry) {
+        var b = el('button', 'theme-picker-chip' + (surf.mode === entry[0] ? ' active' : ''), entry[1]);
         b.type = 'button';
         b.addEventListener('click', function () {
-          if (typeof Theme.setWallpaper === 'function') Theme.setWallpaper({ mode: entry[0] });
+          if (typeof Theme.setSurface === 'function') Theme.setSurface({ mode: entry[0] });
           renderPreview();
           renderQuickBar();
         });
-        wpRow.appendChild(b);
+        row.appendChild(b);
       });
       var sysBtn = el('button', 'theme-picker-chip' + (mode === 'system' ? ' active' : ''), '跟随系统');
       sysBtn.type = 'button';
@@ -235,35 +233,23 @@
           renderQuickBar();
         }
       });
-      wpRow.appendChild(sysBtn);
-      quickBar.appendChild(wpRow);
-
-      var glassRow = el('div', 'theme-picker-quick-row');
-      glassRow.appendChild(el('span', 'theme-picker-quick-label', '材质'));
-      [['solid', '实色'], ['mist', '柔雾'], ['frosted', '深邃'], ['liquid', '液态']].forEach(function (entry) {
-        var b = el('button', 'theme-picker-chip' + (glass.preset === entry[0] ? ' active' : ''), entry[1]);
-        b.type = 'button';
-        b.addEventListener('click', function () {
-          if (typeof Theme.applyGlassPreset === 'function') Theme.applyGlassPreset(entry[0]);
-          renderPreview();
-          renderQuickBar();
-        });
-        glassRow.appendChild(b);
-      });
+      row.appendChild(sysBtn);
       var moreBtn = el('button', 'theme-picker-chip', '外观设置 →');
       moreBtn.type = 'button';
       moreBtn.style.marginLeft = 'auto';
       moreBtn.addEventListener('click', function () {
         committed = true;
+        if (typeof Theme.clearPreview === 'function') Theme.clearPreview();
         picker.close('commit');
+        if (typeof globalThis.ServersPage !== 'undefined') globalThis.ServersPage.settingsSection = 'appearance';
         if (typeof Router !== 'undefined' && Router.go) {
           Router.go({ name: 'settings', params: {} });
         } else {
           window.location.hash = '#settings';
         }
       });
-      glassRow.appendChild(moreBtn);
-      quickBar.appendChild(glassRow);
+      row.appendChild(moreBtn);
+      quickBar.appendChild(row);
     }
     picker.body.appendChild(quickBar);
     renderQuickBar();
@@ -276,7 +262,11 @@
     }, function (node) {
       if (node.dataset.theme !== previewing) {
         previewing = node.dataset.theme;
-        Theme.apply(previewing, { keepMode: false, announceAppearance: false });
+        if (typeof Theme.previewTheme === 'function') {
+          Theme.previewTheme(previewing);
+        } else {
+          Theme.apply(previewing, { keepMode: false, announceAppearance: false });
+        }
       }
       renderPreview(node.dataset.theme);
     });

@@ -799,6 +799,12 @@ html[data-wallpaper-active] .seam-pane.is-active,
 html[data-wallpaper-active] .seam-tile,
 html[data-wallpaper-active] .seam-tile-diff.blk-frame,
 html[data-wallpaper-active] .pane-body .xterm-viewport { background: transparent !important; }
+.seam-pane:not(.is-active) {
+  background: color-mix(in srgb, var(--workspace-sidebar, #16161e) var(--anymux-pane-inactive-dim, 18%), var(--workspace-bg, #1a1b26));
+}
+.seam-pane:not(.is-active) .seam-rail {
+  opacity: 0.84;
+}
 html:is([data-native-transparency], [data-wallpaper-active]) .seam-pane:not(.is-active) {
   background: color-mix(in srgb, var(--workspace-sidebar, #16161e) var(--anymux-pane-inactive-dim, 18%), transparent) !important;
 }

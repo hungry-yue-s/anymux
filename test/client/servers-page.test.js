@@ -70,7 +70,7 @@ describe('ServersPage real connection facts and actions', () => {
     ctx.win.MobileUI = { isMobile: () => true };
     ctx.doc.getElementById('view').innerHTML = ctx.Page.renderSettings();
     const nav = ctx.doc.querySelector('.mobile-settings-nav');
-    expect([...nav.querySelectorAll('button')].map(button => button.dataset.settingsSection)).toEqual(['appearance', 'management', 'security', 'about']);
+    expect([...nav.querySelectorAll('button')].map(button => button.dataset.settingsSection)).toEqual(['appearance', 'workspace', 'management', 'security', 'about']);
     expect(nav.querySelector('[aria-current="page"]').dataset.settingsSection).toBe('appearance');
     const view = render(ctx, 'local', { state: 'online', capabilities: {} }, 'performance');
     const operations = view.querySelector('.mobile-server-operations');

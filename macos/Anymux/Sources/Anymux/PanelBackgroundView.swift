@@ -156,7 +156,9 @@ final class PanelBackgroundView: NSView {
         let hasWallpaper = wallpaperView.layer?.contents != nil
         let isFullscreen = window?.styleMask.contains(.fullScreen) == true
         let isDesktopMode = appearanceConfig.mode == "desktop"
-        let glassEnabled = isDesktopMode && appearanceConfig.engine != .off && appearanceConfig.glassIntensity > 0.01
+        let glassEnabled = isDesktopMode
+            && appearanceConfig.engine != .off
+            && (appearanceConfig.engine == .system ? appearanceConfig.glassIntensity > 0.01 : true)
 
         if let window {
             window.appearance = NSAppearance(named: appearanceConfig.isLight ? .aqua : .darkAqua)
@@ -183,14 +185,14 @@ final class PanelBackgroundView: NSView {
             liquidGlassView.isHidden = false
             liquidGlassView.setValue(resolvedEngine == .liquidClear ? 1 : 0, forKey: "style")
             liquidGlassView.setValue(CGFloat(0), forKey: "cornerRadius")
-            let tintAlpha = CGFloat(max(0.0, min(0.45, appearanceConfig.tintAlpha * (appearanceConfig.glassIntensity / 100.0) * 0.45)))
+            let tintAlpha = CGFloat(max(0.0, min(0.45, appearanceConfig.tintAlpha * 0.45)))
             let tint = tintAlpha > 0.01 ? appearanceConfig.parsedTintColor(alpha: tintAlpha) : nil
             liquidGlassView.setValue(tint, forKey: "tintColor")
 
         case .material:
             let activeView = useFullscreenWallpaper ? materialWithinView : materialBehindView
             activeView.isHidden = false
-            let tintAlpha = CGFloat(max(0.02, min(0.5, appearanceConfig.tintAlpha * (appearanceConfig.glassIntensity / 100.0) * 0.55)))
+            let tintAlpha = CGFloat(max(0.02, min(0.5, appearanceConfig.tintAlpha * 0.55)))
             let bgColor = appearanceConfig.parsedTintColor(alpha: tintAlpha)
             let style = NSMaterialView.Effect.MaterialStyle(
                 backgroundColor: bgColor,

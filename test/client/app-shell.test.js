@@ -1048,7 +1048,7 @@ describe('AppShell sections from the plugins on the page (PanelSlots)', () => {
     expect(ctx.Shell.localStatusSections()).toEqual([]);
     expect(ctx.Shell.defaultStatusSection('local')).toBe('connection');
     expect(ctx.Shell.resolveStatusSection('local', 'performance')).toBe('connection');
-    expect(ctx.Shell.settingsSections().map((s) => s.id)).toEqual(['appearance', 'security', 'about']);
+    expect(ctx.Shell.settingsSections().map((s) => s.id)).toEqual(['appearance', 'workspace', 'security', 'about']);
     expect(ctx.Shell.settingsSection('management').id).toBe('appearance');
 
     // The metrics plugin's registration alone brings its tab back, first.
@@ -1077,8 +1077,8 @@ describe('AppShell settings navigation', () => {
     ctx.Shell.render();
 
     const items = [...ctx.document.querySelectorAll('.settings-nav-item')];
-    expect(items.map((n) => n.dataset.settingsSection)).toEqual(['appearance', 'management', 'security', 'about']);
-    expect(items.map((n) => n.textContent)).toEqual(['外观', '管理中心', '连接与安全', 'GitHub']);
+    expect(items.map((n) => n.dataset.settingsSection)).toEqual(['appearance', 'workspace', 'management', 'security', 'about']);
+    expect(items.map((n) => n.textContent)).toEqual(['外观', '工作区', '管理中心', '连接与安全', '关于']);
     expect(ctx.document.querySelector('.server-rail')).toBeNull();
     expect(ctx.document.querySelector('.tree-window-row')).toBeNull();
   });

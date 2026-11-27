@@ -302,8 +302,17 @@ export function createWorkbench(global, options = {}) {
   function mountSession(owner, view, tabId) {
     if (!view?.windowId || mounted !== owner || owner.session) return;
     const target = validateWindowTarget({ ...view, clientId: view.clientId + '-' + tabId });
-    owner.session = new Session(global, { container: owner.terminal, target, fontSize: view.fontSize,
-      onFontSize: (fontSize) => { if (store.get(view.id)) store.update(view.id, (saved) => { saved.fontSize = fontSize; }); },
+    owner.session = new Session(global, { container: owner.terminal, target,
+      fontDelta: Number.isFinite(view.fontDelta) ? view.fontDelta : 0,
+      fontSize: Number.isFinite(view.fontDelta) ? undefined : view.fontSize,
+      onFontDelta: (fontDelta) => {
+        if (store.get(view.id)) {
+          store.update(view.id, (saved) => {
+            saved.fontDelta = fontDelta;
+            delete saved.fontSize;
+          });
+        }
+      },
       onStickyModifierChange: (state) => { owner.syncStickyModifiers?.(state); },
       onContext: (confirmed) => {
         if (mounted !== owner || !store.get(view.id)) return;

@@ -949,12 +949,18 @@
           this._onRoute(route).catch(err => this._reportRouteFailure(err));
         }
       });
+      global.document.addEventListener('toggle', (event) => {
+        const disclosure = event.target && event.target.dataset && event.target.dataset.disclosure;
+        if (disclosure && global.ServersPage) {
+          global.ServersPage._openDisclosures = global.ServersPage._openDisclosures || {};
+          global.ServersPage._openDisclosures[disclosure] = Boolean(event.target.open);
+        }
+      }, true);
       global.document.addEventListener('input', (event) => {
         if (!global.Theme) return;
-        if (event.target.id === 'native-transparency') global.Theme.setTransparency(event.target.value);
-        if (event.target.id === 'native-glass-intensity') global.Theme.setGlassIntensity(event.target.value);
         if (event.target.id === 'appearance-accent-picker' && typeof global.Theme.setAccentOverride === 'function') {
           global.Theme.setAccentOverride(event.target.value);
+          global.ServersPage?.updateAppearancePreview?.();
           return;
         }
         const sliderSpec = event.target.dataset && event.target.dataset.appearanceSlider;
@@ -969,9 +975,16 @@
           }
           const patch = {};
           patch[key] = val;
-          if (group === 'glass' && typeof global.Theme.setGlass === 'function') global.Theme.setGlass(patch);
-          else if (group === 'wallpaper' && typeof global.Theme.setWallpaper === 'function') global.Theme.setWallpaper(patch);
-          else if (group === 'typography' && typeof global.Theme.setTerminalTypography === 'function') global.Theme.setTerminalTypography(patch);
+          if (group === 'surface' && typeof global.Theme.setSurface === 'function') {
+            global.Theme.setSurface(patch);
+          } else if (group === 'terminal' && typeof global.Theme.setTerminalTypography === 'function') {
+            global.Theme.setTerminalTypography(patch);
+          } else if (group === 'glass' && typeof global.Theme.setGlass === 'function') {
+            global.Theme.setGlass(patch);
+          } else if (group === 'wallpaper' && typeof global.Theme.setWallpaper === 'function') {
+            global.Theme.setWallpaper(patch);
+          }
+          global.ServersPage?.updateAppearancePreview?.();
         }
       });
       global.document.addEventListener('change', (event) => {
@@ -982,7 +995,9 @@
           target.value = '';
           global.Theme.uploadCustomWallpaper(file).then(() => {
             global.AppShell.toast('壁纸已上传并应用');
-            return this._onRoute(global.Router.current());
+            if (!global.ServersPage?.refreshAppearanceSection?.(['surface'])) {
+              return this._onRoute(global.Router.current());
+            }
           }).catch((err) => {
             global.AppShell.toast(err && err.message ? err.message : '壁纸上传失败');
           });
@@ -991,12 +1006,16 @@
         const selectKey = target.dataset && target.dataset.appearanceSelect;
         if (selectKey === 'lightThemeId' && typeof global.Theme.setLightThemeId === 'function') {
           global.Theme.setLightThemeId(target.value);
-          this._onRoute(global.Router.current());
+          if (!global.ServersPage?.refreshAppearanceSection?.(['theme', 'surface'])) {
+            this._onRoute(global.Router.current());
+          }
           return;
         }
         if (selectKey === 'darkThemeId' && typeof global.Theme.setDarkThemeId === 'function') {
           global.Theme.setDarkThemeId(target.value);
-          this._onRoute(global.Router.current());
+          if (!global.ServersPage?.refreshAppearanceSection?.(['theme', 'surface'])) {
+            this._onRoute(global.Router.current());
+          }
         }
       });
       global.document.addEventListener('anymux-appearance-change', () => {
@@ -1005,19 +1024,9 @@
         if (!route || route.name !== 'settings' || global.ServersPage?.settingsSection !== 'appearance') return;
         const active = global.document.activeElement;
         if (active && (active.type === 'range' || active.type === 'color' || active.id === 'theme-import-textarea')) return;
-        this._onRoute(route);
-      });
-      global.document.addEventListener('tmux-glass-change', () => {
-        const slider = global.document.getElementById('native-glass-intensity');
-        const output = global.document.getElementById('native-glass-intensity-value');
-        if (slider) slider.value = global.Theme.getGlassIntensity();
-        if (output) output.textContent = global.Theme.getGlassIntensity() + '%';
-      });
-      global.document.addEventListener('tmux-transparency-change', () => {
-        const slider = global.document.getElementById('native-transparency');
-        const output = global.document.getElementById('native-transparency-value');
-        if (slider) slider.value = global.Theme.getTransparency();
-        if (output) output.textContent = global.Theme.getTransparency() + '%';
+        if (!global.ServersPage?.refreshAppearanceSection?.(['theme', 'surface', 'terminal'])) {
+          this._onRoute(route);
+        }
       });
       global.document.addEventListener('click', (event) => {
         for (const more of global.document.querySelectorAll('.workspace-terminal-more[open], .workspace-pane-picker[open]')) {
@@ -1226,32 +1235,38 @@
         this.openAddServer();
         return;
       }
+      const refreshAppearance = async (parts) => {
+        if (!global.ServersPage?.refreshAppearanceSection?.(parts)) {
+          await this._onRoute(global.Router.current());
+        }
+      };
       if (action === 'set-theme' || action === 'set-theme-mode' || action === 'set-accent' || action === 'reset-accent'
         || action === 'export-theme-json' || action === 'toggle-import-theme' || action === 'submit-import-theme'
-        || action === 'delete-custom-theme' || action === 'set-wallpaper' || action === 'toggle-follow-theme-wallpaper'
-        || action === 'trigger-upload-wallpaper' || action === 'delete-wallpaper' || action === 'set-wallpaper-fit'
-        || action === 'set-glass-preset' || action === 'set-native-glass-engine' || action === 'set-cursor-style'
-        || action === 'toggle-cursor-blink' || action === 'reset-appearance') {
+        || action === 'delete-custom-theme' || action === 'set-surface-mode' || action === 'set-wallpaper-source'
+        || action === 'set-wallpaper' || action === 'trigger-upload-wallpaper' || action === 'delete-wallpaper'
+        || action === 'set-wallpaper-fit' || action === 'set-web-preset' || action === 'set-native-glass-engine'
+        || action === 'set-cursor-style' || action === 'toggle-cursor-blink'
+        || action === 'reset-terminal-font-offsets' || action === 'reset-appearance') {
         this._handlingAppearanceAction = true;
         try {
           if (action === 'set-theme') {
             if (global.Theme && node.dataset.theme) global.Theme.apply(node.dataset.theme);
-            await this._onRoute(global.Router.current());
+            await refreshAppearance(['theme', 'surface']);
             return;
           }
           if (action === 'set-theme-mode') {
             if (global.Theme?.setThemeMode && node.dataset.mode) global.Theme.setThemeMode(node.dataset.mode);
-            await this._onRoute(global.Router.current());
+            await refreshAppearance(['theme', 'surface']);
             return;
           }
           if (action === 'set-accent') {
             if (global.Theme?.setAccentOverride && node.dataset.accent) global.Theme.setAccentOverride(node.dataset.accent);
-            await this._onRoute(global.Router.current());
+            await refreshAppearance(['theme']);
             return;
           }
           if (action === 'reset-accent') {
             if (global.Theme?.setAccentOverride) global.Theme.setAccentOverride(null);
-            await this._onRoute(global.Router.current());
+            await refreshAppearance(['theme']);
             return;
           }
           if (action === 'export-theme-json') {
@@ -1277,7 +1292,7 @@
               const imported = global.Theme.importThemeJson(area.value);
               global.ServersPage._showImportPanel = false;
               global.AppShell.toast('已导入主题：' + imported.name);
-              await this._onRoute(global.Router.current());
+              await refreshAppearance(['theme', 'surface']);
             } catch (err) {
               global.AppShell.toast(err && err.message ? err.message : '导入失败');
             }
@@ -1286,21 +1301,29 @@
           if (action === 'delete-custom-theme') {
             if (global.Theme?.deleteCustomTheme && node.dataset.theme) {
               global.Theme.deleteCustomTheme(node.dataset.theme);
-              await this._onRoute(global.Router.current());
+              await refreshAppearance(['theme', 'surface']);
+            }
+            return;
+          }
+          if (action === 'set-surface-mode') {
+            if (global.Theme?.setSurface && node.dataset.mode) {
+              global.Theme.setSurface({ mode: node.dataset.mode });
+              await refreshAppearance(['surface']);
+            }
+            return;
+          }
+          if (action === 'set-wallpaper-source') {
+            if (global.Theme?.setSurface && node.dataset.source) {
+              global.Theme.setSurface({ mode: 'wallpaper', wallpaperSource: node.dataset.source, wallpaperId: null });
+              await refreshAppearance(['surface']);
             }
             return;
           }
           if (action === 'set-wallpaper') {
-            if (global.Theme?.setWallpaper && node.dataset.wpMode) {
-              global.Theme.setWallpaper({ mode: node.dataset.wpMode, id: node.dataset.wpId || null });
-              await this._onRoute(global.Router.current());
-            }
-            return;
-          }
-          if (action === 'toggle-follow-theme-wallpaper') {
-            if (global.Theme?.setWallpaper) {
-              global.Theme.setWallpaper({ followTheme: Boolean(node.checked) });
-              await this._onRoute(global.Router.current());
+            if (global.Theme?.setSurface) {
+              const wpSource = node.dataset.wpSource || (node.dataset.wpMode === 'custom' ? 'custom' : 'builtin');
+              global.Theme.setSurface({ mode: 'wallpaper', wallpaperSource: wpSource, wallpaperId: node.dataset.wpId || null });
+              await refreshAppearance(['surface']);
             }
             return;
           }
@@ -1313,49 +1336,55 @@
             if (global.Theme?.deleteCustomWallpaper && node.dataset.wpId) {
               await global.Theme.deleteCustomWallpaper(node.dataset.wpId);
               global.AppShell.toast('已删除自定义壁纸');
-              await this._onRoute(global.Router.current());
+              await refreshAppearance(['surface']);
             }
             return;
           }
           if (action === 'set-wallpaper-fit') {
-            if (global.Theme?.setWallpaper && node.dataset.fit) {
-              global.Theme.setWallpaper({ fit: node.dataset.fit });
-              await this._onRoute(global.Router.current());
+            if (global.Theme?.setSurface && node.dataset.fit) {
+              global.Theme.setSurface({ wallpaperFit: node.dataset.fit });
+              await refreshAppearance(['surface']);
             }
             return;
           }
-          if (action === 'set-glass-preset') {
-            if (global.Theme?.applyGlassPreset && node.dataset.preset) {
-              global.Theme.applyGlassPreset(node.dataset.preset);
-              await this._onRoute(global.Router.current());
+          if (action === 'set-web-preset') {
+            if (global.Theme?.applyWebPreset && node.dataset.preset) {
+              global.Theme.applyWebPreset(node.dataset.preset);
+              await refreshAppearance(['surface']);
             }
             return;
           }
           if (action === 'set-native-glass-engine') {
-            if (global.Theme?.setGlass && node.dataset.engine) {
-              global.Theme.setGlass({ nativeEngine: node.dataset.engine });
-              await this._onRoute(global.Router.current());
+            if (global.Theme?.setSurface && node.dataset.engine) {
+              global.Theme.setSurface({ nativeEngine: node.dataset.engine });
+              await refreshAppearance(['surface']);
             }
             return;
           }
           if (action === 'set-cursor-style') {
             if (global.Theme?.setTerminalTypography && node.dataset.cursor) {
               global.Theme.setTerminalTypography({ cursorStyle: node.dataset.cursor });
-              await this._onRoute(global.Router.current());
+              await refreshAppearance(['terminal']);
             }
             return;
           }
           if (action === 'toggle-cursor-blink') {
             if (global.Theme?.setTerminalTypography) {
               global.Theme.setTerminalTypography({ cursorBlink: Boolean(node.checked) });
+              global.ServersPage?.updateAppearancePreview?.();
             }
+            return;
+          }
+          if (action === 'reset-terminal-font-offsets') {
+            global.document.dispatchEvent(new global.CustomEvent('anymux-reset-font-offsets'));
+            global.AppShell.toast('已重置各窗口临时字号偏移');
             return;
           }
           if (action === 'reset-appearance') {
             if (global.Theme?.resetAppearance) {
               global.Theme.resetAppearance();
               global.AppShell.toast('已恢复默认外观设置');
-              await this._onRoute(global.Router.current());
+              await refreshAppearance(['theme', 'surface', 'terminal']);
             }
             return;
           }

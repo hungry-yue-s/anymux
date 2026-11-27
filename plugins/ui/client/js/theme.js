@@ -3,10 +3,11 @@
 // === Theme, Wallpaper, Glass & Typography Manager ===
 
 var Theme = (function () {
-  var STORAGE_KEY = 'tmux_theme';
-  var APPEARANCE_KEY = 'anymux_appearance_v2';
-  var TRANSPARENCY_KEY = 'tmux_native_transparency';
-  var GLASS_KEY = 'tmux_native_glass_intensity';
+  var LEGACY_STORAGE_KEY = 'tmux_theme';
+  var V2_APPEARANCE_KEY = 'anymux_appearance_v2';
+  var APPEARANCE_KEY = 'anymux_appearance_v3';
+  var LEGACY_TRANSPARENCY_KEY = 'tmux_native_transparency';
+  var LEGACY_GLASS_KEY = 'tmux_native_glass_intensity';
   var DEFAULT_THEME = 'tokyo-night';
   var MAX_CUSTOM_THEMES = 20;
 
@@ -144,40 +145,32 @@ var Theme = (function () {
     },
   ];
 
-  var GLASS_PRESETS = {
-    'solid': {
-      id: 'solid',
-      name: '纯净实色',
-      description: '零模糊高对比实色表面',
+  var WEB_PRESETS = {
+    'clear': {
+      id: 'clear',
+      name: '清晰',
+      description: '无模糊直显壁纸与轻度遮罩',
       blurRadius: 0,
-      saturation: 100,
+      saturation: 105,
       brightness: 100,
       noiseOpacity: 0,
-      sidebarTint: 100,
-      terminalTint: 95,
-      inactivePaneDim: 12,
-      nativeEngine: 'off',
-      transparency: 0,
-      glassIntensity: 0,
+      sidebarTint: 28,
+      terminalTint: 48,
     },
     'mist': {
       id: 'mist',
-      name: '柔雾磨砂',
-      description: '轻度透光与低噪点磨砂',
+      name: '柔雾',
+      description: '轻度柔化与通透磨砂',
       blurRadius: 14,
       saturation: 118,
       brightness: 100,
       noiseOpacity: 3,
-      sidebarTint: 38,
-      terminalTint: 78,
-      inactivePaneDim: 14,
-      nativeEngine: 'material',
-      transparency: 18,
-      glassIntensity: 55,
+      sidebarTint: 36,
+      terminalTint: 72,
     },
     'frosted': {
       id: 'frosted',
-      name: '深邃毛玻璃',
+      name: '深邃',
       description: '均衡模糊与细腻胶片质感',
       blurRadius: 24,
       saturation: 135,
@@ -185,40 +178,6 @@ var Theme = (function () {
       noiseOpacity: 5,
       sidebarTint: 24,
       terminalTint: 66,
-      inactivePaneDim: 18,
-      nativeEngine: 'material',
-      transparency: 28,
-      glassIntensity: 80,
-    },
-    'liquid': {
-      id: 'liquid',
-      name: '液态清透',
-      description: '高饱和通透呼吸感（macOS 26 液态玻璃）',
-      blurRadius: 34,
-      saturation: 155,
-      brightness: 102,
-      noiseOpacity: 4,
-      sidebarTint: 18,
-      terminalTint: 54,
-      inactivePaneDim: 22,
-      nativeEngine: 'liquid-regular',
-      transparency: 38,
-      glassIntensity: 95,
-    },
-    'clear-glass': {
-      id: 'clear-glass',
-      name: '晶透液态',
-      description: '极简通透质感，最大程度显露背景',
-      blurRadius: 18,
-      saturation: 165,
-      brightness: 104,
-      noiseOpacity: 2,
-      sidebarTint: 12,
-      terminalTint: 44,
-      inactivePaneDim: 24,
-      nativeEngine: 'liquid-clear',
-      transparency: 44,
-      glassIntensity: 100,
     },
   };
 
@@ -795,44 +754,69 @@ var Theme = (function () {
     return clampInt(value, 0, 100, 100);
   }
 
+  function defaultSurface(profile) {
+    var isMobile = profile === 'mobile';
+    return {
+      updatedAt: 0,
+      mode: 'solid',
+      wallpaperSource: 'follow',
+      wallpaperId: null,
+      wallpaperFit: 'cover',
+      wallpaperBrightness: 100,
+      webPreset: isMobile ? 'mist' : 'frosted',
+      blurRadius: isMobile ? 14 : 22,
+      saturation: isMobile ? 118 : 135,
+      brightness: 100,
+      noiseOpacity: isMobile ? 0 : 4,
+      sidebarTint: isMobile ? 38 : 24,
+      terminalTint: isMobile ? 78 : 66,
+      nativeEngine: 'material',
+      transparency: 0,
+      glassIntensity: 100,
+    };
+  }
+
   function defaultState() {
     return {
-      version: 2,
+      version: 3,
       updatedAt: 0,
-      themeMode: 'manual',
-      themeId: DEFAULT_THEME,
-      lightThemeId: 'oyster',
-      darkThemeId: DEFAULT_THEME,
-      accentOverride: null,
-      wallpaper: {
-        mode: 'none',
-        id: null,
-        followTheme: true,
-        fit: 'cover',
-        brightness: 100,
+      themeUpdatedAt: 0,
+      terminalUpdatedAt: 0,
+      theme: {
+        mode: 'manual',
+        themeId: DEFAULT_THEME,
+        lightThemeId: 'oyster',
+        darkThemeId: DEFAULT_THEME,
+        accentOverride: null,
+        customThemes: [],
       },
-      glass: {
-        preset: 'frosted',
-        nativeEngine: 'material',
-        transparency: 0,
-        glassIntensity: 100,
-        blurRadius: 22,
-        saturation: 135,
-        brightness: 100,
-        noiseOpacity: 4,
-        sidebarTint: 24,
-        terminalTint: 66,
-        inactivePaneDim: 18,
-      },
-      typography: {
+      terminal: {
         fontSize: 14,
         lineHeight: 1.2,
         cursorStyle: 'block',
         cursorBlink: true,
         panePadding: 6,
+        inactivePaneDim: 18,
       },
-      customThemes: [],
+      surfaces: {
+        native: defaultSurface('native'),
+        web: defaultSurface('web'),
+        mobile: defaultSurface('mobile'),
+      },
     };
+  }
+
+  function getDeviceProfileKey() {
+    if (supportsTransparency()) return 'native';
+    try {
+      if (window.MobileUI && typeof window.MobileUI.isMobile === 'function' && window.MobileUI.isMobile()) {
+        return 'mobile';
+      }
+      if (typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 767px)').matches) {
+        return 'mobile';
+      }
+    } catch (_e) {}
+    return 'web';
   }
 
   function sanitizeCustomThemeInput(raw, existingIds) {
@@ -906,17 +890,139 @@ var Theme = (function () {
     };
   }
 
+  function sanitizeSurface(profile, rawSurface, baseSurface) {
+    var base = baseSurface || defaultSurface(profile);
+    var input = rawSurface && typeof rawSurface === 'object' ? rawSurface : {};
+    var allowedModes = profile === 'native'
+      ? { solid: true, wallpaper: true, desktop: true }
+      : { solid: true, wallpaper: true };
+    var mode = allowedModes[input.mode] ? input.mode : (allowedModes[base.mode] ? base.mode : 'solid');
+    var wpSources = { follow: true, builtin: true, custom: true };
+    var wpFits = { cover: true, contain: true, fill: true };
+    var webPresets = { clear: true, mist: true, frosted: true, custom: true };
+    var validEngines = { material: true, 'liquid-regular': true, 'liquid-clear': true, system: true };
+
+    var wallpaperSource = wpSources[input.wallpaperSource] ? input.wallpaperSource : base.wallpaperSource;
+    var wallpaperId = typeof input.wallpaperId === 'string' && input.wallpaperId.trim()
+      ? input.wallpaperId.trim().slice(0, 128)
+      : ('wallpaperId' in input ? null : base.wallpaperId);
+    if (mode !== 'wallpaper' || wallpaperSource === 'follow') {
+      wallpaperId = null;
+    }
+
+    var ts = Number(input.updatedAt);
+    return {
+      updatedAt: isFinite(ts) && ts >= 0 ? Math.round(ts) : (base.updatedAt || 0),
+      mode: mode,
+      wallpaperSource: wallpaperSource,
+      wallpaperId: wallpaperId,
+      wallpaperFit: wpFits[input.wallpaperFit] ? input.wallpaperFit : base.wallpaperFit,
+      wallpaperBrightness: clampInt(input.wallpaperBrightness, 40, 130, base.wallpaperBrightness),
+      webPreset: webPresets[input.webPreset] ? input.webPreset : base.webPreset,
+      blurRadius: clampInt(input.blurRadius, 0, 48, base.blurRadius),
+      saturation: clampInt(input.saturation, 60, 200, base.saturation),
+      brightness: clampInt(input.brightness, 75, 125, base.brightness),
+      noiseOpacity: clampInt(input.noiseOpacity, 0, 18, base.noiseOpacity),
+      sidebarTint: clampInt(input.sidebarTint, 0, 85, base.sidebarTint),
+      terminalTint: clampInt(input.terminalTint, 20, 95, base.terminalTint),
+      nativeEngine: validEngines[input.nativeEngine] ? input.nativeEngine : (input.nativeEngine === 'off' ? 'material' : base.nativeEngine),
+      transparency: profile === 'native' ? clampTransparency(input.transparency !== undefined ? input.transparency : base.transparency) : 0,
+      glassIntensity: clampGlassIntensity(input.glassIntensity !== undefined ? input.glassIntensity : base.glassIntensity),
+    };
+  }
+
+  function isLegacyFlatState(raw) {
+    if (!raw || typeof raw !== 'object' || (raw.surfaces && typeof raw.surfaces === 'object')) return false;
+    return 'themeId' in raw || 'themeMode' in raw || 'wallpaper' in raw || 'glass' in raw || 'typography' in raw || 'customThemes' in raw;
+  }
+
+  function migrateV2ToV3(raw) {
+    var wp = raw.wallpaper && typeof raw.wallpaper === 'object' ? raw.wallpaper : {};
+    var g = raw.glass && typeof raw.glass === 'object' ? raw.glass : {};
+    var typo = raw.typography && typeof raw.typography === 'object' ? raw.typography : {};
+    var ts = isFinite(Number(raw.updatedAt)) && Number(raw.updatedAt) >= 0 ? Math.round(Number(raw.updatedAt)) : 0;
+
+    var nativeMode = 'solid';
+    var webMode = 'solid';
+    var wpSource = wp.followTheme === false ? 'builtin' : 'follow';
+    var wpId = typeof wp.id === 'string' && wp.id.trim() ? wp.id.trim().slice(0, 128) : null;
+    if (wp.mode === 'desktop') {
+      nativeMode = 'desktop';
+      wpId = null;
+    } else if (wp.mode === 'builtin') {
+      nativeMode = 'wallpaper';
+      webMode = 'wallpaper';
+      wpSource = (wp.followTheme === false && wpId) ? 'builtin' : 'follow';
+    } else if (wp.mode === 'custom' && wpId) {
+      nativeMode = 'wallpaper';
+      webMode = 'wallpaper';
+      wpSource = 'custom';
+    } else {
+      wpId = null;
+    }
+
+    var presetMap = { solid: 'clear', mist: 'mist', frosted: 'frosted', liquid: 'frosted', 'clear-glass': 'frosted' };
+    var shared = {
+      updatedAt: ts,
+      wallpaperSource: wpSource,
+      wallpaperId: wpSource === 'follow' ? null : wpId,
+      wallpaperFit: wp.fit,
+      wallpaperBrightness: wp.brightness,
+      webPreset: presetMap[g.preset] || 'custom',
+      blurRadius: g.blurRadius,
+      saturation: g.saturation,
+      brightness: g.brightness,
+      noiseOpacity: g.noiseOpacity,
+      sidebarTint: g.sidebarTint,
+      terminalTint: g.terminalTint,
+      nativeEngine: g.nativeEngine,
+      transparency: g.transparency,
+      glassIntensity: g.glassIntensity,
+    };
+    if (clampTransparency(g.transparency) > 0 && nativeMode === 'solid' && wp.mode !== 'builtin' && wp.mode !== 'custom') {
+      nativeMode = 'desktop';
+    }
+    return {
+      version: 3,
+      updatedAt: ts,
+      themeUpdatedAt: ts,
+      terminalUpdatedAt: ts,
+      theme: {
+        mode: raw.themeMode,
+        themeId: raw.themeId,
+        lightThemeId: raw.lightThemeId,
+        darkThemeId: raw.darkThemeId,
+        accentOverride: raw.accentOverride,
+        customThemes: raw.customThemes,
+      },
+      terminal: {
+        fontSize: typo.fontSize,
+        lineHeight: typo.lineHeight,
+        cursorStyle: typo.cursorStyle,
+        cursorBlink: typo.cursorBlink,
+        panePadding: typo.panePadding,
+        inactivePaneDim: g.inactivePaneDim,
+      },
+      surfaces: {
+        native: Object.assign({}, shared, { mode: nativeMode }),
+        web: Object.assign({}, shared, { mode: webMode, transparency: 0 }),
+        mobile: Object.assign({}, defaultSurface('mobile'), { updatedAt: ts }),
+      },
+    };
+  }
+
   function sanitizeState(raw, fallback) {
-    var base = fallback || defaultState();
-    var input = raw && typeof raw === 'object' ? raw : {};
+    var base = fallback && fallback.surfaces ? fallback : defaultState();
+    var input = isLegacyFlatState(raw) ? migrateV2ToV3(raw) : (raw && typeof raw === 'object' ? raw : {});
     var out = defaultState();
 
-    out.updatedAt = isFinite(Number(input.updatedAt)) && Number(input.updatedAt) >= 0
-      ? Math.round(Number(input.updatedAt))
-      : base.updatedAt;
-    out.themeMode = input.themeMode === 'system' ? 'system' : (input.themeMode === 'manual' ? 'manual' : base.themeMode);
+    var inTheme = input.theme && typeof input.theme === 'object' ? input.theme : {};
+    var baseTheme = base.theme || out.theme;
+    var themeTs = Number(input.themeUpdatedAt);
+    out.themeUpdatedAt = isFinite(themeTs) && themeTs >= 0 ? Math.round(themeTs) : (base.themeUpdatedAt || 0);
+    out.theme.mode = inTheme.mode === 'system' ? 'system' : (inTheme.mode === 'manual' ? 'manual' : baseTheme.mode);
 
-    var customList = Array.isArray(input.customThemes) ? input.customThemes : base.customThemes;
+    var customList = Array.isArray(inTheme.customThemes) ? inTheme.customThemes : baseTheme.customThemes;
     var cleanCustoms = [];
     var seenIds = {};
     if (Array.isArray(customList)) {
@@ -928,52 +1034,44 @@ var Theme = (function () {
         if (cleanCustoms.length >= MAX_CUSTOM_THEMES) break;
       }
     }
-    out.customThemes = cleanCustoms;
+    out.theme.customThemes = cleanCustoms;
+    out.theme.accentOverride = 'accentOverride' in inTheme
+      ? (inTheme.accentOverride === null || inTheme.accentOverride === '' ? null : normalizeHex(inTheme.accentOverride))
+      : baseTheme.accentOverride;
+    out.theme.themeId = resolveThemeIdInState(inTheme.themeId || baseTheme.themeId, cleanCustoms);
+    out.theme.lightThemeId = resolveThemeIdInState(inTheme.lightThemeId || baseTheme.lightThemeId, cleanCustoms);
+    out.theme.darkThemeId = resolveThemeIdInState(inTheme.darkThemeId || baseTheme.darkThemeId, cleanCustoms);
 
-    out.accentOverride = 'accentOverride' in input
-      ? (input.accentOverride === null || input.accentOverride === '' ? null : normalizeHex(input.accentOverride))
-      : base.accentOverride;
-
-    var rawWp = input.wallpaper && typeof input.wallpaper === 'object' ? input.wallpaper : {};
-    var wpModes = { none: true, desktop: true, builtin: true, custom: true };
-    var wpFits = { cover: true, contain: true, fill: true };
-    out.wallpaper.mode = wpModes[rawWp.mode] ? rawWp.mode : base.wallpaper.mode;
-    out.wallpaper.id = typeof rawWp.id === 'string' && rawWp.id.trim()
-      ? rawWp.id.trim().slice(0, 128)
-      : ('id' in rawWp ? null : base.wallpaper.id);
-    if (out.wallpaper.mode === 'none' || out.wallpaper.mode === 'desktop') out.wallpaper.id = null;
-    out.wallpaper.followTheme = typeof rawWp.followTheme === 'boolean' ? rawWp.followTheme : base.wallpaper.followTheme;
-    out.wallpaper.fit = wpFits[rawWp.fit] ? rawWp.fit : base.wallpaper.fit;
-    out.wallpaper.brightness = clampInt(rawWp.brightness, 40, 130, base.wallpaper.brightness);
-
-    var rawGlass = input.glass && typeof input.glass === 'object' ? input.glass : {};
-    var validPresets = { solid: true, mist: true, frosted: true, liquid: true, 'clear-glass': true, custom: true };
-    var validEngines = { material: true, 'liquid-regular': true, 'liquid-clear': true, system: true, off: true };
-    out.glass.preset = validPresets[rawGlass.preset] ? rawGlass.preset : base.glass.preset;
-    out.glass.nativeEngine = validEngines[rawGlass.nativeEngine] ? rawGlass.nativeEngine : base.glass.nativeEngine;
-    out.glass.transparency = clampInt(rawGlass.transparency, 0, 50, base.glass.transparency);
-    out.glass.glassIntensity = clampInt(rawGlass.glassIntensity, 0, 100, base.glass.glassIntensity);
-    out.glass.blurRadius = clampInt(rawGlass.blurRadius, 0, 48, base.glass.blurRadius);
-    out.glass.saturation = clampInt(rawGlass.saturation, 60, 200, base.glass.saturation);
-    out.glass.brightness = clampInt(rawGlass.brightness, 75, 125, base.glass.brightness);
-    out.glass.noiseOpacity = clampInt(rawGlass.noiseOpacity, 0, 18, base.glass.noiseOpacity);
-    out.glass.sidebarTint = clampInt(rawGlass.sidebarTint, 0, 85, base.glass.sidebarTint);
-    out.glass.terminalTint = clampInt(rawGlass.terminalTint, 20, 95, base.glass.terminalTint);
-    out.glass.inactivePaneDim = clampInt(rawGlass.inactivePaneDim, 0, 45, base.glass.inactivePaneDim);
-
-    var rawTypo = input.typography && typeof input.typography === 'object' ? input.typography : {};
+    var inTerm = input.terminal && typeof input.terminal === 'object' ? input.terminal : {};
+    var baseTerm = base.terminal || out.terminal;
+    var termTs = Number(input.terminalUpdatedAt);
+    out.terminalUpdatedAt = isFinite(termTs) && termTs >= 0 ? Math.round(termTs) : (base.terminalUpdatedAt || 0);
     var validCursors = { block: true, bar: true, underline: true };
-    out.typography.fontSize = clampInt(rawTypo.fontSize, 10, 22, base.typography.fontSize);
-    out.typography.lineHeight = clampFloat(rawTypo.lineHeight, 1.0, 1.8, 0.05, base.typography.lineHeight);
-    out.typography.cursorStyle = validCursors[rawTypo.cursorStyle] ? rawTypo.cursorStyle : base.typography.cursorStyle;
-    out.typography.cursorBlink = typeof rawTypo.cursorBlink === 'boolean' ? rawTypo.cursorBlink : base.typography.cursorBlink;
-    out.typography.panePadding = clampInt(rawTypo.panePadding, 0, 16, base.typography.panePadding);
+    out.terminal.fontSize = clampInt(inTerm.fontSize, 10, 22, baseTerm.fontSize);
+    out.terminal.lineHeight = clampFloat(inTerm.lineHeight, 1.0, 1.8, 0.05, baseTerm.lineHeight);
+    out.terminal.cursorStyle = validCursors[inTerm.cursorStyle] ? inTerm.cursorStyle : baseTerm.cursorStyle;
+    out.terminal.cursorBlink = typeof inTerm.cursorBlink === 'boolean' ? inTerm.cursorBlink : baseTerm.cursorBlink;
+    out.terminal.panePadding = clampInt(inTerm.panePadding, 0, 16, baseTerm.panePadding);
+    out.terminal.inactivePaneDim = clampInt(inTerm.inactivePaneDim, 0, 45, baseTerm.inactivePaneDim);
 
-    // Resolve theme IDs after loading customThemes
-    out.themeId = resolveThemeIdInState(input.themeId || base.themeId, out.customThemes);
-    out.lightThemeId = resolveThemeIdInState(input.lightThemeId || base.lightThemeId, out.customThemes);
-    out.darkThemeId = resolveThemeIdInState(input.darkThemeId || base.darkThemeId, out.customThemes);
+    var inSurfaces = input.surfaces && typeof input.surfaces === 'object' ? input.surfaces : {};
+    var baseSurfaces = base.surfaces || out.surfaces;
+    var profiles = ['native', 'web', 'mobile'];
+    var maxSurfTs = 0;
+    for (var p = 0; p < profiles.length; p++) {
+      var prof = profiles[p];
+      out.surfaces[prof] = sanitizeSurface(prof, inSurfaces[prof], baseSurfaces[prof]);
+      if (out.surfaces[prof].updatedAt > maxSurfTs) maxSurfTs = out.surfaces[prof].updatedAt;
+    }
 
+    var topTs = Number(input.updatedAt);
+    out.updatedAt = Math.max(
+      isFinite(topTs) && topTs >= 0 ? Math.round(topTs) : 0,
+      base.updatedAt || 0,
+      out.themeUpdatedAt,
+      out.terminalUpdatedAt,
+      maxSurfTs
+    );
     return out;
   }
 
@@ -989,46 +1087,48 @@ var Theme = (function () {
     return DEFAULT_THEME;
   }
 
-  function readLegacyOnlyState() {
+  function readLegacyOnceState() {
     var st = defaultState();
     try {
-      var savedTheme = localStorage.getItem(STORAGE_KEY);
-      if (savedTheme) st.themeId = resolveThemeIdInState(savedTheme, st.customThemes);
-      var savedTrans = localStorage.getItem(TRANSPARENCY_KEY);
+      var savedTheme = localStorage.getItem(LEGACY_STORAGE_KEY);
+      if (savedTheme) st.theme.themeId = resolveThemeIdInState(savedTheme, st.theme.customThemes);
+      var savedTrans = localStorage.getItem(LEGACY_TRANSPARENCY_KEY);
       var tVal = clampTransparency(savedTrans);
-      st.glass.transparency = tVal;
+      st.surfaces.native.transparency = tVal;
       if (supportsTransparency() && tVal > 0) {
-        st.wallpaper.mode = 'desktop';
+        st.surfaces.native.mode = 'desktop';
       }
-      var savedGlass = localStorage.getItem(GLASS_KEY);
-      st.glass.glassIntensity = savedGlass === null ? 100 : clampGlassIntensity(savedGlass);
+      var savedGlass = localStorage.getItem(LEGACY_GLASS_KEY);
+      st.surfaces.native.glassIntensity = savedGlass === null ? 100 : clampGlassIntensity(savedGlass);
     } catch (_e) {}
     return st;
   }
 
   function loadInitialState() {
     try {
-      var raw = localStorage.getItem(APPEARANCE_KEY);
-      if (raw) {
-        var parsed = JSON.parse(raw);
-        var st = sanitizeState(parsed, defaultState());
-        // Preserve legacy keys if they were explicitly seeded before v2
-        var legacyTrans = localStorage.getItem(TRANSPARENCY_KEY);
-        if (legacyTrans !== null) st.glass.transparency = clampTransparency(legacyTrans);
-        var legacyGlass = localStorage.getItem(GLASS_KEY);
-        if (legacyGlass !== null) st.glass.glassIntensity = clampGlassIntensity(legacyGlass);
-        return st;
+      var rawV3 = localStorage.getItem(APPEARANCE_KEY);
+      if (rawV3) {
+        return sanitizeState(JSON.parse(rawV3), defaultState());
+      }
+      var rawV2 = localStorage.getItem(V2_APPEARANCE_KEY);
+      if (rawV2) {
+        return sanitizeState(JSON.parse(rawV2), defaultState());
       }
     } catch (_e) {}
-    return readLegacyOnlyState();
+    return readLegacyOnceState();
   }
 
   var state = loadInitialState();
+  var previewThemeId = null;
   var customWallpapers = [];
   var saveServerTimer = null;
   var customWallpaperMap = {};
   var compiledCustomCache = {};
   var systemSchemeMedia = null;
+
+  function activeSurface() {
+    return state.surfaces[getDeviceProfileKey()] || state.surfaces.web;
+  }
 
   function rebuildCustomCaches() {
     customWallpaperMap = {};
@@ -1036,8 +1136,8 @@ var Theme = (function () {
       customWallpaperMap[customWallpapers[i].id] = customWallpapers[i];
     }
     compiledCustomCache = {};
-    for (var j = 0; j < state.customThemes.length; j++) {
-      var ct = state.customThemes[j];
+    for (var j = 0; j < state.theme.customThemes.length; j++) {
+      var ct = state.theme.customThemes[j];
       compiledCustomCache[ct.id] = compileTheme({
         id: ct.id,
         name: ct.name,
@@ -1054,9 +1154,6 @@ var Theme = (function () {
   function persistLocal() {
     try {
       localStorage.setItem(APPEARANCE_KEY, JSON.stringify(state));
-      localStorage.setItem(STORAGE_KEY, state.themeId);
-      localStorage.setItem(TRANSPARENCY_KEY, String(state.glass.transparency));
-      localStorage.setItem(GLASS_KEY, String(state.glass.glassIntensity));
     } catch (_e) {}
   }
 
@@ -1075,7 +1172,7 @@ var Theme = (function () {
   }
 
   function resolveThemeId(themeId) {
-    return resolveThemeIdInState(themeId, state.customThemes);
+    return resolveThemeIdInState(themeId, state.theme.customThemes);
   }
 
   function getRawThemeEntry(themeId) {
@@ -1087,21 +1184,19 @@ var Theme = (function () {
 
   function getCompiledTheme(themeId, includeAccent) {
     var entry = getRawThemeEntry(themeId);
-    if (!includeAccent || !state.accentOverride) return entry;
-    return compileTheme(entry.raw, state.accentOverride);
+    if (!includeAccent || !state.theme.accentOverride) return entry;
+    return compileTheme(entry.raw, state.theme.accentOverride);
   }
 
   function getCurrent() {
-    if (state.themeMode === 'system') {
-      return resolveThemeId(isSystemLight() ? state.lightThemeId : state.darkThemeId);
+    if (state.theme.mode === 'system') {
+      return resolveThemeId(isSystemLight() ? state.theme.lightThemeId : state.theme.darkThemeId);
     }
-    try {
-      var lsTheme = localStorage.getItem(STORAGE_KEY);
-      if (!localStorage.getItem(APPEARANCE_KEY) && lsTheme) {
-        return resolveThemeId(lsTheme);
-      }
-    } catch (_e) {}
-    return resolveThemeId(state.themeId);
+    return resolveThemeId(state.theme.themeId);
+  }
+
+  function getEffectiveThemeId() {
+    return previewThemeId !== null ? previewThemeId : getCurrent();
   }
 
   function getBuiltInWallpaperById(id) {
@@ -1112,19 +1207,22 @@ var Theme = (function () {
   }
 
   function getResolvedWallpaperId(themeId) {
-    var wp = state.wallpaper;
-    if (wp.mode === 'builtin') {
-      if (wp.followTheme || !wp.id) {
-        var entry = getRawThemeEntry(themeId || getCurrent());
-        if (entry.defaultWallpaper && getBuiltInWallpaperById(entry.defaultWallpaper)) {
-          return entry.defaultWallpaper;
-        }
-        return entry.colorScheme === 'light' ? 'zen-silk' : 'obsidian-topo';
+    var surf = activeSurface();
+    if (surf.mode !== 'wallpaper') return null;
+    if (surf.wallpaperSource === 'follow' || (!surf.wallpaperId && surf.wallpaperSource !== 'custom')) {
+      var entry = getRawThemeEntry(themeId || getEffectiveThemeId());
+      if (entry.defaultWallpaper && getBuiltInWallpaperById(entry.defaultWallpaper)) {
+        return entry.defaultWallpaper;
       }
-      return getBuiltInWallpaperById(wp.id) ? wp.id : getRawThemeEntry(themeId || getCurrent()).defaultWallpaper;
+      return entry.colorScheme === 'light' ? 'zen-silk' : 'obsidian-topo';
     }
-    if (wp.mode === 'custom' && wp.id) {
-      return wp.id;
+    if (surf.wallpaperSource === 'builtin') {
+      return getBuiltInWallpaperById(surf.wallpaperId)
+        ? surf.wallpaperId
+        : getRawThemeEntry(themeId || getEffectiveThemeId()).defaultWallpaper;
+    }
+    if (surf.wallpaperSource === 'custom' && surf.wallpaperId) {
+      return surf.wallpaperId;
     }
     return null;
   }
@@ -1140,34 +1238,32 @@ var Theme = (function () {
   }
 
   function getResolvedWallpaperUrl(themeId) {
-    var wp = state.wallpaper;
-    if (wp.mode === 'builtin') {
-      var id = getResolvedWallpaperId(themeId);
-      var item = id ? getBuiltInWallpaperById(id) : null;
-      return item ? item.url : null;
-    }
-    if (wp.mode === 'custom' && wp.id) {
-      // Allow rendering even before list arrives if valid wp-<hex>.<ext> ID is saved
-      if (customWallpaperMap[wp.id] || /^wp-[a-f0-9]{16}\.(png|jpg|webp|avif|gif)$/.test(wp.id)) {
-        return appendAuthToken('/api/appearance/wallpapers/' + encodeURIComponent(wp.id));
+    var surf = activeSurface();
+    if (surf.mode !== 'wallpaper') return null;
+    if (surf.wallpaperSource === 'custom' && surf.wallpaperId) {
+      if (customWallpaperMap[surf.wallpaperId] || /^wp-[a-f0-9]{16}\.(png|jpg|webp|avif|gif)$/.test(surf.wallpaperId)) {
+        return appendAuthToken('/api/appearance/wallpapers/' + encodeURIComponent(surf.wallpaperId));
       }
+      return null;
     }
-    return null;
+    var id = getResolvedWallpaperId(themeId);
+    var item = id ? getBuiltInWallpaperById(id) : null;
+    return item ? item.url : null;
   }
 
   function isWallpaperActive() {
-    return (state.wallpaper.mode === 'builtin' || state.wallpaper.mode === 'custom')
-      && Boolean(getResolvedWallpaperUrl());
+    var surf = activeSurface();
+    return surf.mode === 'wallpaper' && Boolean(getResolvedWallpaperUrl());
   }
 
   function getTransparency() {
-    return supportsTransparency() ? state.glass.transparency : 0;
+    var surf = activeSurface();
+    return supportsTransparency() && surf.mode === 'desktop' ? surf.transparency : 0;
   }
 
   function isBackdropActive() {
-    var nativeDesktop = supportsTransparency()
-      && (state.wallpaper.mode === 'desktop' || state.wallpaper.mode === 'none')
-      && getTransparency() > 0;
+    var surf = activeSurface();
+    var nativeDesktop = supportsTransparency() && surf.mode === 'desktop' && getTransparency() > 0;
     return nativeDesktop || isWallpaperActive();
   }
 
@@ -1180,7 +1276,7 @@ var Theme = (function () {
         ensureBackdropElement._queued = true;
         doc.addEventListener('DOMContentLoaded', function () {
           ensureBackdropElement._queued = false;
-          applyVisualBackdrop(getCurrent());
+          applyVisualBackdrop(getEffectiveThemeId());
         }, { once: true });
       }
       return null;
@@ -1207,12 +1303,12 @@ var Theme = (function () {
 
   function applyVisualBackdrop(themeId) {
     var root = document.documentElement;
-    var activeTheme = getCompiledTheme(themeId || getCurrent(), true);
+    var targetTheme = themeId || getEffectiveThemeId();
+    var activeTheme = getCompiledTheme(targetTheme, true);
+    var surf = activeSurface();
     var amount = getTransparency();
     var wpActive = isWallpaperActive();
-    var nativeTrans = supportsTransparency()
-      && (state.wallpaper.mode === 'desktop' || state.wallpaper.mode === 'none')
-      && amount > 0;
+    var nativeTrans = supportsTransparency() && surf.mode === 'desktop' && amount > 0;
     var backdropActive = nativeTrans || wpActive;
 
     root.toggleAttribute('data-native-transparency', nativeTrans);
@@ -1223,30 +1319,30 @@ var Theme = (function () {
     var bgRgb = rgb(bgHex);
     root.style.setProperty('--native-window-background', 'rgba(' + bgRgb.join(', ') + ', ' + (1 - amount / 100) + ')');
 
-    var g = state.glass;
-    var wp = state.wallpaper;
-    var typo = state.typography;
-    var combinedBrightness = Math.round((wp.brightness * g.brightness) / 100);
-    root.style.setProperty('--anymux-wp-blur', g.blurRadius + 'px');
-    root.style.setProperty('--anymux-wp-saturate', g.saturation + '%');
+    var typo = state.terminal;
+    var combinedBrightness = Math.round((surf.wallpaperBrightness * surf.brightness) / 100);
+    root.style.setProperty('--anymux-wp-blur', surf.blurRadius + 'px');
+    root.style.setProperty('--anymux-wp-saturate', surf.saturation + '%');
     root.style.setProperty('--anymux-wp-brightness', combinedBrightness + '%');
-    root.style.setProperty('--anymux-wp-scrim', 'rgba(' + bgRgb.join(', ') + ', ' + (g.terminalTint / 100).toFixed(3) + ')');
-    root.style.setProperty('--anymux-wp-noise-opacity', (g.noiseOpacity / 100).toFixed(3));
-    root.style.setProperty('--anymux-sidebar-alpha', g.sidebarTint + '%');
-    root.style.setProperty('--anymux-sidebar-blur', Math.round(g.blurRadius * 0.65) + 'px');
-    root.style.setProperty('--anymux-float-blur', Math.max(12, Math.min(36, Math.round(g.blurRadius * 1.1))) + 'px');
-    root.style.setProperty('--anymux-pane-inactive-dim', g.inactivePaneDim + '%');
+    root.style.setProperty('--anymux-wp-scrim', 'rgba(' + bgRgb.join(', ') + ', ' + (surf.terminalTint / 100).toFixed(3) + ')');
+    root.style.setProperty('--anymux-wp-noise-opacity', (surf.noiseOpacity / 100).toFixed(3));
+    root.style.setProperty('--anymux-sidebar-alpha', surf.sidebarTint + '%');
+    root.style.setProperty('--anymux-sidebar-blur', Math.round(surf.blurRadius * 0.65) + 'px');
+    root.style.setProperty('--anymux-float-blur', Math.max(12, Math.min(36, Math.round(surf.blurRadius * 1.1))) + 'px');
+    root.style.setProperty('--anymux-pane-inactive-dim', typo.inactivePaneDim + '%');
     root.style.setProperty('--terminal-pane-padding', typo.panePadding + 'px');
 
     var backdrop = ensureBackdropElement();
     if (backdrop) {
       var imgEl = backdrop.querySelector('.anymux-wp-image');
       if (wpActive) {
-        var url = getResolvedWallpaperUrl(themeId);
+        var url = getResolvedWallpaperUrl(targetTheme);
         backdrop.hidden = false;
         if (imgEl) {
           imgEl.style.backgroundImage = url ? 'url("' + url.replace(/"/g, '%22') + '")' : 'none';
-          imgEl.style.backgroundSize = wp.fit === 'fill' ? '100% 100%' : (wp.fit === 'contain' ? 'contain' : 'cover');
+          imgEl.style.backgroundSize = surf.wallpaperFit === 'fill'
+            ? '100% 100%'
+            : (surf.wallpaperFit === 'contain' ? 'contain' : 'cover');
         }
       } else {
         backdrop.hidden = true;
@@ -1259,30 +1355,27 @@ var Theme = (function () {
     if (!supportsGlassIntensity()) return;
     var handler = appearanceHandler();
     try {
+      var surf = state.surfaces.native;
       if (hasRichNativeEngine() || forceRich === true) {
-        var activeTheme = getCompiledTheme(getCurrent(), true);
-        var g = state.glass;
-        var nativeMode = state.wallpaper.mode;
-        if (nativeMode === 'desktop' && g.transparency <= 0) {
-          nativeMode = 'none';
-        }
-        var engine = g.nativeEngine;
+        var activeTheme = getCompiledTheme(getEffectiveThemeId(), true);
+        var nativeMode = (surf.mode === 'desktop' && surf.transparency > 0) ? 'desktop' : 'none';
+        var engine = surf.nativeEngine;
         if ((engine === 'liquid-regular' || engine === 'liquid-clear') && !supportsLiquidGlass()) {
           engine = 'material';
         }
         handler.postMessage({
-          glassIntensity: g.glassIntensity,
+          glassIntensity: surf.glassIntensity,
           mode: nativeMode,
           engine: engine,
-          blurRadius: g.blurRadius,
-          saturation: Number((g.saturation / 100).toFixed(2)),
-          brightness: Number(((g.brightness - 100) / 100).toFixed(2)),
+          blurRadius: surf.blurRadius,
+          saturation: Number((surf.saturation / 100).toFixed(2)),
+          brightness: Number(((surf.brightness - 100) / 100).toFixed(2)),
           tintHex: activeTheme.ui['--bg-primary'],
-          tintAlpha: Number(((100 - g.transparency) / 100).toFixed(2)),
+          tintAlpha: Number(((100 - surf.transparency) / 100).toFixed(2)),
           colorScheme: activeTheme.colorScheme,
         });
       } else {
-        handler.postMessage({ glassIntensity: state.glass.glassIntensity });
+        handler.postMessage({ glassIntensity: surf.glassIntensity });
       }
     } catch (_e) {}
   }
@@ -1306,52 +1399,77 @@ var Theme = (function () {
     applyVisualBackdrop(resolved);
 
     if (opts.persist !== false) {
-      if (!opts.keepMode) state.themeMode = 'manual';
-      state.themeId = resolved;
-      if (opts.bump !== false) state.updatedAt = Date.now();
+      var now = Date.now();
+      if (!opts.keepMode) state.theme.mode = 'manual';
+      state.theme.themeId = resolved;
+      if (opts.bump !== false) {
+        state.themeUpdatedAt = now;
+        state.updatedAt = now;
+      }
       persistLocal();
       if (opts.sync !== false) scheduleServerSave();
-    } else if (opts.syncLegacyKey) {
-      try {
-        if (localStorage.getItem(STORAGE_KEY) !== resolved) {
-          localStorage.setItem(STORAGE_KEY, resolved);
-        }
-      } catch (_e) {}
     }
 
     if (hasRichNativeEngine() && opts.notifyNative !== false) {
       applyNativeAppearance(false);
     }
 
-    dispatchEventSafe('tmux-theme-change', { themeId: resolved });
+    dispatchEventSafe('tmux-theme-change', { themeId: resolved, preview: Boolean(opts.preview) });
     if (opts.announceAppearance) dispatchEventSafe('anymux-appearance-change');
   }
 
   function apply(themeId, options) {
     var opts = options || {};
     var resolved = resolveThemeId(themeId);
-    if (opts.keepMode !== true && state.themeMode === 'system') {
-      state.themeMode = 'manual';
+    previewThemeId = null;
+    if (opts.keepMode !== true && state.theme.mode === 'system') {
+      state.theme.mode = 'manual';
     }
-    state.themeId = resolved;
-    state.updatedAt = Date.now();
+    state.theme.themeId = resolved;
+    var now = Date.now();
+    state.themeUpdatedAt = now;
+    state.updatedAt = now;
     applyThemeInternal(resolved, {
       persist: true,
       keepMode: opts.keepMode,
-      bump: true,
+      bump: false,
       sync: opts.sync !== false,
       announceAppearance: opts.announceAppearance !== false,
     });
   }
 
+  function previewTheme(themeId) {
+    var resolved = resolveThemeId(themeId);
+    previewThemeId = resolved;
+    applyThemeInternal(resolved, {
+      persist: false,
+      sync: false,
+      announceAppearance: false,
+      preview: true,
+    });
+  }
+
+  function clearPreview() {
+    if (previewThemeId === null) return;
+    previewThemeId = null;
+    applyThemeInternal(getCurrent(), {
+      persist: false,
+      sync: false,
+      announceAppearance: false,
+    });
+  }
+
   function getGlassIntensity() {
-    return state.glass.glassIntensity;
+    return activeSurface().glassIntensity;
   }
 
   function setGlassIntensity(value) {
     if (!supportsGlassIntensity()) return;
-    state.glass.glassIntensity = clampGlassIntensity(value);
-    state.updatedAt = Date.now();
+    var surf = state.surfaces.native;
+    surf.glassIntensity = clampGlassIntensity(value);
+    var now = Date.now();
+    surf.updatedAt = now;
+    state.updatedAt = now;
     persistLocal();
     applyNativeAppearance(false);
     scheduleServerSave();
@@ -1362,169 +1480,201 @@ var Theme = (function () {
   function setTransparency(value) {
     if (!supportsTransparency()) return;
     var next = clampTransparency(value);
-    state.glass.transparency = next;
-    if (next > 0 && state.wallpaper.mode === 'none') {
-      state.wallpaper.mode = 'desktop';
-    }
-    state.updatedAt = Date.now();
+    var surf = state.surfaces.native;
+    surf.transparency = next;
+    surf.mode = next > 0 ? 'desktop' : 'solid';
+    var now = Date.now();
+    surf.updatedAt = now;
+    state.updatedAt = now;
     persistLocal();
-    applyVisualBackdrop(getCurrent());
+    applyVisualBackdrop(getEffectiveThemeId());
     if (hasRichNativeEngine()) applyNativeAppearance(false);
     scheduleServerSave();
     dispatchEventSafe('tmux-transparency-change');
+    dispatchEventSafe('tmux-wallpaper-change', { wallpaper: getWallpaper() });
     dispatchEventSafe('anymux-appearance-change');
+  }
+
+  function applyWebPresetValues(surf, preset) {
+    surf.webPreset = preset.id;
+    surf.blurRadius = preset.blurRadius;
+    surf.saturation = preset.saturation;
+    surf.brightness = preset.brightness;
+    surf.noiseOpacity = preset.noiseOpacity;
+    surf.sidebarTint = preset.sidebarTint;
+    surf.terminalTint = preset.terminalTint;
+  }
+
+  function setSurface(patch) {
+    if (!patch || typeof patch !== 'object') return;
+    var profile = getDeviceProfileKey();
+    var surf = activeSurface();
+    var prevMode = surf.mode;
+
+    if ('mode' in patch) {
+      if (patch.mode === 'desktop' && !supportsTransparency()) return;
+      if (patch.mode === 'solid' || patch.mode === 'wallpaper' || (patch.mode === 'desktop' && profile === 'native')) {
+        surf.mode = patch.mode;
+      }
+    }
+    if ('wallpaperSource' in patch && { follow: true, builtin: true, custom: true }[patch.wallpaperSource]) {
+      surf.wallpaperSource = patch.wallpaperSource;
+    }
+    if ('wallpaperId' in patch) {
+      surf.wallpaperId = patch.wallpaperId || null;
+      if (surf.wallpaperId && !('wallpaperSource' in patch)) {
+        surf.wallpaperSource = /^wp-[a-f0-9]{16}\./.test(surf.wallpaperId) ? 'custom' : 'builtin';
+      }
+    }
+    if ({ cover: true, contain: true, fill: true }[patch.wallpaperFit]) {
+      surf.wallpaperFit = patch.wallpaperFit;
+    }
+    if ('wallpaperBrightness' in patch) {
+      surf.wallpaperBrightness = clampInt(patch.wallpaperBrightness, 40, 130, surf.wallpaperBrightness);
+    }
+
+    var webSliderTouched = false;
+    if ('blurRadius' in patch) {
+      surf.blurRadius = clampInt(patch.blurRadius, 0, 48, surf.blurRadius);
+      webSliderTouched = true;
+    }
+    if ('saturation' in patch) {
+      surf.saturation = clampInt(patch.saturation, 60, 200, surf.saturation);
+      webSliderTouched = true;
+    }
+    if ('brightness' in patch) {
+      surf.brightness = clampInt(patch.brightness, 75, 125, surf.brightness);
+      webSliderTouched = true;
+    }
+    if ('noiseOpacity' in patch) {
+      surf.noiseOpacity = clampInt(patch.noiseOpacity, 0, 18, surf.noiseOpacity);
+      webSliderTouched = true;
+    }
+    if ('sidebarTint' in patch) {
+      surf.sidebarTint = clampInt(patch.sidebarTint, 0, 85, surf.sidebarTint);
+      webSliderTouched = true;
+    }
+    if ('terminalTint' in patch) {
+      surf.terminalTint = clampInt(patch.terminalTint, 20, 95, surf.terminalTint);
+      webSliderTouched = true;
+    }
+    if (patch.webPreset && WEB_PRESETS[patch.webPreset]) {
+      applyWebPresetValues(surf, WEB_PRESETS[patch.webPreset]);
+    } else if (webSliderTouched && surf.mode === 'wallpaper') {
+      surf.webPreset = 'custom';
+    }
+
+    if (patch.nativeEngine && { material: true, 'liquid-regular': true, 'liquid-clear': true, system: true }[patch.nativeEngine]) {
+      var nextEngine = patch.nativeEngine;
+      if ((nextEngine === 'liquid-regular' || nextEngine === 'liquid-clear') && !supportsLiquidGlass()) {
+        nextEngine = 'material';
+      }
+      surf.nativeEngine = nextEngine;
+    }
+    if ('transparency' in patch && supportsTransparency()) {
+      surf.transparency = clampTransparency(patch.transparency);
+    }
+    if ('glassIntensity' in patch && supportsGlassIntensity()) {
+      surf.glassIntensity = clampGlassIntensity(patch.glassIntensity);
+    }
+
+    if (surf.mode === 'desktop' && surf.transparency <= 0 && supportsTransparency()) {
+      surf.transparency = 25;
+    }
+    if (surf.mode !== 'wallpaper' || surf.wallpaperSource === 'follow') {
+      surf.wallpaperId = null;
+    }
+    if (surf.mode !== 'wallpaper' && surf.mode !== prevMode && surf.mode === 'solid') {
+      surf.wallpaperSource = 'follow';
+    }
+
+    var now = Date.now();
+    surf.updatedAt = now;
+    state.updatedAt = now;
+    persistLocal();
+    applyVisualBackdrop(getEffectiveThemeId());
+    if (supportsGlassIntensity()) {
+      applyNativeAppearance(hasRichNativeEngine() || surf.mode === 'desktop');
+    }
+    scheduleServerSave();
+    dispatchEventSafe('tmux-glass-change');
+    dispatchEventSafe('tmux-transparency-change');
+    dispatchEventSafe('tmux-wallpaper-change', { wallpaper: getWallpaper() });
+    dispatchEventSafe('anymux-appearance-change');
+  }
+
+  function applyWebPreset(presetId) {
+    var preset = WEB_PRESETS[presetId];
+    if (!preset) return;
+    setSurface({ webPreset: preset.id });
   }
 
   function setWallpaper(patch) {
     if (!patch || typeof patch !== 'object') return;
-    var wp = state.wallpaper;
+    var mapped = {};
     if ('mode' in patch) {
-      if (patch.mode === 'desktop' && !supportsTransparency()) return;
-      if ({ none: true, desktop: true, builtin: true, custom: true }[patch.mode]) {
-        wp.mode = patch.mode;
+      if (patch.mode === 'none') {
+        mapped.mode = 'solid';
+        mapped.wallpaperSource = 'follow';
+        mapped.wallpaperId = null;
+      } else if (patch.mode === 'desktop') {
+        if (!supportsTransparency()) return;
+        mapped.mode = 'desktop';
+        mapped.wallpaperId = null;
+      } else if (patch.mode === 'builtin') {
+        mapped.mode = 'wallpaper';
+        if (!('followTheme' in patch)) {
+          mapped.wallpaperSource = patch.id ? 'builtin' : 'follow';
+        }
+      } else if (patch.mode === 'custom') {
+        mapped.mode = 'wallpaper';
+        mapped.wallpaperSource = 'custom';
       }
     }
     if ('id' in patch) {
-      wp.id = patch.id || null;
-    }
-    if (typeof patch.followTheme === 'boolean') {
-      wp.followTheme = patch.followTheme;
-    } else if (wp.mode === 'builtin') {
-      if ('id' in patch && patch.id) {
-        var recId = getRawThemeEntry(getCurrent()).defaultWallpaper;
-        if (patch.id !== recId) wp.followTheme = false;
-      } else if (!wp.id) {
-        wp.followTheme = true;
+      mapped.wallpaperId = patch.id || null;
+      if (!patch.id && !('followTheme' in patch) && mapped.mode === 'wallpaper') {
+        mapped.wallpaperSource = 'follow';
       }
     }
-    if ({ cover: true, contain: true, fill: true }[patch.fit]) {
-      wp.fit = patch.fit;
+    if (typeof patch.followTheme === 'boolean') {
+      mapped.wallpaperSource = patch.followTheme ? 'follow' : (patch.id ? (/^wp-[a-f0-9]{16}\./.test(patch.id) ? 'custom' : 'builtin') : 'builtin');
+      if (patch.followTheme) mapped.wallpaperId = null;
     }
-    if ('brightness' in patch) {
-      wp.brightness = clampInt(patch.brightness, 40, 130, wp.brightness);
-    }
-    if (wp.mode === 'desktop' && state.glass.transparency <= 0 && supportsTransparency()) {
-      state.glass.transparency = 25;
-      if (state.glass.preset === 'solid') state.glass.preset = 'frosted';
-    }
-    if ((wp.mode === 'builtin' || wp.mode === 'custom') && state.glass.preset === 'solid') {
-      var frosted = GLASS_PRESETS.frosted;
-      state.glass.preset = 'frosted';
-      state.glass.blurRadius = frosted.blurRadius;
-      state.glass.saturation = frosted.saturation;
-      state.glass.brightness = frosted.brightness;
-      state.glass.noiseOpacity = frosted.noiseOpacity;
-      state.glass.sidebarTint = frosted.sidebarTint;
-      state.glass.terminalTint = frosted.terminalTint;
-      state.glass.inactivePaneDim = frosted.inactivePaneDim;
-    }
-    if (wp.mode === 'none' || wp.mode === 'desktop') {
-      wp.id = null;
-    }
-    state.updatedAt = Date.now();
-    persistLocal();
-    applyVisualBackdrop(getCurrent());
-    if (supportsGlassIntensity() && (hasRichNativeEngine() || wp.mode === 'desktop' || wp.mode === 'none')) {
-      applyNativeAppearance(hasRichNativeEngine());
-    }
-    scheduleServerSave();
-    dispatchEventSafe('tmux-wallpaper-change', { wallpaper: getWallpaper() });
-    dispatchEventSafe('tmux-transparency-change');
-    dispatchEventSafe('anymux-appearance-change');
+    if ('fit' in patch) mapped.wallpaperFit = patch.fit;
+    if ('brightness' in patch) mapped.wallpaperBrightness = patch.brightness;
+    setSurface(mapped);
   }
 
   function setGlass(patch) {
     if (!patch || typeof patch !== 'object') return;
-    var g = state.glass;
-    var custom = !patch.preset;
-    if ('blurRadius' in patch) g.blurRadius = clampInt(patch.blurRadius, 0, 48, g.blurRadius);
-    if ('saturation' in patch) g.saturation = clampInt(patch.saturation, 60, 200, g.saturation);
-    if ('brightness' in patch) g.brightness = clampInt(patch.brightness, 75, 125, g.brightness);
-    if ('noiseOpacity' in patch) g.noiseOpacity = clampInt(patch.noiseOpacity, 0, 18, g.noiseOpacity);
-    if ('sidebarTint' in patch) g.sidebarTint = clampInt(patch.sidebarTint, 0, 85, g.sidebarTint);
-    if ('terminalTint' in patch) g.terminalTint = clampInt(patch.terminalTint, 20, 95, g.terminalTint);
-    if ('inactivePaneDim' in patch) g.inactivePaneDim = clampInt(patch.inactivePaneDim, 0, 45, g.inactivePaneDim);
-    if ('transparency' in patch && supportsTransparency()) {
-      g.transparency = clampTransparency(patch.transparency);
+    if ('inactivePaneDim' in patch) {
+      setTerminalTypography({ inactivePaneDim: patch.inactivePaneDim });
     }
-    if ('glassIntensity' in patch) {
-      g.glassIntensity = clampGlassIntensity(patch.glassIntensity);
-    }
-    if (patch.nativeEngine && { material: true, 'liquid-regular': true, 'liquid-clear': true, system: true, off: true }[patch.nativeEngine]) {
-      g.nativeEngine = patch.nativeEngine;
-      custom = false;
-    }
-    if (patch.preset && GLASS_PRESETS[patch.preset]) {
-      g.preset = patch.preset;
-    } else if (custom) {
-      g.preset = 'custom';
-    }
-    state.updatedAt = Date.now();
-    persistLocal();
-    applyVisualBackdrop(getCurrent());
-    if (supportsGlassIntensity()) applyNativeAppearance(true);
-    scheduleServerSave();
-    dispatchEventSafe('tmux-glass-change');
-    dispatchEventSafe('anymux-appearance-change');
-  }
-
-  function applyGlassPreset(presetId) {
-    var preset = GLASS_PRESETS[presetId];
-    if (!preset) return;
-    var g = state.glass;
-    g.preset = preset.id;
-    g.blurRadius = preset.blurRadius;
-    g.saturation = preset.saturation;
-    g.brightness = preset.brightness;
-    g.noiseOpacity = preset.noiseOpacity;
-    g.sidebarTint = preset.sidebarTint;
-    g.terminalTint = preset.terminalTint;
-    g.inactivePaneDim = preset.inactivePaneDim;
-
-    var engine = preset.nativeEngine;
-    if ((engine === 'liquid-regular' || engine === 'liquid-clear') && !supportsLiquidGlass()) {
-      engine = 'material';
-    }
-    g.nativeEngine = engine;
-    if (supportsTransparency()) {
-      g.transparency = preset.transparency;
-      g.glassIntensity = preset.glassIntensity;
-      if (preset.id === 'solid' && state.wallpaper.mode === 'desktop') {
-        state.wallpaper.mode = 'none';
-      } else if (preset.id !== 'solid' && state.wallpaper.mode === 'none') {
-        state.wallpaper.mode = 'desktop';
-      }
-    } else if (preset.id !== 'solid' && state.wallpaper.mode === 'none') {
-      state.wallpaper.mode = 'builtin';
-      state.wallpaper.followTheme = true;
-    } else if (preset.id === 'solid' && (state.wallpaper.mode === 'builtin' || state.wallpaper.mode === 'custom')) {
-      state.wallpaper.mode = 'none';
-      state.wallpaper.id = null;
-    }
-
-    state.updatedAt = Date.now();
-    persistLocal();
-    applyVisualBackdrop(getCurrent());
-    if (supportsGlassIntensity()) applyNativeAppearance(true);
-    scheduleServerSave();
-    dispatchEventSafe('tmux-glass-change');
-    dispatchEventSafe('tmux-transparency-change');
-    dispatchEventSafe('tmux-wallpaper-change');
-    dispatchEventSafe('anymux-appearance-change');
+    var mapped = {};
+    ['blurRadius', 'saturation', 'brightness', 'noiseOpacity', 'sidebarTint', 'terminalTint', 'nativeEngine', 'transparency', 'glassIntensity'].forEach(function (k) {
+      if (k in patch) mapped[k] = patch[k];
+    });
+    if (patch.preset && WEB_PRESETS[patch.preset]) mapped.webPreset = patch.preset;
+    if (Object.keys(mapped).length) setSurface(mapped);
   }
 
   function setTerminalTypography(patch) {
     if (!patch || typeof patch !== 'object') return;
-    var typo = state.typography;
+    var typo = state.terminal;
     if ('fontSize' in patch) typo.fontSize = clampInt(patch.fontSize, 10, 22, typo.fontSize);
     if ('lineHeight' in patch) typo.lineHeight = clampFloat(patch.lineHeight, 1.0, 1.8, 0.05, typo.lineHeight);
     if ({ block: true, bar: true, underline: true }[patch.cursorStyle]) typo.cursorStyle = patch.cursorStyle;
     if (typeof patch.cursorBlink === 'boolean') typo.cursorBlink = patch.cursorBlink;
     if ('panePadding' in patch) typo.panePadding = clampInt(patch.panePadding, 0, 16, typo.panePadding);
+    if ('inactivePaneDim' in patch) typo.inactivePaneDim = clampInt(patch.inactivePaneDim, 0, 45, typo.inactivePaneDim);
 
-    state.updatedAt = Date.now();
+    var now = Date.now();
+    state.terminalUpdatedAt = now;
+    state.updatedAt = now;
     persistLocal();
     document.documentElement.style.setProperty('--terminal-pane-padding', typo.panePadding + 'px');
+    document.documentElement.style.setProperty('--anymux-pane-inactive-dim', typo.inactivePaneDim + '%');
     scheduleServerSave();
     dispatchEventSafe('tmux-typography-change', { typography: getTerminalTypography() });
     dispatchEventSafe('anymux-appearance-change');
@@ -1532,17 +1682,22 @@ var Theme = (function () {
 
   function setThemeMode(mode) {
     var next = mode === 'system' ? 'system' : 'manual';
-    if (state.themeMode === next) return;
-    state.themeMode = next;
-    state.updatedAt = Date.now();
-    applyThemeInternal(getCurrent(), { persist: true, keepMode: true, bump: true, announceAppearance: true });
+    if (state.theme.mode === next) return;
+    previewThemeId = null;
+    state.theme.mode = next;
+    var now = Date.now();
+    state.themeUpdatedAt = now;
+    state.updatedAt = now;
+    applyThemeInternal(getCurrent(), { persist: true, keepMode: true, bump: false, announceAppearance: true });
   }
 
   function setLightThemeId(id) {
-    state.lightThemeId = resolveThemeId(id);
-    state.updatedAt = Date.now();
-    if (state.themeMode === 'system') {
-      applyThemeInternal(getCurrent(), { persist: true, keepMode: true, bump: true, announceAppearance: true });
+    state.theme.lightThemeId = resolveThemeId(id);
+    var now = Date.now();
+    state.themeUpdatedAt = now;
+    state.updatedAt = now;
+    if (state.theme.mode === 'system') {
+      applyThemeInternal(getCurrent(), { persist: true, keepMode: true, bump: false, announceAppearance: true });
     } else {
       persistLocal();
       scheduleServerSave();
@@ -1551,10 +1706,12 @@ var Theme = (function () {
   }
 
   function setDarkThemeId(id) {
-    state.darkThemeId = resolveThemeId(id);
-    state.updatedAt = Date.now();
-    if (state.themeMode === 'system') {
-      applyThemeInternal(getCurrent(), { persist: true, keepMode: true, bump: true, announceAppearance: true });
+    state.theme.darkThemeId = resolveThemeId(id);
+    var now = Date.now();
+    state.themeUpdatedAt = now;
+    state.updatedAt = now;
+    if (state.theme.mode === 'system') {
+      applyThemeInternal(getCurrent(), { persist: true, keepMode: true, bump: false, announceAppearance: true });
     } else {
       persistLocal();
       scheduleServerSave();
@@ -1563,35 +1720,41 @@ var Theme = (function () {
   }
 
   function setAccentOverride(value) {
-    state.accentOverride = value ? normalizeHex(value) : null;
-    state.updatedAt = Date.now();
-    applyThemeInternal(getCurrent(), { persist: true, keepMode: true, bump: true, announceAppearance: true });
+    state.theme.accentOverride = value ? normalizeHex(value) : null;
+    var now = Date.now();
+    state.themeUpdatedAt = now;
+    state.updatedAt = now;
+    applyThemeInternal(getEffectiveThemeId(), { persist: true, keepMode: true, bump: false, announceAppearance: true });
   }
 
   function importThemeJson(input) {
     var parsed = typeof input === 'string' ? JSON.parse(input) : input;
     var existingMap = {};
     Object.keys(themes).forEach(function (id) { existingMap[id] = true; });
-    state.customThemes.forEach(function (t) { existingMap[t.id] = true; });
+    state.theme.customThemes.forEach(function (t) { existingMap[t.id] = true; });
 
     var cleaned = sanitizeCustomThemeInput(parsed, existingMap);
     if (!cleaned) {
       throw new Error('无效的主题 JSON：需要提供 name 以及 terminal (background + foreground) 或 ui (--bg-primary + --text-primary)');
     }
-    if (state.customThemes.length >= MAX_CUSTOM_THEMES) {
+    if (state.theme.customThemes.length >= MAX_CUSTOM_THEMES) {
       throw new Error('最多保存 ' + MAX_CUSTOM_THEMES + ' 个自定义主题');
     }
-    state.customThemes.push(cleaned);
+    state.theme.customThemes.push(cleaned);
     rebuildCustomCaches();
-    state.themeMode = 'manual';
-    state.themeId = cleaned.id;
-    state.updatedAt = Date.now();
-    applyThemeInternal(cleaned.id, { persist: true, keepMode: true, bump: true, announceAppearance: true });
+    previewThemeId = null;
+    state.theme.mode = 'manual';
+    state.theme.themeId = cleaned.id;
+    var now = Date.now();
+    state.themeUpdatedAt = now;
+    state.updatedAt = now;
+    applyThemeInternal(cleaned.id, { persist: true, keepMode: true, bump: false, announceAppearance: true });
     return getThemeList().filter(function (item) { return item.id === cleaned.id; })[0];
   }
 
   function exportThemeJson(themeId) {
-    var entry = getCompiledTheme(themeId || getCurrent(), !themeId || themeId === getCurrent());
+    var currentId = getEffectiveThemeId();
+    var entry = getCompiledTheme(themeId || currentId, !themeId || themeId === currentId);
     return JSON.stringify({
       id: entry.id,
       name: entry.name,
@@ -1603,29 +1766,40 @@ var Theme = (function () {
   }
 
   function deleteCustomTheme(id) {
-    var next = state.customThemes.filter(function (t) { return t.id !== id; });
-    if (next.length === state.customThemes.length) return false;
-    state.customThemes = next;
+    var next = state.theme.customThemes.filter(function (t) { return t.id !== id; });
+    if (next.length === state.theme.customThemes.length) return false;
+    state.theme.customThemes = next;
     rebuildCustomCaches();
-    if (state.themeId === id) state.themeId = DEFAULT_THEME;
-    if (state.lightThemeId === id) state.lightThemeId = 'oyster';
-    if (state.darkThemeId === id) state.darkThemeId = DEFAULT_THEME;
-    state.updatedAt = Date.now();
-    applyThemeInternal(getCurrent(), { persist: true, keepMode: true, bump: true, announceAppearance: true });
+    if (state.theme.themeId === id) state.theme.themeId = DEFAULT_THEME;
+    if (state.theme.lightThemeId === id) state.theme.lightThemeId = 'oyster';
+    if (state.theme.darkThemeId === id) state.theme.darkThemeId = DEFAULT_THEME;
+    var now = Date.now();
+    state.themeUpdatedAt = now;
+    state.updatedAt = now;
+    applyThemeInternal(getCurrent(), { persist: true, keepMode: true, bump: false, announceAppearance: true });
     return true;
   }
 
   function resetAppearance() {
-    var customThemesBackup = state.customThemes;
-    state = defaultState();
-    state.customThemes = customThemesBackup;
-    state.updatedAt = Date.now();
+    var customThemesBackup = state.theme.customThemes;
+    var fresh = defaultState();
+    var now = Date.now();
+    var profile = getDeviceProfileKey();
+    state.theme = fresh.theme;
+    state.theme.customThemes = customThemesBackup;
+    state.terminal = fresh.terminal;
+    state.surfaces[profile] = defaultSurface(profile);
+    state.surfaces[profile].updatedAt = now;
+    state.themeUpdatedAt = now;
+    state.terminalUpdatedAt = now;
+    state.updatedAt = now;
+    previewThemeId = null;
     rebuildCustomCaches();
-    applyThemeInternal(getCurrent(), { persist: true, keepMode: true, bump: true, announceAppearance: true });
+    applyThemeInternal(getCurrent(), { persist: true, keepMode: true, bump: false, announceAppearance: true });
     if (supportsGlassIntensity()) applyNativeAppearance(hasRichNativeEngine());
     dispatchEventSafe('tmux-glass-change');
     dispatchEventSafe('tmux-transparency-change');
-    dispatchEventSafe('tmux-wallpaper-change');
+    dispatchEventSafe('tmux-wallpaper-change', { wallpaper: getWallpaper() });
     dispatchEventSafe('tmux-typography-change', { typography: getTerminalTypography() });
   }
 
@@ -1636,6 +1810,7 @@ var Theme = (function () {
   function restoreSnapshot(snap) {
     if (!snap || typeof snap !== 'object') return;
     state = sanitizeState(snap, defaultState());
+    previewThemeId = null;
     rebuildCustomCaches();
     persistLocal();
     applyThemeInternal(getCurrent(), { persist: false, announceAppearance: false });
@@ -1643,17 +1818,15 @@ var Theme = (function () {
     scheduleServerSave();
     dispatchEventSafe('tmux-glass-change');
     dispatchEventSafe('tmux-transparency-change');
-    dispatchEventSafe('tmux-wallpaper-change');
+    dispatchEventSafe('tmux-wallpaper-change', { wallpaper: getWallpaper() });
     dispatchEventSafe('tmux-typography-change', { typography: getTerminalTypography() });
     dispatchEventSafe('anymux-appearance-change');
   }
 
   function getTerminalTheme(themeId) {
-    var id = resolveThemeId(themeId || getCurrent());
-    var t = getCompiledTheme(id, !themeId || themeId === getCurrent()).terminal;
+    var id = resolveThemeId(themeId || getEffectiveThemeId());
+    var t = getCompiledTheme(id, !themeId || themeId === getEffectiveThemeId()).terminal;
     var copy = cloneObj(t);
-    // Only the page background carries alpha. Painting it again in xterm
-    // would stack the two backgrounds and make the terminal nearly opaque.
     if (isBackdropActive()) copy.background = 'rgba(0, 0, 0, 0)';
     return copy;
   }
@@ -1673,26 +1846,53 @@ var Theme = (function () {
       });
     }
     Object.keys(themes).forEach(function (id) { pushEntry(themes[id]); });
-    state.customThemes.forEach(function (ct) {
+    state.theme.customThemes.forEach(function (ct) {
       if (compiledCustomCache[ct.id]) pushEntry(compiledCustomCache[ct.id]);
     });
     return list;
   }
 
   function getName(themeId) {
-    return getRawThemeEntry(themeId || getCurrent()).name;
+    return getRawThemeEntry(themeId || getEffectiveThemeId()).name;
+  }
+
+  function getSurface() {
+    return cloneObj(activeSurface());
   }
 
   function getWallpaper() {
-    return cloneObj(state.wallpaper);
+    var surf = activeSurface();
+    var mode = 'none';
+    if (surf.mode === 'desktop') mode = 'desktop';
+    else if (surf.mode === 'wallpaper') mode = surf.wallpaperSource === 'custom' ? 'custom' : 'builtin';
+    return {
+      mode: mode,
+      id: surf.wallpaperId,
+      followTheme: surf.wallpaperSource === 'follow',
+      fit: surf.wallpaperFit,
+      brightness: surf.wallpaperBrightness,
+    };
   }
 
   function getGlass() {
-    return cloneObj(state.glass);
+    var surf = activeSurface();
+    return {
+      preset: surf.webPreset,
+      nativeEngine: surf.nativeEngine,
+      transparency: surf.transparency,
+      glassIntensity: surf.glassIntensity,
+      blurRadius: surf.blurRadius,
+      saturation: surf.saturation,
+      brightness: surf.brightness,
+      noiseOpacity: surf.noiseOpacity,
+      sidebarTint: surf.sidebarTint,
+      terminalTint: surf.terminalTint,
+      inactivePaneDim: state.terminal.inactivePaneDim,
+    };
   }
 
   function getTerminalTypography() {
-    return cloneObj(state.typography);
+    return cloneObj(state.terminal);
   }
 
   function getBuiltInWallpapers() {
@@ -1733,26 +1933,64 @@ var Theme = (function () {
         customWallpapers = data.customWallpapers.slice();
         rebuildCustomCaches();
       }
-      var remote = data.config;
-      if (remote && typeof remote === 'object') {
-        var remoteUpdated = Number(remote.updatedAt) || 0;
-        var localUpdated = Number(state.updatedAt) || 0;
-        if (remoteUpdated > localUpdated) {
-          state = sanitizeState(remote, state);
+      var rawRemote = data.config;
+      if (rawRemote && typeof rawRemote === 'object') {
+        var remote = sanitizeState(rawRemote, defaultState());
+        var activeProf = getDeviceProfileKey();
+        var themeChanged = false;
+        var termChanged = false;
+        var activeSurfChanged = false;
+        var pushNeeded = false;
+
+        if ((remote.themeUpdatedAt || 0) > (state.themeUpdatedAt || 0)) {
+          state.theme = JSON.parse(JSON.stringify(remote.theme));
+          state.themeUpdatedAt = remote.themeUpdatedAt;
+          themeChanged = true;
+        } else if ((state.themeUpdatedAt || 0) > (remote.themeUpdatedAt || 0)) {
+          pushNeeded = true;
+        }
+
+        if ((remote.terminalUpdatedAt || 0) > (state.terminalUpdatedAt || 0)) {
+          state.terminal = cloneObj(remote.terminal);
+          state.terminalUpdatedAt = remote.terminalUpdatedAt;
+          termChanged = true;
+        } else if ((state.terminalUpdatedAt || 0) > (remote.terminalUpdatedAt || 0)) {
+          pushNeeded = true;
+        }
+
+        var profiles = ['native', 'web', 'mobile'];
+        for (var i = 0; i < profiles.length; i++) {
+          var prof = profiles[i];
+          var rTs = remote.surfaces[prof].updatedAt || 0;
+          var lTs = state.surfaces[prof].updatedAt || 0;
+          if (rTs > lTs) {
+            state.surfaces[prof] = cloneObj(remote.surfaces[prof]);
+            if (prof === activeProf) activeSurfChanged = true;
+          } else if (lTs > rTs) {
+            pushNeeded = true;
+          }
+        }
+        state.updatedAt = Math.max(
+          state.themeUpdatedAt,
+          state.terminalUpdatedAt,
+          state.surfaces.native.updatedAt,
+          state.surfaces.web.updatedAt,
+          state.surfaces.mobile.updatedAt
+        );
+
+        if (themeChanged || termChanged || activeSurfChanged) {
           rebuildCustomCaches();
           persistLocal();
           applyThemeInternal(getCurrent(), { persist: false, announceAppearance: false });
           if (supportsGlassIntensity()) applyNativeAppearance(hasRichNativeEngine());
           dispatchEventSafe('tmux-glass-change');
           dispatchEventSafe('tmux-transparency-change');
-          dispatchEventSafe('tmux-wallpaper-change');
+          dispatchEventSafe('tmux-wallpaper-change', { wallpaper: getWallpaper() });
           dispatchEventSafe('tmux-typography-change', { typography: getTerminalTypography() });
           dispatchEventSafe('anymux-appearance-change');
-        } else if (localUpdated > remoteUpdated && localUpdated > 0) {
-          saveToServer();
         } else {
-          // Even if config timestamps tie, customWallpapers list may have refreshed
-          applyVisualBackdrop(getCurrent());
+          if (pushNeeded && state.updatedAt > 0) saveToServer();
+          applyVisualBackdrop(getEffectiveThemeId());
           dispatchEventSafe('anymux-appearance-change');
         }
       }
@@ -1784,7 +2022,7 @@ var Theme = (function () {
           rebuildCustomCaches();
         }
         if (payload.wallpaper && payload.wallpaper.id) {
-          setWallpaper({ mode: 'custom', id: payload.wallpaper.id });
+          setSurface({ mode: 'wallpaper', wallpaperSource: 'custom', wallpaperId: payload.wallpaper.id });
         }
         return payload.wallpaper;
       });
@@ -1801,8 +2039,9 @@ var Theme = (function () {
         customWallpapers = customWallpapers.filter(function (item) { return item.id !== id; });
         rebuildCustomCaches();
       }
-      if (state.wallpaper.mode === 'custom' && state.wallpaper.id === id) {
-        setWallpaper({ mode: 'none', id: null });
+      var surf = activeSurface();
+      if (surf.mode === 'wallpaper' && surf.wallpaperSource === 'custom' && surf.wallpaperId === id) {
+        setSurface({ mode: 'solid', wallpaperSource: 'follow', wallpaperId: null });
       } else {
         dispatchEventSafe('anymux-appearance-change');
       }
@@ -1811,15 +2050,14 @@ var Theme = (function () {
   }
 
   // Apply saved theme immediately on load without bumping updatedAt or pushing to server.
-  applyThemeInternal(getCurrent(), { persist: false, sync: false, notifyNative: false, syncLegacyKey: true });
+  applyThemeInternal(getCurrent(), { persist: false, sync: false, notifyNative: false });
   applyNativeAppearance(false);
 
-  // Listen to OS light/dark changes when themeMode === 'system'.
   if (typeof window.matchMedia === 'function') {
     try {
       systemSchemeMedia = window.matchMedia('(prefers-color-scheme: light)');
       var onSchemeChange = function () {
-        if (state.themeMode !== 'system') return;
+        if (state.theme.mode !== 'system' || previewThemeId !== null) return;
         applyThemeInternal(getCurrent(), { persist: false, sync: false, announceAppearance: true });
       };
       if (typeof systemSchemeMedia.addEventListener === 'function') {
@@ -1830,55 +2068,40 @@ var Theme = (function () {
     } catch (_e) {}
   }
 
-  // Cross-tab & pop-out terminal synchronization.
+  // Cross-tab synchronization listens ONLY to APPEARANCE_KEY so legacy keys never overwrite v3.
   window.addEventListener('storage', function (event) {
-    if (event.key === APPEARANCE_KEY || event.key === null) {
-      if (event.key === null) {
+    if (event.key !== APPEARANCE_KEY && event.key !== null) return;
+    if (event.key === null) {
+      state = defaultState();
+    } else {
+      try {
+        state = sanitizeState(JSON.parse(event.newValue || '{}'), defaultState());
+      } catch (_e) {
         state = defaultState();
-      } else {
-        try {
-          state = sanitizeState(JSON.parse(event.newValue || '{}'), defaultState());
-        } catch (_e) {
-          state = defaultState();
-        }
       }
-      rebuildCustomCaches();
-      applyThemeInternal(getCurrent(), { persist: false, sync: false, notifyNative: false });
-      if (supportsGlassIntensity()) applyNativeAppearance(false);
-      dispatchEventSafe('tmux-glass-change');
-      dispatchEventSafe('tmux-transparency-change');
-      dispatchEventSafe('tmux-wallpaper-change');
-      dispatchEventSafe('tmux-typography-change', { typography: getTerminalTypography() });
-      dispatchEventSafe('anymux-appearance-change');
-      return;
     }
-
-    if (!supportsTransparency()) return;
-    if (event.key === GLASS_KEY) {
-      state.glass.glassIntensity = event.newValue === null ? 100 : clampGlassIntensity(event.newValue);
-      applyNativeAppearance(false);
-      dispatchEventSafe('tmux-glass-change');
-    }
-    if (event.key === TRANSPARENCY_KEY) {
-      state.glass.transparency = clampTransparency(event.newValue);
-      if (state.glass.transparency > 0 && state.wallpaper.mode === 'none') {
-        state.wallpaper.mode = 'desktop';
-      } else if (state.glass.transparency === 0 && state.wallpaper.mode === 'desktop') {
-        state.wallpaper.mode = 'none';
-      }
-      applyVisualBackdrop(getCurrent());
-      if (hasRichNativeEngine()) applyNativeAppearance(false);
-      dispatchEventSafe('tmux-transparency-change');
-    }
-    if (event.key === STORAGE_KEY) {
-      state.themeId = resolveThemeId(event.newValue);
-      applyThemeInternal(getCurrent(), { persist: false, sync: false, syncLegacyKey: true });
-    }
+    previewThemeId = null;
+    rebuildCustomCaches();
+    applyThemeInternal(getCurrent(), { persist: false, sync: false, notifyNative: false });
+    if (supportsGlassIntensity()) applyNativeAppearance(false);
+    dispatchEventSafe('tmux-glass-change');
+    dispatchEventSafe('tmux-transparency-change');
+    dispatchEventSafe('tmux-wallpaper-change', { wallpaper: getWallpaper() });
+    dispatchEventSafe('tmux-typography-change', { typography: getTerminalTypography() });
+    dispatchEventSafe('anymux-appearance-change');
   });
+
+  function getWebPresets() {
+    return ['clear', 'mist', 'frosted'].map(function (id) {
+      return Object.assign({}, WEB_PRESETS[id]);
+    });
+  }
 
   return {
     getCurrent: getCurrent,
     apply: apply,
+    previewTheme: previewTheme,
+    clearPreview: clearPreview,
     getTerminalTheme: getTerminalTheme,
     getThemeList: getThemeList,
     getName: getName,
@@ -1890,13 +2113,16 @@ var Theme = (function () {
     setGlassIntensity: setGlassIntensity,
     supportsLiquidGlass: supportsLiquidGlass,
     supportsMaterialEngine: supportsMaterialEngine,
-    getThemeMode: function () { return state.themeMode; },
+    getDeviceProfileKey: getDeviceProfileKey,
+    getSurface: getSurface,
+    setSurface: setSurface,
+    getThemeMode: function () { return state.theme.mode; },
     setThemeMode: setThemeMode,
-    getLightThemeId: function () { return state.lightThemeId; },
+    getLightThemeId: function () { return state.theme.lightThemeId; },
     setLightThemeId: setLightThemeId,
-    getDarkThemeId: function () { return state.darkThemeId; },
+    getDarkThemeId: function () { return state.theme.darkThemeId; },
     setDarkThemeId: setDarkThemeId,
-    getAccentOverride: function () { return state.accentOverride; },
+    getAccentOverride: function () { return state.theme.accentOverride; },
     setAccentOverride: setAccentOverride,
     getAccentSwatches: function () { return ACCENT_SWATCHES.slice(); },
     importThemeJson: importThemeJson,
@@ -1912,12 +2138,10 @@ var Theme = (function () {
     isBackdropActive: isBackdropActive,
     getGlass: getGlass,
     setGlass: setGlass,
-    getGlassPresets: function () {
-      return ['solid', 'mist', 'frosted', 'liquid', 'clear-glass'].map(function (id) {
-        return Object.assign({}, GLASS_PRESETS[id]);
-      });
-    },
-    applyGlassPreset: applyGlassPreset,
+    getWebPresets: getWebPresets,
+    applyWebPreset: applyWebPreset,
+    getGlassPresets: getWebPresets,
+    applyGlassPreset: applyWebPreset,
     getTerminalTypography: getTerminalTypography,
     setTerminalTypography: setTerminalTypography,
     getSnapshot: getSnapshot,

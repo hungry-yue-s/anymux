@@ -13,7 +13,7 @@ const indexSource = composedIndex();
 
 let dom;
 
-function loadTheme(themeId, { native = false, transparency, legacyNative = false, glass, appearance = false } = {}) {
+function loadTheme(themeId, { native = false, transparency, legacyNative = false, glass, appearance = false, engine, liquid = false, mobile = false } = {}) {
   dom = new JSDOM('<!doctype html><html><body></body></html>', {
     runScripts: 'outside-only',
     url: 'https://anymux.test/',
@@ -25,6 +25,9 @@ function loadTheme(themeId, { native = false, transparency, legacyNative = false
     messageHandlers: { anymuxAppearance: { postMessage: vi.fn() } },
   };
   if (native) dom.window.__anymuxTransparency = true;
+  if (engine) dom.window.__anymuxGlassEngine = engine;
+  if (liquid) dom.window.__anymuxLiquidGlass = true;
+  if (mobile) dom.window.MobileUI = { isMobile: () => true };
   if (legacyNative) dom.window.document.documentElement.classList.add('tmux-native-shell');
   dom.window.eval(themeSource);
   return dom.window.Theme;
@@ -78,19 +81,21 @@ describe('extended terminal themes', () => {
     ['tokyo-night-storm', 'tokyo-night'], ['catppuccin-mocha', 'prism'],
     ['catppuccin-mocha-pastel', 'prism'], ['rose-pine-moon', 'prism'],
     ['dracula', 'prism'], ['one-dark', 'graphite'], ['solarized-dark', 'deep-current'],
-  ])('migrates retired %s to %s for saved and explicit choices', (oldId, newId) => {
+  ])('migrates retired %s to %s one-way without legacy key back-overwrite', (oldId, newId) => {
     const Theme = loadTheme(oldId, { native: true, transparency: '25', glass: '65', appearance: true });
     expect(Theme.getCurrent()).toBe(newId);
-    expect(dom.window.localStorage.getItem('tmux_theme')).toBe(newId);
     expect(Theme.getThemeList().some((theme) => theme.id === oldId)).toBe(false);
     expect(Theme.getTerminalTheme(oldId)).toEqual(Theme.getTerminalTheme(newId));
     expect(Theme.getName(oldId)).toBe(Theme.getName(newId));
     expect([Theme.getTransparency(), Theme.getGlassIntensity()]).toEqual([25, 65]);
+
+    // Applying a new theme writes ONLY anymux_appearance_v3; legacy keys must not overwrite v3.
     Theme.apply('github-light');
+    expect(dom.window.localStorage.getItem('anymux_appearance_v3')).toContain('github-light');
     storageChange('tmux_theme', oldId);
-    expect(Theme.getCurrent()).toBe(newId);
-    expect(dom.window.document.documentElement.getAttribute('data-theme')).toBe(newId);
-    expect(dom.window.localStorage.getItem('tmux_theme')).toBe(newId);
+    storageChange('tmux_native_transparency', '10');
+    expect(Theme.getCurrent()).toBe('github-light');
+    expect(Theme.getTransparency()).toBe(25);
   });
 
   it.each(['unknown-theme', '__proto__', 'toString'])('safely falls back for invalid saved theme %s', (id) => {
@@ -263,17 +268,17 @@ describe('workbench semantic palettes', () => {
   });
 });
 
-describe('native glass intensity', () => {
-  it('only exposes the control on clients with the native appearance bridge', () => {
+describe('native glass & surface transparency', () => {
+  it('only exposes the system glass intensity control on legacy system engine in desktop mode', () => {
     const Theme = loadTheme(null, { native: true, glass: '35' });
     renderSettings();
     Theme.setGlassIntensity(0);
     expect(Theme.supportsGlassIntensity()).toBe(false);
     expect(dom.window.document.getElementById('native-glass-intensity')).toBeNull();
-    expect(dom.window.localStorage.getItem('tmux_native_glass_intensity')).toBe('35');
+    expect(dom.window.document.getElementById('surface-glassIntensity')).toBeNull();
   });
 
-  it('preserves the current material by default and bounds values before sending them to native', () => {
+  it('bounds native glass intensity values before sending them to native', () => {
     const Theme = loadTheme(null, { native: true, appearance: true });
     const send = dom.window.webkit.messageHandlers.anymuxAppearance.postMessage;
     expect(Theme.getGlassIntensity()).toBe(100);
@@ -282,37 +287,31 @@ describe('native glass intensity', () => {
       Theme.setGlassIntensity(value);
       expect(Theme.getGlassIntensity()).toBe(expected);
       expect(send).toHaveBeenLastCalledWith({ glassIntensity: expected });
-      expect(dom.window.localStorage.getItem('tmux_native_glass_intensity')).toBe(String(expected));
     }
   });
 
-  it('restores, applies and synchronizes an independent accessible glass slider', () => {
+  it('renders unified system-engine controls in desktop mode without duplicate legacy blocks', () => {
     const Theme = loadTheme(null, { native: true, appearance: true, glass: '65', transparency: '40' });
+    Theme.setSurface({ mode: 'desktop', nativeEngine: 'system', transparency: 40, glassIntensity: 65 });
     renderSettings();
     dom.window.eval(msAppSource);
     dom.window.MsApp._bindEvents();
-    const slider = dom.window.document.getElementById('native-glass-intensity');
-    const output = dom.window.document.getElementById('native-glass-intensity-value');
+    expect(dom.window.document.getElementById('native-transparency')).toBeNull();
+    expect(dom.window.document.getElementById('native-glass-intensity')).toBeNull();
+
+    const transSlider = dom.window.document.getElementById('surface-transparency');
+    const glassSlider = dom.window.document.getElementById('surface-glassIntensity');
+    const glassOutput = dom.window.document.getElementById('surface-glassIntensity-value');
     const send = dom.window.webkit.messageHandlers.anymuxAppearance.postMessage;
-    expect(slider.labels[0].textContent).toBe('毛玻璃强度');
-    expect([slider.type, slider.min, slider.max, slider.value]).toEqual(['range', '0', '100', '65']);
-    expect(send).toHaveBeenLastCalledWith({ glassIntensity: 65 });
 
-    slider.value = '25';
-    slider.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
-    expect(output.textContent).toBe('25%');
-    expect(send).toHaveBeenLastCalledWith({ glassIntensity: 25 });
+    expect([transSlider.min, transSlider.max, transSlider.value]).toEqual(['0', '50', '40']);
+    expect([glassSlider.min, glassSlider.max, glassSlider.value]).toEqual(['0', '100', '65']);
+
+    glassSlider.value = '25';
+    glassSlider.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    expect(glassOutput.textContent).toBe('25%');
+    expect(send).toHaveBeenLastCalledWith(expect.objectContaining({ glassIntensity: 25, mode: 'desktop', engine: 'system' }));
     expect(Theme.getTransparency()).toBe(40);
-
-    storageChange('tmux_native_glass_intensity', '80');
-    expect(slider.value).toBe('80');
-    expect(output.textContent).toBe('80%');
-    expect(send).toHaveBeenLastCalledWith({ glassIntensity: 80 });
-    Theme.apply('github-light');
-    expect(Theme.getGlassIntensity()).toBe(80);
-    storageChange('tmux_native_glass_intensity', null);
-    expect(slider.value).toBe('100');
-    expect(send).toHaveBeenLastCalledWith({ glassIntensity: 100 });
   });
 });
 
@@ -323,18 +322,15 @@ describe('native window transparency', () => {
     renderSettings();
 
     Theme.setTransparency(50);
-    expect(dom.window.localStorage.getItem('tmux_native_transparency')).toBe('35');
-    storageChange('tmux_native_transparency', '40');
-
     expect(Theme.supportsTransparency()).toBe(false);
     expect(Theme.getTransparency()).toBe(0);
     expect(Theme.getTerminalTheme().background).toBe('#191923');
     expect(root.hasAttribute('data-native-transparency')).toBe(false);
-    expect(dom.window.document.getElementById('native-transparency')).toBeNull();
-    expect(dom.window.localStorage.getItem('tmux_native_transparency')).toBe('40');
+    expect(dom.window.document.getElementById('surface-transparency')).toBeNull();
+    expect(dom.window.document.querySelector('[data-action="set-surface-mode"][data-mode="desktop"]')).toBeNull();
   });
 
-  it('defaults to opaque and persists only a bounded integer percentage', () => {
+  it('defaults to opaque and persists only a bounded integer percentage in anymux_appearance_v3', () => {
     const Theme = loadTheme(null, { native: true });
     const changed = vi.fn();
     dom.window.document.addEventListener('tmux-transparency-change', changed);
@@ -344,7 +340,7 @@ describe('native window transparency', () => {
     for (const [input, expected] of [[27.6, 28], [90, 50], [-10, 0], ['invalid', 0]]) {
       Theme.setTransparency(input);
       expect(Theme.getTransparency()).toBe(expected);
-      expect(dom.window.localStorage.getItem('tmux_native_transparency')).toBe(String(expected));
+      expect(JSON.parse(dom.window.localStorage.getItem('anymux_appearance_v3')).surfaces.native.transparency).toBe(expected);
       expect(dom.window.document.documentElement.hasAttribute('data-native-transparency')).toBe(expected > 0);
     }
     expect(changed).toHaveBeenCalledTimes(4);
@@ -369,7 +365,7 @@ describe('native window transparency', () => {
     expect(root.hasAttribute('data-native-transparency')).toBe(false);
   });
 
-  it('updates mounted terminals when preferences change locally or in another window', () => {
+  it('updates mounted terminals when preferences change locally or via cross-tab v3 storage', () => {
     const Theme = loadTheme(null, { native: true });
     dom.window.eval(terminalSource);
     const term = { options: { theme: Theme.getTerminalTheme() } };
@@ -378,47 +374,39 @@ describe('native window transparency', () => {
     Theme.setTransparency(30);
     expect(term.options.theme.background).toBe('rgba(0, 0, 0, 0)');
 
-    storageChange('tmux_theme', 'prism');
+    const snap = Theme.getSnapshot();
+    snap.theme.themeId = 'prism';
+    snap.surfaces.native.transparency = 15;
+    storageChange('anymux_appearance_v3', JSON.stringify(snap));
     expect(dom.window.document.documentElement.getAttribute('data-theme')).toBe('prism');
     expect(term.options.theme.foreground).toBe('#e8e5f2');
-    expect(term.options.theme.background).toBe('rgba(0, 0, 0, 0)');
-
-    storageChange('tmux_native_transparency', '15');
     expect(Theme.getTransparency()).toBe(15);
     expect(dom.window.document.documentElement.style.getPropertyValue('--native-window-background'))
       .toBe('rgba(25, 25, 35, 0.85)');
-
-    storageChange('tmux_native_transparency', null);
-    expect(term.options.theme.background).toBe('#191923');
 
     storageChange(null, null);
     expect(Theme.getTransparency()).toBe(0);
     expect(term.options.theme.background).toBe('#1a1b26');
   });
 
-  it('renders an accessible native slider and applies delegated input immediately', () => {
-    const Theme = loadTheme(null, { native: true, transparency: '20' });
+  it('renders an accessible native transparency slider under desktop mode and applies input immediately', () => {
+    const Theme = loadTheme(null, { native: true, transparency: '20', engine: 'material', appearance: true });
     renderSettings();
     dom.window.eval(msAppSource);
     dom.window.MsApp._bindEvents();
-    const slider = dom.window.document.getElementById('native-transparency');
-    const output = dom.window.document.getElementById('native-transparency-value');
+    const slider = dom.window.document.getElementById('surface-transparency');
+    const output = dom.window.document.getElementById('surface-transparency-value');
 
     expect(slider.type).toBe('range');
     expect([slider.min, slider.max, slider.step, slider.value]).toEqual(['0', '50', '1', '20']);
-    expect(slider.labels[0].textContent).toBe('背景透明度');
+    expect(slider.labels[0].textContent).toBe('窗口透明度');
     expect(output.textContent).toBe('20%');
-
-    storageChange('tmux_native_transparency', '40');
-    expect(slider.value).toBe('40');
-    expect(output.textContent).toBe('40%');
 
     slider.value = '35';
     slider.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
 
     expect(Theme.getTransparency()).toBe(35);
     expect(output.textContent).toBe('35%');
-    expect(dom.window.localStorage.getItem('tmux_native_transparency')).toBe('35');
     expect(dom.window.document.documentElement.hasAttribute('data-native-transparency')).toBe(true);
   });
 
@@ -543,7 +531,7 @@ describe('wallpapers, glass engine, auto scheme, custom themes & typography', ()
       colorScheme: 'dark',
     }));
 
-    Theme.applyGlassPreset('liquid');
+    Theme.setSurface({ mode: 'desktop', nativeEngine: 'liquid-regular', transparency: 38, blurRadius: 34, saturation: 155 });
     expect(Theme.getWallpaper().mode).toBe('desktop');
     expect(Theme.getGlass().nativeEngine).toBe('liquid-regular');
     expect(Theme.getTransparency()).toBe(38);
@@ -552,7 +540,6 @@ describe('wallpapers, glass engine, auto scheme, custom themes & typography', ()
       engine: 'liquid-regular',
       blurRadius: 34,
       saturation: 1.55,
-      glassIntensity: 95,
     }));
 
     Theme.setGlass({ blurRadius: 40, noiseOpacity: 12, inactivePaneDim: 30 });
@@ -560,6 +547,68 @@ describe('wallpapers, glass engine, auto scheme, custom themes & typography', ()
     expect(root.style.getPropertyValue('--anymux-wp-blur')).toBe('40px');
     expect(root.style.getPropertyValue('--anymux-wp-noise-opacity')).toBe('0.120');
     expect(root.style.getPropertyValue('--anymux-pane-inactive-dim')).toBe('30%');
+  });
+
+  it('renders contextual zero-dead-control UI per surface mode, isolates 3 device slots, and supports zero-write preview', async () => {
+    const Theme = loadTheme('tokyo-night');
+    renderSettings();
+
+    // Default mode is solid -> NO wallpaper grid, NO presets, NO blur sliders!
+    expect(dom.window.document.getElementById('appearance-live-preview')).not.toBeNull();
+    expect(dom.window.document.querySelector('.wallpaper-grid')).toBeNull();
+    expect(dom.window.document.querySelector('.glass-preset-chip')).toBeNull();
+    expect(dom.window.document.getElementById('surface-blurRadius')).toBeNull();
+    // Card 3 inline vs collapsed details
+    expect(dom.window.document.getElementById('typo-fontSize')).not.toBeNull();
+    const termFine = dom.window.document.querySelector('[data-disclosure="terminal-fine"]');
+    expect(termFine.open).toBe(false);
+    expect(dom.window.document.getElementById('typo-inactivePaneDim')).not.toBeNull();
+
+    // Switch to wallpaper mode -> renders follow-theme + 12 built-ins + 3 Web presets + collapsed fine controls
+    Theme.setSurface({ mode: 'wallpaper' });
+    renderSettings();
+    expect(dom.window.document.querySelectorAll('.wallpaper-card').length).toBe(13);
+    expect(dom.window.document.querySelectorAll('.glass-preset-chip').length).toBe(3);
+    expect(dom.window.document.getElementById('surface-transparency')).toBeNull();
+    // Apply Web preset must NOT remove wallpaper
+    Theme.applyWebPreset('mist');
+    expect(Theme.getSurface().mode).toBe('wallpaper');
+    expect(Theme.getSurface().webPreset).toBe('mist');
+    expect(Theme.getSurface().blurRadius).toBe(14);
+
+    // Zero-side-effect previewTheme / clearPreview preserves system mode & does not persist
+    Theme.setLightThemeId('oyster');
+    Theme.setDarkThemeId('tokyo-night');
+    Theme.setThemeMode('system');
+    const savedBefore = dom.window.localStorage.getItem('anymux_appearance_v3');
+    Theme.previewTheme('github-light');
+    expect(dom.window.document.documentElement.getAttribute('data-theme')).toBe('github-light');
+    expect(Theme.getThemeMode()).toBe('system');
+    expect(dom.window.localStorage.getItem('anymux_appearance_v3')).toBe(savedBefore);
+    Theme.clearPreview();
+    expect(dom.window.document.documentElement.getAttribute('data-theme')).toBe('tokyo-night');
+
+    // Syncing a remote config with desktop mode on native does NOT clobber web slot
+    const snap = Theme.getSnapshot();
+    snap.themeUpdatedAt = Date.now() + 60000;
+    snap.theme.mode = 'manual';
+    snap.theme.themeId = 'nord';
+    snap.surfaces.native.updatedAt = Date.now() + 60000;
+    snap.surfaces.native.mode = 'desktop';
+    snap.surfaces.native.transparency = 35;
+    snap.surfaces.web.updatedAt = Date.now() + 60000;
+    snap.surfaces.web.mode = 'wallpaper';
+    snap.surfaces.web.wallpaperSource = 'builtin';
+    snap.surfaces.web.wallpaperId = 'nord-fjord';
+    dom.window.Api = {
+      get: vi.fn(async () => ({ config: snap, customWallpapers: [] })),
+      put: vi.fn(async () => ({})),
+    };
+    await Theme.syncFromServer();
+    expect(Theme.getCurrent()).toBe('nord');
+    expect(Theme.getDeviceProfileKey()).toBe('web');
+    expect(Theme.getSurface().mode).toBe('wallpaper');
+    expect(Theme.getSurface().wallpaperId).toBe('nord-fjord');
   });
 
   it('switches automatically between light and dark themes when system color scheme changes', () => {
@@ -627,15 +676,18 @@ describe('wallpapers, glass engine, auto scheme, custom themes & typography', ()
       cursorStyle: 'bar',
       cursorBlink: false,
       panePadding: 10,
+      inactivePaneDim: 18,
     });
     expect(dom.window.document.documentElement.style.getPropertyValue('--terminal-pane-padding')).toBe('10px');
 
-    const remoteConfig = {
-      ...Theme.getSnapshot(),
-      updatedAt: Date.now() + 60000,
-      themeId: 'nord',
-      wallpaper: { mode: 'builtin', id: null, followTheme: true, fit: 'cover', brightness: 92 },
-    };
+    const remoteConfig = Theme.getSnapshot();
+    remoteConfig.updatedAt = Date.now() + 60000;
+    remoteConfig.themeUpdatedAt = remoteConfig.updatedAt;
+    remoteConfig.theme.themeId = 'nord';
+    remoteConfig.surfaces.web.updatedAt = remoteConfig.updatedAt;
+    remoteConfig.surfaces.web.mode = 'wallpaper';
+    remoteConfig.surfaces.web.wallpaperSource = 'follow';
+    remoteConfig.surfaces.web.wallpaperBrightness = 92;
     dom.window.Api = {
       get: vi.fn(async () => ({ config: remoteConfig, customWallpapers: [] })),
       put: vi.fn(async () => ({})),
@@ -645,8 +697,8 @@ describe('wallpapers, glass engine, auto scheme, custom themes & typography', ()
     expect(Theme.getWallpaper().mode).toBe('builtin');
 
     renderSettings();
-    expect(dom.window.document.querySelectorAll('.wallpaper-card').length).toBeGreaterThanOrEqual(14);
-    expect(dom.window.document.querySelectorAll('.glass-preset-chip').length).toBeGreaterThanOrEqual(4);
+    expect(dom.window.document.querySelectorAll('.wallpaper-card').length).toBeGreaterThanOrEqual(13);
+    expect(dom.window.document.querySelectorAll('.glass-preset-chip').length).toBe(3);
     expect(dom.window.document.getElementById('typo-fontSize')).not.toBeNull();
   });
 });

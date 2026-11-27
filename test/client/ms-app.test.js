@@ -2059,6 +2059,7 @@ describe('MsApp settings interactions', () => {
 
   it('persists monitor page toggles and locks the final enabled page', async () => {
     const ctx = loadStatusShell({ theme: fakeTheme('tokyo') });
+    ctx.win.ServersPage.settingsSection = 'workspace';
     ctx.win.location.hash = '#/settings';
     await ctx.MsApp._onRoute({ name: 'settings', params: {} });
 

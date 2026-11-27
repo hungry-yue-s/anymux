@@ -599,11 +599,13 @@ export class SeamWindowSession {
     onState = () => {},
     onTitle = () => {},
     onFontSize = () => {},
+    onFontDelta = () => {},
     onContext = () => {},
     onAction = () => {},
     onStickyModifierChange = () => {},
     visible = true,
     fontSize,
+    fontDelta,
   }) {
     this.global = global;
     this.container = container;
@@ -613,6 +615,7 @@ export class SeamWindowSession {
     this.onState = onState;
     this.onTitle = onTitle;
     this.onFontSize = onFontSize;
+    this.onFontDelta = onFontDelta;
     this.onContext = onContext;
     this.onAction = onAction;
     this.onStickyModifierChange = typeof onStickyModifierChange === 'function' ? onStickyModifierChange : () => {};
@@ -664,7 +667,11 @@ export class SeamWindowSession {
     const mobile = !!global.MobileUI?.isMobile();
     const typo = global.Theme?.getTerminalTypography?.() || {};
     this._lastMobileMode = mobile;
-    this.fontSize = Math.max(mobile ? 11 : 8, Math.min(22, fontSize || typo.fontSize || (mobile ? 13 : 14)));
+    const baseFont = typo.fontSize || (mobile ? 13 : 14);
+    this.fontDelta = Number.isFinite(fontDelta)
+      ? Math.max(-8, Math.min(8, Math.round(fontDelta)))
+      : (Number.isFinite(fontSize) ? Math.max(-8, Math.min(8, Math.round(fontSize) - baseFont)) : 0);
+    this.fontSize = Math.max(mobile ? 11 : 8, Math.min(22, Number.isFinite(fontDelta) ? (baseFont + this.fontDelta) : (fontSize || baseFont)));
     this.lineHeight = typo.lineHeight || 1.2;
     this.cursorStyle = typo.cursorStyle || 'block';
     this.cursorBlink = typo.cursorBlink !== false;
@@ -720,7 +727,8 @@ export class SeamWindowSession {
       const next = global.Theme?.getTerminalTypography?.();
       if (!next) return;
       const mobile = this._isMobile();
-      this.fontSize = Math.max(mobile ? 11 : 8, Math.min(22, next.fontSize || this.fontSize));
+      const baseFont = next.fontSize || (mobile ? 13 : 14);
+      this.fontSize = Math.max(mobile ? 11 : 8, Math.min(22, baseFont + (this.fontDelta || 0)));
       this.lineHeight = next.lineHeight || 1.2;
       this.cursorStyle = next.cursorStyle || 'block';
       this.cursorBlink = next.cursorBlink !== false;
@@ -732,14 +740,20 @@ export class SeamWindowSession {
         pane.term.clearTextureAtlas?.();
       }
       this._syncInputGates();
-      this.onFontSize(this.fontSize);
       this._resetResizeGuard();
       this.fit();
+    };
+    const resetFontDelta = () => {
+      if (this.disposed) return;
+      this.fontDelta = 0;
+      this.onFontDelta(0);
+      typographySync();
     };
     this._listen(doc, 'tmux-theme-change', themeSync);
     this._listen(doc, 'tmux-transparency-change', themeSync);
     this._listen(doc, 'tmux-wallpaper-change', themeSync);
     this._listen(doc, 'tmux-typography-change', typographySync);
+    this._listen(doc, 'anymux-reset-font-offsets', resetFontDelta);
 
     this._bindStageMenus();
 
@@ -3440,12 +3454,17 @@ export class SeamWindowSession {
 
   setFontSize(size) {
     if (this.disposed) return;
-    this.fontSize = Math.max(this.global.MobileUI?.isMobile() ? 11 : 8, Math.min(22, size));
+    const mobile = !!this.global.MobileUI?.isMobile();
+    const nextSize = Math.max(mobile ? 11 : 8, Math.min(22, Math.round(size)));
+    const baseFont = this.global.Theme?.getTerminalTypography?.()?.fontSize || (mobile ? 13 : 14);
+    this.fontDelta = Math.max(-8, Math.min(8, nextSize - baseFont));
+    this.fontSize = nextSize;
     for (const pane of this.panes.values()) {
       if (!pane.term) continue;
       pane.term.options.fontSize = this.fontSize;
       pane.term.clearTextureAtlas?.();
     }
+    this.onFontDelta(this.fontDelta);
     this.onFontSize(this.fontSize);
     this._resetResizeGuard();
     this.fit();

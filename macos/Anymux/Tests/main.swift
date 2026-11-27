@@ -160,11 +160,20 @@ private func testNativeAppearanceConfig() throws {
     try expect(rich.glassIntensity == 100.0, "intensity should clamp to 100")
     try expect(rich.engine == .liquidClear, "liquid-clear engine should parse")
     try expect(rich.blurRadius == 60.0, "blurRadius should clamp to 60")
+    try expect(rich.effectiveBlurRadius == 60.0, "effectiveBlurRadius should track blurRadius directly")
     try expect(rich.saturation == 2.2, "saturation should clamp to 2.2")
     try expect(rich.brightness == -0.3, "brightness should clamp to -0.3")
     try expect(rich.tintHex == "#7aa2f7", "tintHex should normalize lowercase")
     try expect(rich.tintAlpha == 1.0, "tintAlpha should clamp to 1.0")
     try expect(rich.isLight == true, "light colorScheme should parse")
+
+    let materialDirect = NativeAppearanceConfig(messageBody: [
+        "mode": "desktop",
+        "engine": "material",
+        "blurRadius": 28.0,
+        "glassIntensity": 25.0,
+    ])
+    try expect(materialDirect.effectiveBlurRadius == 28.0, "material blurRadius must not be multiplied by glassIntensity")
 
     let invalid = NativeAppearanceConfig(messageBody: [
         "mode": "evil",

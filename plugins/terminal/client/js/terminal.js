@@ -332,6 +332,11 @@ document.addEventListener('tmux-theme-change', _updateTerminalTheme);
 document.addEventListener('tmux-transparency-change', _updateTerminalTheme);
 document.addEventListener('tmux-wallpaper-change', _updateTerminalTheme);
 document.addEventListener('tmux-typography-change', _updateTerminalTypography);
+document.addEventListener('anymux-reset-font-offsets', function () {
+  _fontOffsets = {};
+  _saveFontOffsets();
+  _updateTerminalTypography();
+});
 
 /** The element the terminal is mounted in, while it is still in the page. */
 function _terminalContainer() {
@@ -650,9 +655,10 @@ function _adjustFontSize(dir) {
   if (!terminalState.term || !terminalState.fitAddon) return;
   var current = terminalState.term.options.fontSize || 14;
   var mobile = _isMobileTerminal();
+  var baseDesktop = (typeof Theme !== 'undefined' && Theme.getTerminalTypography && Theme.getTerminalTypography().fontSize) || DESKTOP_BASE_FONT_SIZE;
   var next = Math.max(mobile ? MOBILE_MIN_FONT_SIZE : 8, Math.min(22, current + dir));
   if (next === current) return;
-  _setFontOffset(next - (mobile ? MOBILE_BASE_FONT_SIZE : DESKTOP_BASE_FONT_SIZE));
+  _setFontOffset(next - (mobile ? MOBILE_BASE_FONT_SIZE : baseDesktop));
   _applyLateCoreFont(terminalState.term);
   terminalState.term.options.fontSize = next;
   terminalState.fitAddon.fit();

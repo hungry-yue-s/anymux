@@ -33,7 +33,7 @@ struct NativeAppearanceConfig: Sendable, Equatable {
     )
 
     var effectiveBlurRadius: Double {
-        max(0.0, min(60.0, blurRadius * (glassIntensity / 100.0)))
+        max(0.0, min(60.0, blurRadius))
     }
 
     init(
@@ -63,7 +63,7 @@ struct NativeAppearanceConfig: Sendable, Equatable {
         let clampedIntensity = Self.clamp(rawIntensity, min: 0.0, max: 100.0, fallback: fallback.glassIntensity)
 
         let rawMode = (body["mode"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let allowedModes: Set<String> = ["desktop", "none", "builtin", "custom"]
+        let allowedModes: Set<String> = ["desktop", "none", "solid", "wallpaper", "builtin", "custom"]
         let resolvedMode: String
         if let rawMode, allowedModes.contains(rawMode) {
             resolvedMode = rawMode

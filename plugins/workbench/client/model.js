@@ -21,6 +21,7 @@ function cleanView(raw) {
   if (text(raw.create?.cwd, 4096)) create.cwd = raw.create.cwd;
   return { version: VERSION, id: raw.id, title: text(raw.title, 120) ? raw.title : '工作台', serverId: raw.serverId,
     instanceId: raw.instanceId, sessionId: raw.sessionId, windowId: raw.windowId || null, clientId: raw.clientId, requestId: raw.requestId, create,
+    ...(Number.isFinite(raw.fontDelta) ? { fontDelta: Math.max(-8, Math.min(8, Math.round(raw.fontDelta))) } : {}),
     ...(Number.isFinite(raw.fontSize) ? { fontSize: Math.max(8, Math.min(22, Math.round(raw.fontSize))) } : {}), updatedAt: Number(raw.updatedAt) || Date.now() };
 }
 export function createViewStore(storage, scope = 'local') {
