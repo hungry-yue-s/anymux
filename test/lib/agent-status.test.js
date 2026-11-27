@@ -418,10 +418,12 @@ describe('agent-status core detection and fusion', () => {
         },
       ],
       fusedPanes,
+      serverInstance: '18130:1795755662',
       updatedAt: 500,
     });
 
     expect(snapshot.hasAgents).toBe(true);
+    expect(snapshot.serverInstance).toBe('18130:1795755662');
     expect(snapshot.windows['@1']).toMatchObject({
       status: 'permission',
       appKind: 'codex',

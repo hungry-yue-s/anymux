@@ -494,6 +494,7 @@ describe('StatusMonitor', () => {
       const store = recordingStore();
       const agentEvents = new AgentEventService({ notificationStore: store, now: () => now });
       const onServerRestart = vi.fn();
+      const onServerInstance = vi.fn();
       const snapshotServerState = vi.fn();
       monitor = new StatusMonitor({
         notificationStore: store,
@@ -501,6 +502,7 @@ describe('StatusMonitor', () => {
         scanProcesses: async () => new Map(),
         snapshotServerState,
         onServerRestart,
+        onServerInstance,
       });
 
       const snapServer = (instance, windows, panes) => ({
@@ -523,6 +525,8 @@ describe('StatusMonitor', () => {
       agentEvents.ingest({ agent: 'antigravity', event: 'Stop', paneId: '%12', tmuxServerPid: '1000', prompt: '再看一下现在的情况' });
 
       await monitor.poll();
+      expect(onServerInstance).toHaveBeenCalledWith('1000:1700000000');
+      expect(monitor.getAgentStatus().serverInstance).toBe('1000:1700000000');
       expect(monitor.getAgentStatus().panes['%11']).toMatchObject({ status: 'working', label: '要' });
       expect(monitor.getAgentStatus().panes['%12']).toMatchObject({ status: 'done', label: '再看一下现在的情况' });
 
@@ -540,11 +544,13 @@ describe('StatusMonitor', () => {
       ));
 
       await monitor.poll();
+      expect(onServerInstance).toHaveBeenLastCalledWith('2000:1700000500');
       expect(onServerRestart).toHaveBeenCalledWith({
         prevInstance: '1000:1700000000',
         nextInstance: '2000:1700000500',
       });
       expect(tmux.ensurePaneBorderConfig).toHaveBeenCalledTimes(2);
+      expect(monitor.getAgentStatus().serverInstance).toBe('2000:1700000500');
       expect(monitor.getAgentStatus().panes).toEqual({});
       expect(monitor.getAgentStatus().hasAgents).toBe(false);
       expect(agentEvents.getPaneState('%11')).toBeNull();

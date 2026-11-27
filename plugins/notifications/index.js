@@ -16,6 +16,12 @@ export function apply(ctx) {
     store.startReaper();
     return () => store.stopReaper();
   }, 'notifications.reaper');
+  ctx.on('status/tmux-instance', (instanceId) => {
+    if (instanceId) store.invalidateForServer(instanceId);
+  });
+  ctx.on('status/tmux-restarted', (info) => {
+    if (info?.nextInstance) store.invalidateForServer(info.nextInstance);
+  });
   ctx.http.mount('/api/notifications', createNotificationsRouter(store));
   ctx.provide('notifications', store);
   // The front end, where there are pages at all.

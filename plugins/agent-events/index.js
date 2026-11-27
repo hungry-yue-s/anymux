@@ -6,7 +6,7 @@
 
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { AgentEventService } from '../../lib/agent-events.js';
+import { AgentEventService, extractTmuxServerPid } from '../../lib/agent-events.js';
 import { createAgentEventsRouter } from '../../lib/api/agent-events.js';
 import { canonicalAgentType, isSafeAgentSessionId } from '../../lib/session-protection/catalog.js';
 
@@ -15,6 +15,38 @@ const execFileAsync = promisify(execFile);
 export const name = 'agent-events';
 
 export const inject = ['http'];
+
+export function createTmuxEventValidator({ getTmux, now = () => Date.now(), cacheTtlMs = 2000 } = {}) {
+  let cachedInstance = null;
+  let cachedAt = 0;
+
+  return {
+    invalidate() {
+      cachedInstance = null;
+      cachedAt = 0;
+    },
+    async validate(body) {
+      const incomingPid = extractTmuxServerPid(body);
+      const tmux = typeof getTmux === 'function' ? getTmux() : null;
+      if (!tmux || typeof tmux.getServerInstance !== 'function') {
+        return { ignore: false, patch: null };
+      }
+      const currentNow = now();
+      const cachedPid = cachedInstance ? cachedInstance.split(':')[0] : '';
+      const staleCache = !cachedInstance || (currentNow - cachedAt >= cacheTtlMs);
+      const pidMismatch = Boolean(incomingPid && cachedPid && incomingPid !== cachedPid);
+      if (staleCache || pidMismatch) {
+        cachedInstance = await tmux.getServerInstance().catch(() => null);
+        cachedAt = now();
+      }
+      const livePid = cachedInstance ? cachedInstance.split(':')[0] : '';
+      if (incomingPid && (!livePid || incomingPid !== livePid)) {
+        return { ignore: true, reason: 'tmux_server_mismatch' };
+      }
+      return { ignore: false, patch: cachedInstance ? { serverInstance: cachedInstance } : null };
+    },
+  };
+}
 
 export async function syncPaneAgentBinding(tmux, event, boundMap = null) {
   if (!tmux || typeof tmux.run !== 'function' || !event?.paneId || !/^%\d+$/.test(String(event.paneId))) {
@@ -67,10 +99,15 @@ export function apply(ctx, options = {}) {
   const inspectWorktree = options.inspectDirtyWorktree || inspectDirtyWorktree;
   let activeTmux = options.tmux || null;
   const boundPaneAgents = new Map();
+  const validator = createTmuxEventValidator({ getTmux: () => activeTmux });
   ctx.inject(['tmux'], (innerCtx) => {
     activeTmux = innerCtx.tmux;
+    validator.invalidate();
     innerCtx.effect(() => () => {
-      if (activeTmux === innerCtx.tmux) activeTmux = null;
+      if (activeTmux === innerCtx.tmux) {
+        activeTmux = null;
+        validator.invalidate();
+      }
     }, 'agent-events.tmux');
   });
   ctx.inject(['notifications'], (ctx) => {
@@ -81,9 +118,11 @@ export function apply(ctx, options = {}) {
   });
   ctx.on('status/tmux-restarted', () => {
     boundPaneAgents.clear();
+    validator.invalidate();
   });
   ctx.http.mount('/api/agent-events', createAgentEventsRouter(service, {
     onNotifications: (notifications) => ctx.emit('status/notifications', notifications),
+    validateEvent: (body) => validator.validate(body),
     onEvent: async (result) => {
       const ev = result?.event;
       if (!ev) return;

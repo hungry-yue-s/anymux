@@ -1,8 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
 import express from 'express';
 import http from 'node:http';
-import { AgentEventService, agentEventDedupeKey, normalizeAgentEvent } from '../../lib/agent-events.js';
+import { AgentEventService, agentEventDedupeKey, extractTmuxServerPid, normalizeAgentEvent } from '../../lib/agent-events.js';
 import { createAgentEventsRouter } from '../../lib/api/agent-events.js';
+import { createTmuxEventValidator } from '../../plugins/agent-events/index.js';
 
 function makeStore() {
   return {
@@ -336,6 +337,98 @@ describe('agent events API', () => {
         reason: 'Bash needs approval',
       });
       expect(broadcast).toHaveBeenCalledTimes(1);
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
+  it('extracts tmuxServerPid, rejects foreign tmux server hooks at HTTP ingress, and stamps live serverInstance', async () => {
+    expect(extractTmuxServerPid({ tmux: '/tmp/tmux-501/default,18130,3' })).toBe('18130');
+    expect(extractTmuxServerPid({ tmuxServerPid: '9001' })).toBe('9001');
+    expect(normalizeAgentEvent({ agent: 'codex', event: 'Stop', serverInstance: '18130:1795755662' }).serverInstance).toBe('18130:1795755662');
+
+    let now = 1_000_000;
+    let liveInstance = '18130:1795755662';
+    const getServerInstance = vi.fn(async () => liveInstance);
+    const validator = createTmuxEventValidator({
+      getTmux: () => ({ getServerInstance }),
+      now: () => now,
+      cacheTtlMs: 2000,
+    });
+
+    // Reject foreign tmux server hook after refreshing/checking server instance
+    expect(await validator.validate({ tmuxServerPid: '99999' })).toEqual({
+      ignore: true,
+      reason: 'tmux_server_mismatch',
+    });
+
+    // Matching PID hits cache within TTL and stamps live serverInstance
+    expect(await validator.validate({ tmuxServerPid: '18130' })).toEqual({
+      ignore: false,
+      patch: { serverInstance: '18130:1795755662' },
+    });
+    expect(getServerInstance).toHaveBeenCalledTimes(1);
+
+    // Tmux server restarts -> new PID triggers cache refresh and accepts new instance
+    liveInstance = '22222:1795756000';
+    expect(await validator.validate({ tmuxServerPid: '22222' })).toEqual({
+      ignore: false,
+      patch: { serverInstance: '22222:1795756000' },
+    });
+
+    // When tmux is down, hooks carrying tmuxServerPid are rejected
+    liveInstance = null;
+    now += 3000;
+    expect(await validator.validate({ tmuxServerPid: '22222' })).toEqual({
+      ignore: true,
+      reason: 'tmux_server_mismatch',
+    });
+
+    // Router end-to-end: ignored event skips ingest/notifications/onEvent; accepted event receives serverInstance patch
+    const store = makeStore();
+    const onNotifications = vi.fn();
+    const onEvent = vi.fn();
+    const agentEvents = new AgentEventService({ notificationStore: store });
+    const app = express();
+    app.use(express.json());
+    const liveValidator = createTmuxEventValidator({
+      getTmux: () => ({ getServerInstance: async () => '18130:1795755662' }),
+    });
+    app.use('/api/agent-events', createAgentEventsRouter(agentEvents, {
+      onNotifications,
+      onEvent,
+      validateEvent: (body) => liveValidator.validate(body),
+    }));
+    const { server, port } = await new Promise((resolve) => {
+      const s = app.listen(0, () => resolve({ server: s, port: s.address().port }));
+    });
+    try {
+      const rejected = await request(port, 'POST', '/api/agent-events', {
+        agent: 'antigravity',
+        event: 'Stop',
+        paneId: '%11',
+        tmuxServerPid: '11111',
+      });
+      expect(rejected.status).toBe(200);
+      expect(rejected.body.data).toMatchObject({ ignored: true, reason: 'tmux_server_mismatch' });
+      expect(agentEvents.getPaneState('%11')).toBeNull();
+      expect(store.notifications).toHaveLength(0);
+      expect(onNotifications).not.toHaveBeenCalled();
+      expect(onEvent).not.toHaveBeenCalled();
+
+      const accepted = await request(port, 'POST', '/api/agent-events', {
+        agent: 'antigravity',
+        event: 'Stop',
+        paneId: '%9',
+        tmuxServerPid: '18130',
+        prompt: '继续',
+      });
+      expect(accepted.status).toBe(200);
+      expect(accepted.body.data.event.serverInstance).toBe('18130:1795755662');
+      expect(agentEvents.getPaneState('%9').serverInstance).toBe('18130:1795755662');
+      expect(store.notifications[0].serverInstance).toBe('18130:1795755662');
+      expect(onNotifications).toHaveBeenCalledTimes(1);
+      expect(onEvent).toHaveBeenCalledTimes(1);
     } finally {
       await new Promise((resolve) => server.close(resolve));
     }

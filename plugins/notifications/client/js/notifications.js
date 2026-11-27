@@ -10,6 +10,20 @@ var NotificationPanel = (function () {
   var _attentionUntil = Object.create(null);
   var _attentionTimer = null;
   function isPreview(n) { return n.type === 'document' || n.type === 'git'; }
+  function _isStaleAgentNotice(n) {
+    if (!n || isPreview(n)) return false;
+    if (n.stale) return true;
+    var activeServer = (window.Api && Api.activeServerId && Api.activeServerId()) || 'local';
+    var workspace = window.AppShell && AppShell.workspace ? AppShell.workspace(n.serverId || activeServer) : null;
+    if (workspace && workspace.instanceId) {
+      if (n.serverInstance && n.serverInstance !== workspace.instanceId) return true;
+      if (!n.serverInstance && n.timestamp) {
+        var m = String(workspace.instanceId).match(/^\d+:(\d+)$/);
+        if (m && Number(n.timestamp) < Number(m[1]) * 1000 - 2000) return true;
+      }
+    }
+    return false;
+  }
   function previewKey(n) {
     var target = n.target;
     return n.serverId && target && target.instanceId && target.windowId
@@ -187,7 +201,7 @@ var NotificationPanel = (function () {
   function needsYou() {
     var activeServer = (window.Api && Api.activeServerId && Api.activeServerId()) || 'local';
     var items = _notifications.filter(function (n) {
-      if (n.read) return false;
+      if (n.read || _isStaleAgentNotice(n)) return false;
       var isAttention = n.state === 'waiting_attention' || n.state === 'failed'
         || n.event === 'PermissionRequest' || n.event === 'Notification' || n.event === 'StopFailure';
       if (!isAttention) return false;
@@ -452,7 +466,8 @@ var NotificationPanel = (function () {
       html += '<div class="notification-list">';
       _notifications.forEach(function (n) {
         var readClass = n.read ? ' notification-item-read' : '';
-        html += '<div class="notification-item' + readClass + '" role="button" tabindex="0" data-notif-id="' + (typeof escapeHtml === 'function' ? escapeHtml(n.id) : n.id) +
+        var staleClass = _isStaleAgentNotice(n) ? ' notification-item-stale' : '';
+        html += '<div class="notification-item' + readClass + staleClass + '" role="button" tabindex="0" data-notif-id="' + (typeof escapeHtml === 'function' ? escapeHtml(n.id) : n.id) +
           '" data-session="' + (typeof escapeHtml === 'function' ? escapeHtml(n.session) : n.session) +
           '" data-window-index="' + n.windowIndex + '">';
         html += '<div class="notification-item-header">';
@@ -513,6 +528,9 @@ var NotificationPanel = (function () {
         var notice = _notifications.find(function (n) { return n.id === id; });
         if (notice && isPreview(notice)) {
           _openPreview(notice);
+        } else if (notice && _isStaleAgentNotice(notice)) {
+          markRead(id);
+          if (window.AppShell && AppShell.toast) AppShell.toast('原窗格所属 tmux 已重启，无法跳转');
         } else if (typeof navigate === 'function' && winIdx !== '' && winIdx !== null) {
           markRead(id);
           navigate('terminal', { currentSession: sess, currentWindow: winIdx, currentPane: null });
@@ -552,6 +570,10 @@ var NotificationPanel = (function () {
   function _jumpToNotice(notice) {
     if (!notice) return;
     markRead(notice.id);
+    if (_isStaleAgentNotice(notice)) {
+      if (window.AppShell && AppShell.toast) AppShell.toast('原窗格所属 tmux 已重启，无法跳转');
+      return;
+    }
     if (notice.paneId && window.Workbench && window.Workbench.selectPane) {
       window.Workbench.selectPane(notice.paneId);
     }
@@ -564,13 +586,21 @@ var NotificationPanel = (function () {
   function _prefillReply(notice, rawText) {
     var safeText = String(rawText || '').replace(/[\r\n]+/g, ' ').trim();
     if (!notice || !notice.paneId || !safeText) return Promise.resolve(false);
+    if (_isStaleAgentNotice(notice)) {
+      if (window.AppShell && AppShell.toast) AppShell.toast('原窗格已随 tmux 重启失效，已阻止写入');
+      return Promise.resolve(false);
+    }
     var serverId = notice.serverId || (window.Api && Api.activeServerId && Api.activeServerId()) || 'local';
+    var workspace = window.AppShell && AppShell.workspace ? AppShell.workspace(serverId) : null;
+    var serverInstance = notice.serverInstance || (workspace && workspace.instanceId) || '';
+    var payload = { paneId: notice.paneId, text: safeText };
+    if (serverInstance) payload.serverInstance = serverInstance;
     var url = window.Api && Api.nodeUrl ? Api.nodeUrl(serverId, '/api/agent-docs/reply') : '/api/agent-docs/reply';
     var headers = Object.assign({ 'Content-Type': 'application/json' }, window.Auth && Auth.headers ? Auth.headers() : {});
     return fetch(url, {
       method: 'POST',
       headers: headers,
-      body: JSON.stringify({ paneId: notice.paneId, text: safeText }),
+      body: JSON.stringify(payload),
     }).then(function (res) {
       if (!res.ok) throw new Error('填入失败');
       _jumpToNotice(notice);

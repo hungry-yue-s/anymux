@@ -193,13 +193,19 @@ describe('agent documents API', () => {
       typed.push([paneId, text]);
     });
     const events = [];
+    let liveInstance = '18130:1795755662';
     const app = express();
     app.use(express.json());
     const pathGuard = createPathGuard([root.api]);
-    app.use('/api/agent-docs', createAgentDocsRouter({ pathGuard, roots: [root.api], typeText }));
+    app.use('/api/agent-docs', createAgentDocsRouter({
+      pathGuard,
+      roots: [root.api],
+      typeText,
+      getServerInstance: async () => liveInstance,
+    }));
     app.use('/api/open', createOpenRouter({ pathGuard, broadcast: (event) => events.push(event),
       resolveSource: async body => ({ paneId: body.paneId || null, windowId: '@1', instanceId: '1:1' }) }));
-    return { root, project, app, typed, events };
+    return { root, project, app, typed, events, setInstance: (v) => { liveInstance = v; } };
   }
 
   it('gives the CLI a draft path and the page the document kind and proposal', async () => {
@@ -231,7 +237,25 @@ describe('agent documents API', () => {
     res = await request(app).post('/api/agent-docs/reply').send({ paneId: '%8', text: 'x' });
     expect(res.status).toBe(409);
     expect(res.body.error.message).toContain('复制模式');
-    expect(typed).toHaveLength(1);
+
+    // Rejects stale serverInstance after tmux restart while allowing matching instance
+    res = await request(app).post('/api/agent-docs/reply').send({
+      paneId: '%3',
+      text: 'match',
+      serverInstance: '18130:1795755662',
+    });
+    expect(res.status).toBe(200);
+    expect(typed).toHaveLength(2);
+
+    res = await request(app).post('/api/agent-docs/reply').send({
+      paneId: '%3',
+      text: 'stale',
+      serverInstance: '9999:1795750000',
+    });
+    expect(res.status).toBe(409);
+    expect(res.body.error.code).toBe('PANE_NOT_FOUND');
+    expect(res.body.error.message).toContain('重启');
+    expect(typed).toHaveLength(2);
   });
 
   it('checks the pane is not in copy mode before typing, and types literally', async () => {

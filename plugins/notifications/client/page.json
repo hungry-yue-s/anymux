@@ -4,6 +4,6 @@
     { "order": 50.6, "style": "/css/notifications.css" }
   ],
   "body": [
-    { "order": 220, "script": "/js/notifications.js?v=6" }
+    { "order": 220, "script": "/js/notifications.js?v=7" }
   ]
 }

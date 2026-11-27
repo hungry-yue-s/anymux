@@ -91,7 +91,7 @@ describe('session protection pane_label persistence and restore', () => {
     utimesSync(snapFile, fixedTime, fixedTime);
     symlinkSync('tmux_resurrect_20261127T120000.txt', join(dir, 'last'));
 
-    let currentLabels = ['work\t1\t1\tmain', 'work\t1\t2\t'];
+    let currentLabels = ['work\t1\t1\t/repo\tmain', 'work\t1\t2\t/repo\t'];
     const svc = new SessionProtection({
       configDir: dir,
       projectDir: dir,
@@ -123,11 +123,71 @@ describe('session protection pane_label persistence and restore', () => {
     expect(parsed.sessions[0].windows[0].panes[1].label).toBeUndefined();
 
     // Updating a label later replaces old pane_label lines cleanly
-    currentLabels = ['work\t1\t1\t主控台', 'work\t1\t2\t主题优化'];
+    currentLabels = ['work\t1\t1\t/repo\t主控台', 'work\t1\t2\t/repo\t主题优化'];
     expect(await svc.syncPaneLabels()).toBe(true);
     parsed = parseSnapshot(readFileSync(snapFile, 'utf8'));
     expect(parsed.sessions[0].windows[0].panes[0].label).toBe('主控台');
     expect(parsed.sessions[0].windows[0].panes[1].label).toBe('主题优化');
+  });
+
+  it('refuses to overwrite mismatched pane slots on structure drift and schedules debounced full save', async () => {
+    vi.useFakeTimers();
+    try {
+      const dir = makeTemp();
+      const snapFile = join(dir, 'tmux_resurrect_20261127T120000.txt');
+      writeFileSync(snapFile, [
+        'pane\twork\t1\t1\t:*\t1\tagy\t:/repo/old\t1\tagy\t:fish',
+        'window\twork\t1\t:panel\t1\t:*\tlay\t:',
+        'pane_label\twork\t1\t1\t:保留原标签',
+        'state\twork\twork',
+      ].join('\n') + '\n');
+      symlinkSync('tmux_resurrect_20261127T120000.txt', join(dir, 'last'));
+
+      let now = 1_700_000_500_000;
+      const runShells = [];
+      const svc = new SessionProtection({
+        configDir: dir,
+        projectDir: dir,
+        now: () => now,
+        deferredSaveDelayMs: 500,
+        exec: async (_bin, args) => {
+          const joined = args.join(' ');
+          if (args[0] === 'display-message') {
+            return {
+              stdout: [
+                '8888', '1700000000', '/bin/fish', '8888',
+                '', '', '',
+                '/Users/me/.tmux/plugins/tmux-resurrect/scripts/save.sh', dir, 'on',
+                '', '', '', '',
+              ].join('=:=') + `\nHOME=${dir}\n\n`,
+              stderr: '',
+            };
+          }
+          if (args[0] === 'list-sessions') return { stdout: 'work\n', stderr: '' };
+          if (args[0] === 'list-panes' && joined.includes('#{@pane_label}')) {
+            return {
+              stdout: [
+                'work\t1\t1\t/repo/different\t误占槽位',
+                'work\t1\t2\t/repo/new\t新增窗格',
+              ].join('\n') + '\n',
+              stderr: '',
+            };
+          }
+          if (args[0] === 'run-shell') runShells.push(args);
+          return { stdout: '', stderr: '' };
+        },
+      });
+
+      expect(await svc.syncPaneLabels()).toBe(true);
+      const parsed = parseSnapshot(readFileSync(snapFile, 'utf8'));
+      expect(parsed.sessions[0].windows[0].panes[0].label).toBe('保留原标签');
+
+      await vi.advanceTimersByTimeAsync(600);
+      expect(runShells.some((a) => a.some((part) => String(part).includes('save.sh')))).toBe(true);
+      svc.stop();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('restores saved @pane_label once in external tmux-continuum mode without overwriting user labels', async () => {

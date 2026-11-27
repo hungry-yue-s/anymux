@@ -23,6 +23,7 @@ export function apply(ctx, config) {
     pathGuard,
     roots,
     typeText: (paneId, text) => ctx.tmux.typeText(paneId, text),
+    getServerInstance: () => ctx.tmux.getServerInstance(),
   }));
 
   if (config?.watch !== false) {

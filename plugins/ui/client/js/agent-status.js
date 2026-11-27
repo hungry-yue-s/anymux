@@ -456,7 +456,30 @@
   }
 
   var _byServer = Object.create(null);
+  var _refetchByInstance = Object.create(null);
   var _tickTimer = null;
+
+  function _liveSnapshot(serverId) {
+    var sid = serverId || 'local';
+    var snap = _byServer[sid];
+    if (!snap) return null;
+    var workspace = global.AppShell && typeof global.AppShell.workspace === 'function'
+      ? global.AppShell.workspace(sid)
+      : null;
+    if (snap.serverInstance && workspace && workspace.instanceId && snap.serverInstance !== workspace.instanceId) {
+      var key = sid + '\u0000' + workspace.instanceId;
+      if (!_refetchByInstance[key]) {
+        _refetchByInstance[key] = true;
+        AgentStatus.fetch(sid).then(function (data) {
+          if (!data || data.serverInstance !== workspace.instanceId) {
+            delete _refetchByInstance[key];
+          }
+        });
+      }
+      return null;
+    }
+    return snap;
+  }
 
   function _notifyUi(emitEvent) {
     if (emitEvent && typeof global.dispatchEvent === 'function' && typeof global.CustomEvent === 'function') {
@@ -477,12 +500,13 @@
       var next = snapshot && typeof snapshot === 'object'
         ? {
             hasAgents: Boolean(snapshot.hasAgents),
+            serverInstance: snapshot.serverInstance || '',
             updatedAt: snapshot.updatedAt || Date.now(),
             panes: snapshot.panes || {},
             windows: snapshot.windows || {},
             sessions: snapshot.sessions || {},
           }
-        : { hasAgents: false, updatedAt: Date.now(), panes: {}, windows: {}, sessions: {} };
+        : { hasAgents: false, serverInstance: '', updatedAt: Date.now(), panes: {}, windows: {}, sessions: {} };
       _byServer[sid] = next;
       _notifyUi(true);
     },
@@ -493,13 +517,13 @@
 
     getPane: function (serverId, paneId) {
       if (!paneId) return null;
-      var snap = _byServer[serverId || 'local'];
+      var snap = _liveSnapshot(serverId);
       return (snap && snap.panes && snap.panes[paneId]) || null;
     },
 
     getSession: function (serverId, session) {
       if (!session) return null;
-      var snap = _byServer[serverId || 'local'];
+      var snap = _liveSnapshot(serverId);
       var sessions = snap && snap.sessions;
       if (!sessions) return null;
       if (session.id && sessions[session.id]) return sessions[session.id];
@@ -516,7 +540,7 @@
 
     getWindow: function (serverId, win) {
       if (!win) return null;
-      var snap = _byServer[serverId || 'local'];
+      var snap = _liveSnapshot(serverId);
       var entry = snap && snap.windows && win.id && snap.windows[win.id];
       if (entry) return entry;
 
@@ -560,7 +584,7 @@
     },
 
     getWindowAgentPanes: function (serverId, win) {
-      var snap = _byServer[serverId || 'local'];
+      var snap = _liveSnapshot(serverId);
       var panes = Array.isArray(win && win.panes) ? win.panes : [];
       var result = [];
       for (var i = 0; i < panes.length; i += 1) {
@@ -581,7 +605,7 @@
 
     getAttentionPanes: function (serverId) {
       var sid = serverId || 'local';
-      var snap = _byServer[sid];
+      var snap = _liveSnapshot(sid);
       if (!snap || !snap.panes) return [];
       var workspace = global.AppShell && typeof global.AppShell.workspace === 'function'
         ? global.AppShell.workspace(sid)
@@ -708,6 +732,7 @@
 
     _reset: function () {
       _byServer = Object.create(null);
+      _refetchByInstance = Object.create(null);
       if (_tickTimer && typeof global.clearInterval === 'function') {
         global.clearInterval(_tickTimer);
       }
